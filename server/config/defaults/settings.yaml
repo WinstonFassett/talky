@@ -1,0 +1,4 @@
+# Talky Settings — set your preferred llm_backend and voice_profile
+defaults:
+  llm_backend: ""
+  voice_profile: ""

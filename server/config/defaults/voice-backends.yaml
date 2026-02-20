@@ -1,0 +1,30 @@
+# Voice Backends — provider definitions for STT and TTS
+# service_class is a dotted import path to a Pipecat service class
+voice_backends:
+  tts:
+    kokoro:
+      description: "Local TTS via Kokoro (no API key)"
+      requires_credentials: false
+      service_class: "pipecat.services.kokoro.tts.KokoroTTSService"
+      default_voice: "af_heart"
+
+    google:
+      description: "Google Cloud TTS"
+      requires_credentials: true
+      service_class: "pipecat.services.google.tts.GoogleTTSService"
+      credential_type: "google"
+      default_voice: "en-US-Chirp3-HD-Puck"
+
+  stt:
+    whisper_local:
+      description: "Local Whisper via MLX (no API key, macOS)"
+      requires_credentials: false
+      service_class: "pipecat.services.whisper.stt.WhisperSTTServiceMLX"
+      default_model: "mlx-community/whisper-large-v3-turbo"
+
+    deepgram:
+      description: "Deepgram STT"
+      requires_credentials: true
+      service_class: "pipecat.services.deepgram.stt.DeepgramSTTService"
+      credential_type: "deepgram"
+      default_model: "nova-2"
