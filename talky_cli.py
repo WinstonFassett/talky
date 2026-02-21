@@ -50,6 +50,10 @@ def kill_port_7860():
 
 def cmd_say(args):
     """Handle the 'say' subcommand."""
+    # Set log level environment variable if specified
+    if getattr(args, "log_level", None):
+        os.environ["TALKY_LOG_LEVEL"] = args.log_level
+    
     # Ensure dependencies are installed before importing
     from shared.dependency_installer import ensure_dependencies
     
@@ -364,6 +368,7 @@ def main():
     say_parser.add_argument("--start-daemon", action="store_true")
     say_parser.add_argument("--stop-daemon", action="store_true")
     say_parser.add_argument("--daemon-status", action="store_true")
+    say_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
     say_parser.set_defaults(func=cmd_say)
 
     # === mcp subcommand ===

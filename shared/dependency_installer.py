@@ -121,7 +121,13 @@ def install_dependencies(providers: Set[str]) -> bool:
     if not packages_to_install:
         return True
     
-    logger.info(f"Installing: {', '.join(packages_to_install)}")
+    # Check if user wants quiet logging
+    log_level = os.getenv("TALKY_LOG_LEVEL", "ERROR")
+    if log_level == "ERROR":
+        # Silent mode for dependency installation
+        print(f"Installing dependencies: {', '.join(packages_to_install)}")
+    else:
+        logger.info(f"Installing: {', '.join(packages_to_install)}")
     
     try:
         import shutil
@@ -134,7 +140,8 @@ def install_dependencies(providers: Set[str]) -> bool:
         executable_path = sys.executable
         if "uv-tool" in executable_path or ".local/share/uv/tools/" in executable_path:
             # We're in a uv tool, assume dependencies are already available
-            logger.info("CLI tool detected - assuming dependencies are available")
+            if log_level != "ERROR":
+                logger.info("CLI tool detected - assuming dependencies are available")
             return True
         else:
             # Try regular pip install
