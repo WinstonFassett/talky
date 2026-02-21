@@ -357,31 +357,40 @@ PIPECAT_LOG_LEVEL=DEBUG talky moltis 2>&1 | grep -E "(VAD|STT|TTS|audio)"
 
 ### Environment Variables
 ```bash
-# Main logging control
-PIPECAT_LOG_LEVEL=DEBUG    # Most verbose
-PIPECAT_LOG_LEVEL=INFO     # Default
-PIPECAT_LOG_LEVEL=WARNING  # Warnings and errors only
-PIPECAT_LOG_LEVEL=ERROR    # Errors only
+# Primary method - works with all components
+TALKY_LOG_LEVEL=ERROR talky openclaw      # Errors only (recommended)
+TALKY_LOG_LEVEL=WARNING talky moltis     # Warnings and errors
+TALKY_LOG_LEVEL=INFO talky pi              # Verbose mode
+TALKY_LOG_LEVEL=DEBUG talky openclaw      # Full debug
+```
 
-# Backend-specific (if implemented)
-OPENCLAW_LOG_LEVEL=DEBUG
-MOLTIS_LOG_LEVEL=DEBUG
-PI_LOG_LEVEL=DEBUG
+### Command Line Arguments
+```bash
+# All working now
+talky --log-level ERROR openclaw          # Errors only
+talky --log-level WARNING moltis          # Warnings and errors
+talky --log-level INFO pi                 # Verbose mode
+talky --log-level DEBUG openclaw          # Full debug
+
+# Aliases that work
+talky --quiet openclaw                    # Same as --log-level ERROR
+talky --debug openclaw                    # Same as --log-level DEBUG
+talky --minimal openclaw                  # Same as --log-level ERROR
 ```
 
 ### Common Debugging Commands
 ```bash
 # Full debug for OpenClaw
-PIPECAT_LOG_LEVEL=DEBUG talky openclaw
+TALKY_LOG_LEVEL=DEBUG talky openclaw
 
 # Check MCP server status
 pipecat-mcp-server
 
 # Filter for specific issues
-PIPECAT_LOG_LEVEL=DEBUG talky moltis 2>&1 | grep -i error
+TALKY_LOG_LEVEL=DEBUG talky moltis 2>&1 | grep -i error
 
 # Timing information
-PIPECAT_LOG_LEVEL=DEBUG talky pi 2>&1 | grep "completed in"
+TALKY_LOG_LEVEL=DEBUG talky pi 2>&1 | grep "completed in"
 ```
 
 ### What to Look For
