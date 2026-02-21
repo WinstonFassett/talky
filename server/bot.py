@@ -37,6 +37,7 @@ from pipecat.runner.types import RunnerArguments, SmallWebRTCRunnerArguments
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+from pipecat.processors.frameworks.rtvi import RTVIObserver, RTVIProcessor
 
 async def run_bot(
     transport: BaseTransport,
@@ -46,7 +47,7 @@ async def run_bot(
     """Main bot logic using clean backend/voice separation."""
     configure_quiet_logging()
 
-    from config.profile_manager import get_profile_manager
+    from server.config.profile_manager import get_profile_manager
 
     pm = get_profile_manager()
 
@@ -81,6 +82,10 @@ async def run_bot(
     # Import LLM service from backend
     module_path = ".".join(llm_backend.service_class.split(".")[:-1])
     class_name = llm_backend.service_class.split(".")[-1]
+    
+    # Fix module path to include server prefix if needed
+    if not module_path.startswith("server.") and not module_path.startswith("."):
+        module_path = f"server.{module_path}"
 
     llm_service_module = importlib.import_module(module_path)
     llm_service_class = getattr(llm_service_module, class_name)
@@ -100,6 +105,9 @@ async def run_bot(
         user_params=LLMUserAggregatorParams(vad_analyzer=create_vad_analyzer()),
     )
 
+    # Create RTVI processor with transport for client message handling
+    rtvi_processor = RTVIProcessor(transport=transport)
+
     pipeline = Pipeline(
         [
             transport.input(),
@@ -109,17 +117,101 @@ async def run_bot(
             tts,
             transport.output(),
             assistant_aggregator,
+            rtvi_processor,  # Add RTVI processor to pipeline
         ]
     )
 
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+        observers=[RTVIObserver(rtvi_processor)],  # Use the rtvi_processor we created
     )
 
     @task.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
-        pass
+        print("🔥 CLIENT READY EVENT FIRED")
+        logger.info("🔥 Client ready event fired")
+
+    @task.rtvi.event_handler("on_client_message")
+    async def on_client_message(rtvi, msg):
+        """Handle custom client messages for voice profile control."""
+        print(f"🔥 GOT CLIENT MESSAGE: {msg.type}, {msg.data}")
+        logger.info(f"🔥 Received client message: {msg.type}, {msg.data}")
+        
+        if msg.type == "getVoiceProfiles":
+            try:
+                profiles = pm.list_voice_profiles()
+                await rtvi.send_server_response(msg, {
+                    "type": "voiceProfiles",
+                    "data": [
+                        {"name": name, "description": desc}
+                        for name, desc in profiles.items()
+                    ],
+                    "status": "success"
+                })
+                logger.info(f"Sent {len(profiles)} voice profiles to client")
+            except Exception as e:
+                logger.error(f"Error in getVoiceProfiles: {e}")
+                await rtvi.send_error_response(msg, f"Failed to get voice profiles: {e}")
+                
+        elif msg.type == "setVoiceProfile":
+            try:
+                profile_name = msg.data.get("profileName")
+                profile = pm.get_voice_profile(profile_name)
+                if not profile:
+                    await rtvi.send_error_response(msg, f"Voice profile not found: {profile_name}")
+                    return
+
+                # Store the profile name for bot to pick up
+                import os
+                os.environ["VOICE_PROFILE"] = profile_name
+
+                await rtvi.send_server_response(msg, {
+                    "type": "voiceProfileSet",
+                    "data": {
+                        "name": profile.name,
+                        "description": profile.description
+                    },
+                    "status": "success"
+                })
+                logger.info(f"Set voice profile to: {profile_name}")
+            except Exception as e:
+                logger.error(f"Error in setVoiceProfile: {e}")
+                await rtvi.send_error_response(msg, f"Failed to set voice profile: {e}")
+                
+        elif msg.type == "getCurrentVoiceProfile":
+            try:
+                import os
+                current_profile_name = os.environ.get("VOICE_PROFILE")
+                
+                if not current_profile_name:
+                    await rtvi.send_error_response(msg, "No current voice profile set")
+                    return
+                    
+                profile = pm.get_voice_profile(current_profile_name)
+                if not profile:
+                    await rtvi.send_error_response(msg, f"Current voice profile not found: {current_profile_name}")
+                    return
+
+                await rtvi.send_server_response(msg, {
+                    "type": "currentVoiceProfile",
+                    "data": {
+                        "name": profile.name,
+                        "description": profile.description
+                    },
+                    "status": "success"
+                })
+            except Exception as e:
+                logger.error(f"Error in getCurrentVoiceProfile: {e}")
+                await rtvi.send_error_response(msg, f"Failed to get current voice profile: {e}")
+        else:
+            await rtvi.send_error_response(msg, f"Unknown message type: {msg.type}")
+
+    @task.rtvi.event_handler("on_transport_message")
+    async def on_transport_message(rtvi, message):
+        """Debug: Catch all transport messages."""
+        print(f"🔥 GOT TRANSPORT MESSAGE: {message}")
+        logger.info(f"🔥 Received transport message: {message}")
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
