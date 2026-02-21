@@ -105,9 +105,6 @@ async def run_bot(
         user_params=LLMUserAggregatorParams(vad_analyzer=create_vad_analyzer()),
     )
 
-    # Create RTVI processor with transport for client message handling
-    rtvi_processor = RTVIProcessor(transport=transport)
-
     pipeline = Pipeline(
         [
             transport.input(),
@@ -117,14 +114,12 @@ async def run_bot(
             tts,
             transport.output(),
             assistant_aggregator,
-            rtvi_processor,  # Add RTVI processor to pipeline
         ]
     )
 
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
-        observers=[RTVIObserver(rtvi_processor)],  # Use the rtvi_processor we created
     )
 
     @task.rtvi.event_handler("on_client_ready")
