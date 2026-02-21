@@ -199,6 +199,9 @@ def cmd_run(args):
     if getattr(args, "local_speech", False):
         cmd.append("--local-speech")
 
+    if getattr(args, "log_level", None):
+        cmd.extend(["--log-level", args.log_level])
+
     result = subprocess.run(cmd)
     sys.exit(result.returncode)
 
@@ -382,6 +385,7 @@ def main():
     parser.add_argument("--essential", "-e", action="store_true", help="Essential mode")
     parser.add_argument("--no-open", action="store_true", help="Don't open browser")
     parser.add_argument("--local-speech", action="store_true", help="Use local speech")
+    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
 
     args = parser.parse_args()
 
