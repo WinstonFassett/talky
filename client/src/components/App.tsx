@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
 import {
@@ -30,16 +30,25 @@ export const App = ({
 }: AppProps) => {
   const autoconnectAttempted = useRef(false);
 
+  const [devicesReady, setDevicesReady] = useState(false);
+
   useEffect(() => {
-    client?.initDevices();
+    if (client) {
+      client?.initDevices().then(() => {
+        setDevicesReady(true);
+      }).catch(err => {
+        console.error('Failed to initialize devices:', err);
+        setDevicesReady(true); // Still try to connect even if devices fail
+      });
+    }
   }, [client]);
 
   useEffect(() => {
-    if (autoconnect && client && handleConnect && !autoconnectAttempted.current) {
+    if (autoconnect && client && handleConnect && !autoconnectAttempted.current && devicesReady) {
       autoconnectAttempted.current = true;
       handleConnect();
     }
-  }, [autoconnect, client, handleConnect]);
+  }, [autoconnect, client, handleConnect, devicesReady]);
 
   const showTransportSelector = availableTransports.length > 1;
 

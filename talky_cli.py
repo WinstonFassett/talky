@@ -48,6 +48,47 @@ def kill_port_7860():
         pass
 
 
+def start_client_dev_server():
+    """Start the client dev server if not already running."""
+    try:
+        # Check if port 5173 is already in use
+        result = subprocess.run(
+            ["lsof", "-ti", ":5173"],
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout.strip():
+            print("📱 Client dev server already running on port 5173")
+            return True
+        
+        # Start the client dev server
+        client_dir = server_dir.parent / "client"
+        if not client_dir.exists():
+            print("⚠️ Client directory not found")
+            return False
+            
+        print("📱 Starting client dev server...")
+        subprocess.Popen(
+            ["npm", "run", "dev"],
+            cwd=str(client_dir),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("📱 Client dev server starting on http://localhost:5173")
+        
+        # Wait a bit for the server to start
+        import time
+        time.sleep(3)
+        return True
+        
+    except subprocess.SubprocessError:
+        print("⚠️ Could not start client dev server")
+        return False
+    except FileNotFoundError:
+        print("⚠️ npm not found. Install Node.js and npm first.")
+        return False
+
+
 def cmd_say(args):
     """Handle the 'say' subcommand."""
     # Set log level environment variable if specified
@@ -158,7 +199,10 @@ def cmd_run(args):
     """Handle the 'run' subcommand (bot)."""
     # server_dir is already defined globally from script location
     
-    # Kill any existing process on port 7860
+    # Start client dev server FIRST if not running
+    start_client_dev_server()
+    
+    # Kill any existing process on port 7860 (after Vite is ready)
     kill_port_7860()
     
     # Ensure server dependencies are installed
