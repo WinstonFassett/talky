@@ -12,25 +12,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Add project root + server to path
-# Use environment variable if set, otherwise find from current directory
-if "TALKY_PROJECT_ROOT" in os.environ:
-    _root = Path(os.environ["TALKY_PROJECT_ROOT"])
-else:
-    # Find from current working directory (more reliable)
-    current = Path.cwd()
-    max_depth = 10
-    depth = 0
-    while current != current.parent and depth < max_depth:
-        if (current / "pyproject.toml").exists():
-            _root = current
-            break
-        current = current.parent
-        depth += 1
-    else:
-        _root = Path.cwd()
-
+# Determine project root from this script's location
+_script_path = Path(__file__).resolve()
+_root = _script_path.parent
 server_dir = _root / "server"
+
+# Add project root + server to path
 sys.path.insert(0, str(_root))
 sys.path.insert(0, str(server_dir))
 
@@ -46,7 +33,7 @@ def cmd_say(args):
     
     from shared.daemon_protocol import daemon_is_running
 
-    server_dir = _root / "server"
+    # server_dir is already defined globally from script location
 
     # Daemon management sub-actions
     if args.start_daemon or args.stop_daemon or args.daemon_status:
@@ -115,7 +102,7 @@ def cmd_say(args):
 
 def cmd_run(args):
     """Handle the 'run' subcommand (bot)."""
-    server_dir = _root / "server"
+    # server_dir is already defined globally from script location
     
     # Ensure server dependencies are installed
     from shared.dependency_installer import ensure_dependencies_for_server
