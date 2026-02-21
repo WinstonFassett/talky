@@ -10,7 +10,8 @@ interface BotVisualizerProps {
 }
 
 export const BotVisualizer = ({ client }: BotVisualizerProps) => {
-  const [botState, setBotState] = useState<BotState>('idle');
+  const [isBotThinking, setIsBotThinking] = useState(false);
+  const [isBotSpeaking, setIsBotSpeaking] = useState(false);
   const clientRef = useRef<PipecatClient | null>(null);
   
   // Update client ref when client changes
@@ -18,39 +19,42 @@ export const BotVisualizer = ({ client }: BotVisualizerProps) => {
     clientRef.current = client;
   }, [client]);
   
-  // Use the proper Pipecat hook to get the bot's audio track with error handling
+  // Use the proper Pipecat hook to get the bot's audio track
   const botAudioTrack = usePipecatClientMediaTrack('audio', 'bot');
-  
-  // Listen for bot state changes with coordinated state management
+
+  // Listen for bot state changes - EXACT logic from working-bot-viz
   useEffect(() => {
     if (!client) return;
 
     const handleBotLlmStarted = () => {
-      setBotState('thinking');
+      setIsBotThinking(true);
     };
 
     const handleBotLlmStopped = () => {
-      setBotState('idle');
+      setIsBotThinking(false);
     };
 
     const handleBotTtsStarted = () => {
-      // TTS starting doesn't mean speaking yet - wait for actual audio
-      setBotState('idle');
+      setIsBotThinking(false);
+      // Don't set speaking yet - wait for actual audio to start
     };
 
     const handleBotTtsStopped = () => {
-      // TTS stopping doesn't mean speaking stopped - let audio track handle it
+      // Don't clear speaking yet - wait for actual audio to stop
     };
 
     const handleBotStartedSpeaking = () => {
-      setBotState('speaking');
+      setIsBotThinking(false);
+      setIsBotSpeaking(true);
+      // Audio track is automatically handled by usePipecatClientMediaTrack
     };
 
     const handleBotStoppedSpeaking = () => {
-      setBotState('idle');
+      setIsBotSpeaking(false);
+      // Audio track is automatically handled by usePipecatClientMediaTrack
     };
 
-    // Subscribe to client events
+    // Subscribe to client events using the correct event names
     client.on('botLlmStarted', handleBotLlmStarted);
     client.on('botLlmStopped', handleBotLlmStopped);
     client.on('botTtsStarted', handleBotTtsStarted);
@@ -72,9 +76,6 @@ export const BotVisualizer = ({ client }: BotVisualizerProps) => {
     };
   }, [client]);
 
-  const isBotThinking = botState === 'thinking';
-  const isBotSpeaking = botState === 'speaking';
-
   return (
     <CircularWaveform 
       size={60}
@@ -83,7 +84,7 @@ export const BotVisualizer = ({ client }: BotVisualizerProps) => {
       color1="#615fff"
       color2="#EC4899"
       backgroundColor="transparent"
-      rotationEnabled={!isBotSpeaking}
+      rotationEnabled={!isBotSpeaking} // Rotation for idle and thinking, disabled when speaking
       numBars={32}
       barWidth={1}
       sensitivity={2}
