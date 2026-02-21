@@ -63,7 +63,15 @@ def cmd_say(args):
 
     # Daemon management sub-actions
     if args.start_daemon or args.stop_daemon or args.daemon_status:
-        cmd = [sys.executable, str(server_dir / "tts_daemon.py")]
+        python_path = server_dir.parent / ".venv" / "bin" / "python"
+        if not python_path.exists():
+            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
+        
+        if not python_path.exists():
+            print("Virtual environment not found. Run 'uv sync' first.")
+            sys.exit(1)
+            
+        cmd = [str(python_path), str(server_dir / "tts_daemon.py")]
         if args.start_daemon:
             cmd.append("--start")
         elif args.stop_daemon:
@@ -74,7 +82,15 @@ def cmd_say(args):
         sys.exit(result.returncode)
 
     if args.list_profiles:
-        cmd = [sys.executable, str(server_dir / "tts_daemon.py"), "--list-profiles"]
+        python_path = server_dir.parent / ".venv" / "bin" / "python"
+        if not python_path.exists():
+            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
+        
+        if not python_path.exists():
+            print("Virtual environment not found. Run 'uv sync' first.")
+            sys.exit(1)
+            
+        cmd = [str(python_path), str(server_dir / "tts_daemon.py"), "--list-profiles"]
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
@@ -101,16 +117,24 @@ def cmd_say(args):
 
     if daemon_is_running():
         # Use lightweight client
-        cmd = ["python", "tts_client.py", args.text]
+        cmd = ["python", str(server_dir / "tts_client.py"), args.text]
     else:
         # Auto-start daemon, use client with wait
+        python_path = server_dir.parent / ".venv" / "bin" / "python"
+        if not python_path.exists():
+            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
+        
+        if not python_path.exists():
+            print("Virtual environment not found. Run 'uv sync' first.")
+            sys.exit(1)
+            
         subprocess.Popen(
-            ["python", "tts_daemon.py", "--start"],
+            [str(python_path), str(server_dir / "tts_daemon.py"), "--start"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=server_dir
         )
-        cmd = ["python", "tts_client.py", "--wait", "15", args.text]
+        cmd = ["python", str(server_dir / "tts_client.py"), "--wait", "15", args.text]
 
     if args.voice_profile:
         cmd.extend(["-p", args.voice_profile])
