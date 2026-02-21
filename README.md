@@ -43,9 +43,9 @@ TALKY_LOG_LEVEL=WARNING talky moltis     # Warnings and errors
 TALKY_LOG_LEVEL=INFO talky pi              # Verbose mode
 TALKY_LOG_LEVEL=DEBUG talky openclaw      # Full debug
 
-# Or use command line arguments
-talky --log-level ERROR openclaw
-talky --log-level DEBUG moltis
+# Or use command line arguments (profile first!)
+talky openclaw --log-level ERROR
+talky moltis --log-level DEBUG
 ```
 
 **Example API Keys**
