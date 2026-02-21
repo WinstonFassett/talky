@@ -121,35 +121,43 @@ def install_dependencies(providers: Set[str]) -> bool:
     if not packages_to_install:
         return True
     
-    logger.info(f"Installing: {', '.join(packages_to_install)}")
+    # Check if we're in a uv tool environment first (before printing anything)
+    import shutil
+    uv_cmd = shutil.which("uv")
+    if not uv_cmd:
+        logger.error("uv not found")
+        return False
+        
+    executable_path = sys.executable
+    if "uv-tool" in executable_path or ".local/share/uv/tools/" in executable_path:
+        # We're in a uv tool, assume dependencies are already available
+        log_level = os.getenv("TALKY_LOG_LEVEL", "ERROR")
+        if log_level != "ERROR":
+            logger.info("CLI tool detected - assuming dependencies are available")
+        return True
+    
+    # Check if user wants quiet logging
+    log_level = os.getenv("TALKY_LOG_LEVEL", "ERROR")
+    if log_level == "ERROR":
+        # Silent mode for dependency installation
+        print(f"Installing dependencies: {', '.join(packages_to_install)}")
+    else:
+        logger.info(f"Installing: {', '.join(packages_to_install)}")
     
     try:
-        import shutil
-        uv_cmd = shutil.which("uv")
-        if not uv_cmd:
-            logger.error("uv not found")
-            return False
-            
-        # Check if we're in a uv tool environment by checking the executable path
-        executable_path = sys.executable
-        if "uv-tool" in executable_path or ".local/share/uv/tools/" in executable_path:
-            # We're in a uv tool, assume dependencies are already available
-            logger.info("CLI tool detected - assuming dependencies are available")
-            return True
-        else:
-            # Try regular pip install
+        # Try regular pip install
+        result = subprocess.run(
+            [uv_cmd, "pip", "install"] + packages_to_install,
+            capture_output=True, text=True
+        )
+        
+        if result.returncode != 0 and "No virtual environment found" in result.stderr:
+            # Fall back to user install
+            logger.info("Trying user install")
             result = subprocess.run(
-                [uv_cmd, "pip", "install"] + packages_to_install,
+                [uv_cmd, "pip", "install", "--user"] + packages_to_install,
                 capture_output=True, text=True
             )
-            
-            if result.returncode != 0 and "No virtual environment found" in result.stderr:
-                # Fall back to user install
-                logger.info("Trying user install")
-                result = subprocess.run(
-                    [uv_cmd, "pip", "install", "--user"] + packages_to_install,
-                    capture_output=True, text=True
-                )
         
         if result.returncode != 0:
             logger.error(f"Install failed: {result.stderr}")
@@ -203,8 +211,15 @@ def ensure_dependencies_for_server(server_dir: Path) -> bool:
             return False
         
         # Use uv pip install with server's venv Python
+        python_path = server_dir.parent / ".venv" / "bin" / "python"
+        
+        # Check if Python executable exists
+        if not python_path.exists():
+            logger.error(f"Python executable not found at {python_path}; run `uv venv` to create an environment")
+            return False
+        
         result = subprocess.run(
-            [uv_cmd, "pip", "install", "--python", str(server_dir.parent / ".venv" / "bin" / "python")] + packages_to_install,
+            [uv_cmd, "pip", "install", "--python", str(python_path)] + packages_to_install,
             capture_output=True, text=True
         )
         

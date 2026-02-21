@@ -12,31 +12,48 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Add project root + server to path
-# Use environment variable if set, otherwise find from current directory
-if "TALKY_PROJECT_ROOT" in os.environ:
-    _root = Path(os.environ["TALKY_PROJECT_ROOT"])
-else:
-    # Find from current working directory (more reliable)
-    current = Path.cwd()
-    max_depth = 10
-    depth = 0
-    while current != current.parent and depth < max_depth:
-        if (current / "pyproject.toml").exists():
-            _root = current
-            break
-        current = current.parent
-        depth += 1
-    else:
-        _root = Path.cwd()
-
+# Determine project root from this script's location
+_script_path = Path(__file__).resolve()
+_root = _script_path.parent
 server_dir = _root / "server"
+
+# Add project root + server to path
 sys.path.insert(0, str(_root))
 sys.path.insert(0, str(server_dir))
 
 
+def kill_port_7860():
+    """Kill any processes using port 7860."""
+    try:
+        # Find process using port 7860
+        result = subprocess.run(
+            ["lsof", "-ti", ":7860"],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0 and result.stdout.strip():
+            pids = result.stdout.strip().split('\n')
+            for pid in pids:
+                try:
+                    subprocess.run(["kill", "-9", pid], capture_output=True)
+                    print(f"Killed process {pid} on port 7860")
+                except subprocess.SubprocessError:
+                    pass
+        else:
+            # No process found on port 7860
+            pass
+    except subprocess.SubprocessError:
+        # lsof command failed (probably not on macOS/Linux)
+        pass
+
+
 def cmd_say(args):
     """Handle the 'say' subcommand."""
+    # Set log level environment variable if specified
+    if getattr(args, "log_level", None):
+        os.environ["TALKY_LOG_LEVEL"] = args.log_level
+    
     # Ensure dependencies are installed before importing
     from shared.dependency_installer import ensure_dependencies
     
@@ -46,11 +63,19 @@ def cmd_say(args):
     
     from shared.daemon_protocol import daemon_is_running
 
-    server_dir = _root / "server"
+    # server_dir is already defined globally from script location
 
     # Daemon management sub-actions
     if args.start_daemon or args.stop_daemon or args.daemon_status:
-        cmd = [sys.executable, str(server_dir / "tts_daemon.py")]
+        python_path = server_dir.parent / ".venv" / "bin" / "python"
+        if not python_path.exists():
+            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
+        
+        if not python_path.exists():
+            print("Virtual environment not found. Run 'uv sync' first.")
+            sys.exit(1)
+            
+        cmd = [str(python_path), str(server_dir / "tts_daemon.py")]
         if args.start_daemon:
             cmd.append("--start")
         elif args.stop_daemon:
@@ -61,7 +86,15 @@ def cmd_say(args):
         sys.exit(result.returncode)
 
     if args.list_profiles:
-        cmd = [sys.executable, str(server_dir / "tts_daemon.py"), "--list-profiles"]
+        python_path = server_dir.parent / ".venv" / "bin" / "python"
+        if not python_path.exists():
+            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
+        
+        if not python_path.exists():
+            print("Virtual environment not found. Run 'uv sync' first.")
+            sys.exit(1)
+            
+        cmd = [str(python_path), str(server_dir / "tts_daemon.py"), "--list-profiles"]
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
@@ -88,16 +121,24 @@ def cmd_say(args):
 
     if daemon_is_running():
         # Use lightweight client
-        cmd = ["python", "tts_client.py", args.text]
+        cmd = ["python", str(server_dir / "tts_client.py"), args.text]
     else:
         # Auto-start daemon, use client with wait
+        python_path = server_dir.parent / ".venv" / "bin" / "python"
+        if not python_path.exists():
+            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
+        
+        if not python_path.exists():
+            print("Virtual environment not found. Run 'uv sync' first.")
+            sys.exit(1)
+            
         subprocess.Popen(
-            ["python", "tts_daemon.py", "--start"],
+            [str(python_path), str(server_dir / "tts_daemon.py"), "--start"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=server_dir
         )
-        cmd = ["python", "tts_client.py", "--wait", "15", args.text]
+        cmd = ["python", str(server_dir / "tts_client.py"), "--wait", "15", args.text]
 
     if args.voice_profile:
         cmd.extend(["-p", args.voice_profile])
@@ -115,7 +156,10 @@ def cmd_say(args):
 
 def cmd_run(args):
     """Handle the 'run' subcommand (bot)."""
-    server_dir = _root / "server"
+    # server_dir is already defined globally from script location
+    
+    # Kill any existing process on port 7860
+    kill_port_7860()
     
     # Ensure server dependencies are installed
     from shared.dependency_installer import ensure_dependencies_for_server
@@ -158,6 +202,9 @@ def cmd_run(args):
         cmd.append("--no-open")
     if getattr(args, "local_speech", False):
         cmd.append("--local-speech")
+
+    if getattr(args, "log_level", None):
+        cmd.extend(["--log-level", args.log_level])
 
     result = subprocess.run(cmd)
     sys.exit(result.returncode)
@@ -321,6 +368,7 @@ def main():
     say_parser.add_argument("--start-daemon", action="store_true")
     say_parser.add_argument("--stop-daemon", action="store_true")
     say_parser.add_argument("--daemon-status", action="store_true")
+    say_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
     say_parser.set_defaults(func=cmd_say)
 
     # === mcp subcommand ===
@@ -342,6 +390,7 @@ def main():
     parser.add_argument("--essential", "-e", action="store_true", help="Essential mode")
     parser.add_argument("--no-open", action="store_true", help="Don't open browser")
     parser.add_argument("--local-speech", action="store_true", help="Use local speech")
+    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
 
     args = parser.parse_args()
 

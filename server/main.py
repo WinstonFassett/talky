@@ -96,22 +96,22 @@ def main():
 
     # Set logging level based on arguments
     if args.minimal:
-        os.environ["LOG_LEVEL"] = "ERROR"
+        os.environ["TALKY_LOG_LEVEL"] = "ERROR"
         from logging_config import setup_minimal_logging
 
         setup_minimal_logging()
     elif args.quiet:
-        os.environ["LOG_LEVEL"] = "WARNING"
+        os.environ["TALKY_LOG_LEVEL"] = "ERROR"
         from logging_config import configure_logging
 
         configure_logging()
     elif args.debug:
-        os.environ["LOG_LEVEL"] = "DEBUG"
+        os.environ["TALKY_LOG_LEVEL"] = "DEBUG"
         from logging_config import setup_debug_logging
 
         setup_debug_logging()
     elif args.log_level:
-        os.environ["LOG_LEVEL"] = args.log_level
+        os.environ["TALKY_LOG_LEVEL"] = args.log_level
         from logging_config import configure_logging
 
         configure_logging()
