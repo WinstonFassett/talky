@@ -203,8 +203,15 @@ def ensure_dependencies_for_server(server_dir: Path) -> bool:
             return False
         
         # Use uv pip install with server's venv Python
+        python_path = server_dir.parent / ".venv" / "bin" / "python"
+        
+        # Check if Python executable exists
+        if not python_path.exists():
+            logger.error(f"Python executable not found at {python_path}; run `uv venv` to create an environment")
+            return False
+        
         result = subprocess.run(
-            [uv_cmd, "pip", "install", "--python", str(server_dir.parent / ".venv" / "bin" / "python")] + packages_to_install,
+            [uv_cmd, "pip", "install", "--python", str(python_path)] + packages_to_install,
             capture_output=True, text=True
         )
         

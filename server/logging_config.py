@@ -25,13 +25,13 @@ def setup_essential_logging():
     logger.add(
         sys.stderr,
         format="<green>{time:HH:mm:ss}</green> | <level>{level: <7}</level> | <cyan>{name}</cyan> - <level>{message}</level>",
-        level="WARNING",  # Default to WARNING level
+        level="ERROR",  # Default to ERROR level
         colorize=True,
     )
 
     # Also configure standard Python logging to be quiet
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.WARNING)
+    root_logger.setLevel(logging.ERROR)
 
     # Remove all standard logging handlers
     for handler in root_logger.handlers[:]:
@@ -39,7 +39,7 @@ def setup_essential_logging():
 
     # Add a simple handler for standard logging
     console_handler = logging.StreamHandler(sys.stderr)
-    console_handler.setLevel(logging.WARNING)
+    console_handler.setLevel(logging.ERROR)
     console_handler.setFormatter(
         logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", datefmt="%H:%M:%S")
     )
