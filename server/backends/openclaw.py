@@ -15,6 +15,7 @@ import websockets
 from loguru import logger
 from pipecat.frames.frames import (
     Frame,
+    InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
@@ -124,6 +125,13 @@ def build_device_auth(
 class OpenClawLLMService(LLMService):
     """OpenClaw LLM service - simplified WebSocket-based implementation"""
 
+    # OpenClaw protocol constants
+    CLIENT_ID = "cli"
+    CLIENT_MODE = "cli"
+    ROLE = "operator"
+    SCOPES = ["operator.admin", "operator.approvals", "operator.pairing"]
+    SESSION_KEY = "voice-session"
+
     def __init__(self, *, gateway_url: str = None, agent_id: str = "main", **kwargs):
         super().__init__(**kwargs)
 
@@ -145,6 +153,18 @@ class OpenClawLLMService(LLMService):
     def _next_id(self) -> int:
         self._request_id_counter += 1
         return self._request_id_counter
+
+    async def _clear_pending_responses(self):
+        """Clear all pending responses from the queue (for interruption)"""
+        logger.debug("🧹 Clearing pending OpenClaw responses")
+        while not self._response_queue.empty():
+            try:
+                self._response_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        # Clear streaming accumulator if it exists
+        if hasattr(self, "_accumulated_response"):
+            delattr(self, "_accumulated_response")
 
     async def _connect(self):
         """Connect to OpenClaw gateway"""
@@ -174,13 +194,8 @@ class OpenClawLLMService(LLMService):
             self._ws = await websockets.connect(self.gateway_url, **connect_kwargs)
 
             # Authenticate with OpenClaw
-            client_id = "cli"  # Use the working constant
-            client_mode = "cli"
-            role = "operator"
-            scopes = ["operator.admin", "operator.approvals", "operator.pairing"]
-
             device_auth = build_device_auth(
-                self.device_identity, client_id, client_mode, role, scopes, self.tokens["operator"]
+                self.device_identity, self.CLIENT_ID, self.CLIENT_MODE, self.ROLE, self.SCOPES, self.tokens["operator"]
             )
 
             await self._ws.send(
@@ -193,13 +208,13 @@ class OpenClawLLMService(LLMService):
                             "minProtocol": 3,
                             "maxProtocol": 3,
                             "client": {
-                                "id": client_id,
+                                "id": self.CLIENT_ID,
                                 "version": "1.0.0",
                                 "platform": "macos",
-                                "mode": client_mode,
+                                "mode": self.CLIENT_MODE,
                             },
-                            "role": role,
-                            "scopes": scopes,
+                            "role": self.ROLE,
+                            "scopes": self.SCOPES,
                             "auth": {"token": self.tokens["operator"]},
                             "device": device_auth,
                         },
@@ -217,7 +232,7 @@ class OpenClawLLMService(LLMService):
                 data = json.loads(response)
 
             if not data.get("ok"):
-                raise Exception(f"OpenClaw connection failed: {data}")
+                raise ConnectionError(f"OpenClaw connection failed: {data}")
 
             logger.info(f"✅ Connected to OpenClaw")
 
@@ -231,7 +246,7 @@ class OpenClawLLMService(LLMService):
             self._connected_event.set()
 
         except Exception as e:
-            logger.error(f"Failed to connect to OpenClaw: {e}")
+            logger.error(f"OpenClaw connection error: {e}")
             raise
 
     async def _handle_messages(self):
@@ -277,6 +292,10 @@ class OpenClawLLMService(LLMService):
                                 if item.get("type") == "text":
                                     full_text += item.get("text", "")
 
+                            # Clear streaming accumulator if it exists
+                            if hasattr(self, "_accumulated_response"):
+                                delattr(self, "_accumulated_response")
+
                             logger.info(f"✅ Final response: {full_text[:100]}...")
                             try:
                                 self._response_queue.put_nowait(full_text)
@@ -309,8 +328,14 @@ class OpenClawLLMService(LLMService):
             self._connected = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
-        """Process frames - handle LLMContextFrame like the original implementation"""
+        """Process frames - handle LLMContextFrame and InterruptionFrame"""
         await super().process_frame(frame, direction)
+
+        # Handle interruption - clear pending responses
+        if isinstance(frame, InterruptionFrame):
+            await self._clear_pending_responses()
+            await self.push_frame(frame, direction)
+            return
 
         # Handle LLMContextFrame - don't push it, just process it
         if isinstance(frame, LLMContextFrame):
@@ -367,7 +392,7 @@ class OpenClawLLMService(LLMService):
                 "id": str(request_id),
                 "method": "chat.send",
                 "params": {
-                    "sessionKey": "voice-session",  # Use a session key
+                    "sessionKey": self.SESSION_KEY,
                     "message": last_user_message,
                     "idempotencyKey": f"pipecat-{request_id}",
                 },
@@ -387,7 +412,7 @@ class OpenClawLLMService(LLMService):
 
             except Exception as e:
                 logger.error(f"Error waiting for OpenClaw response: {e}")
-                await self.push_frame(TextFrame("Sorry, I didn't get a response from OpenClaw."))
+                await self.push_frame(TextFrame("Sorry, I'm having trouble connecting to OpenClaw right now."))
                 await self.push_frame(LLMFullResponseEndFrame())
 
         except Exception as e:
