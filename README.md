@@ -36,6 +36,13 @@ talky say "Hello world"           # Test voice output
 - `talky config` - Create config files
 - Add API keys to `~/.talky/credentials/` (one JSON file per provider)
 
+**Debug Logging**
+```bash
+PIPECAT_LOG_LEVEL=DEBUG talky openclaw  # Enable debug logs
+PIPECAT_LOG_LEVEL=INFO talky moltis     # Info level (default)
+PIPECAT_LOG_LEVEL=ERROR talky pi        # Error level only
+```
+
 **Example API Keys**
 ```bash
 # Deepgram (speech-to-text)
