@@ -19,7 +19,7 @@ voice_backends:
     whisper_local:
       description: "Local Whisper via MLX (no API key, macOS)"
       requires_credentials: false
-      service_class: "pipecat.services.whisper.stt.WhisperSTTServiceMLX"
+      service_class: pipecat.services.whisper.stt.WhisperSTTServiceMLX
       default_model: "mlx-community/whisper-large-v3-turbo"
 
     deepgram:

@@ -242,18 +242,7 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
       if (response.type === 'voiceProfileSet' && response.status === 'success') {
         setCurrentProfile(profileName);
         console.log('✅ Voice profile changed to:', profileName);
-        
-        // Reconnect to apply the new voice profile
-        console.log('🔄 Reconnecting to apply new voice profile...');
-        if (client.disconnect) {
-          await client.disconnect();
-          // Wait a moment then reconnect
-          setTimeout(() => {
-            if (client.connect) {
-              client.connect();
-            }
-          }, 1000);
-        }
+        // No reconnection needed - voice switching works at runtime!
       } else if (response.status === 'error') {
         setError(response.message || 'Failed to set voice profile');
       }

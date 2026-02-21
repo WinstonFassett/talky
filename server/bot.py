@@ -18,7 +18,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import importlib
 
 from loguru import logger
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.frames.frames import Frame, LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -27,11 +30,9 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.filters.function_filter import FunctionFilter
+from pipecat.transports.base_transport import BaseTransport
 
-from shared.voice_config import (
-    create_vad_analyzer,
-    configure_quiet_logging,
-)
 from shared.service_factory import create_stt_service_from_config, create_tts_service_from_config
 from pipecat.runner.types import RunnerArguments, SmallWebRTCRunnerArguments
 from pipecat.transports.base_transport import BaseTransport, TransportParams
@@ -39,13 +40,15 @@ from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.processors.frameworks.rtvi import RTVIObserver, RTVIProcessor
 
+# Global reference to the voice switcher
+voice_switcher = None
+
 async def run_bot(
     transport: BaseTransport,
     llm_backend_name: str = None,
     voice_profile_name: str = None,
 ):
     """Main bot logic using clean backend/voice separation."""
-    configure_quiet_logging()
 
     from server.config.profile_manager import get_profile_manager
 
@@ -73,11 +76,20 @@ async def run_bot(
     stt = create_stt_service_from_config(voice_profile.stt_provider, model=voice_profile.stt_model)
     logger.info(f"Created STT service: {type(stt).__name__}")
 
-    # Create TTS service
-    tts = create_tts_service_from_config(
-        voice_profile.tts_provider, voice_id=voice_profile.tts_voice
+    # Create TTSSwitcher instead of single TTS service
+    from server.lazy_voice_switcher import TTSSwitcher
+    from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyManual
+    
+    # Create TTS services for local profiles
+    tts_switcher = TTSSwitcher.from_profile_names(
+        ["local", "local-female"], 
+        ServiceSwitcherStrategyManual
     )
-    logger.info(f"Created TTS service: {type(tts).__name__}")
+    logger.info(f"Created TTSSwitcher with {len(tts_switcher.tts_services)} TTS services")
+    
+    # Set global reference for RTVI handlers
+    global voice_switcher
+    voice_switcher = tts_switcher
 
     # Import LLM service from backend
     module_path = ".".join(llm_backend.service_class.split(".")[:-1])
@@ -102,7 +114,7 @@ async def run_bot(
     context = LLMContext(messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=create_vad_analyzer()),
+        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
     pipeline = Pipeline(
@@ -111,7 +123,7 @@ async def run_bot(
             stt,
             user_aggregator,
             llm,
-            tts,
+            tts_switcher,  # Use LazyVoiceSwitcher
             transport.output(),
             assistant_aggregator,
         ]
@@ -157,19 +169,29 @@ async def run_bot(
                     await rtvi.send_error_response(msg, f"Voice profile not found: {profile_name}")
                     return
 
-                # Store the profile name for bot to pick up
-                import os
-                os.environ["VOICE_PROFILE"] = profile_name
-
-                await rtvi.send_server_response(msg, {
-                    "type": "voiceProfileSet",
-                    "data": {
-                        "name": profile.name,
-                        "description": profile.description
-                    },
-                    "status": "success"
-                })
-                logger.info(f"Set voice profile to: {profile_name}")
+                # Use the voice switcher to change voice profile
+                if voice_switcher:
+                    # Use the new method to find the service for this profile
+                    target_service = voice_switcher.get_service_for_profile(profile_name)
+                    
+                    if target_service:
+                        from pipecat.frames.frames import ManuallySwitchServiceFrame
+                        switch_frame = ManuallySwitchServiceFrame(service=target_service)
+                        await task.queue_frames([switch_frame])
+                        
+                        await rtvi.send_server_response(msg, {
+                            "type": "voiceProfileSet",
+                            "data": {
+                                "name": profile.name,
+                                "description": profile.description
+                            },
+                            "status": "success"
+                        })
+                        logger.info(f"Switched to voice profile: {profile_name}")
+                    else:
+                        await rtvi.send_error_response(msg, f"TTS service not found for profile: {profile_name}")
+                else:
+                    await rtvi.send_error_response(msg, "Voice switcher not available")
             except Exception as e:
                 logger.error(f"Error in setVoiceProfile: {e}")
                 await rtvi.send_error_response(msg, f"Failed to set voice profile: {e}")
@@ -180,12 +202,12 @@ async def run_bot(
                 current_profile_name = os.environ.get("VOICE_PROFILE")
                 
                 if not current_profile_name:
-                    await rtvi.send_error_response(msg, "No current voice profile set")
+                    await rtvi.send_error_response(msg, "No voice profile set")
                     return
-                    
+                
                 profile = pm.get_voice_profile(current_profile_name)
                 if not profile:
-                    await rtvi.send_error_response(msg, f"Current voice profile not found: {current_profile_name}")
+                    await rtvi.send_error_response(msg, f"Voice profile not found: {current_profile_name}")
                     return
 
                 await rtvi.send_server_response(msg, {
@@ -196,6 +218,7 @@ async def run_bot(
                     },
                     "status": "success"
                 })
+                logger.info(f"Current voice profile: {current_profile_name}")
             except Exception as e:
                 logger.error(f"Error in getCurrentVoiceProfile: {e}")
                 await rtvi.send_error_response(msg, f"Failed to get current voice profile: {e}")
