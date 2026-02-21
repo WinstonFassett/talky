@@ -3357,6 +3357,9 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+assemblyai = [
+    { name = "websockets" },
+]
 cartesia = [
     { name = "cartesia" },
     { name = "websockets" },
@@ -5114,6 +5117,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "loguru" },
+    { name = "pipecat-ai", extra = ["assemblyai"] },
     { name = "pyyaml" },
     { name = "rich" },
 ]
@@ -5129,6 +5133,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "pipecat-ai", extras = ["assemblyai"], specifier = ">=0.0.102" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0.0" },
 ]
