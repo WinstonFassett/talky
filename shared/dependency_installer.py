@@ -121,6 +121,21 @@ def install_dependencies(providers: Set[str]) -> bool:
     if not packages_to_install:
         return True
     
+    # Check if we're in a uv tool environment first (before printing anything)
+    import shutil
+    uv_cmd = shutil.which("uv")
+    if not uv_cmd:
+        logger.error("uv not found")
+        return False
+        
+    executable_path = sys.executable
+    if "uv-tool" in executable_path or ".local/share/uv/tools/" in executable_path:
+        # We're in a uv tool, assume dependencies are already available
+        log_level = os.getenv("TALKY_LOG_LEVEL", "ERROR")
+        if log_level != "ERROR":
+            logger.info("CLI tool detected - assuming dependencies are available")
+        return True
+    
     # Check if user wants quiet logging
     log_level = os.getenv("TALKY_LOG_LEVEL", "ERROR")
     if log_level == "ERROR":
@@ -130,33 +145,19 @@ def install_dependencies(providers: Set[str]) -> bool:
         logger.info(f"Installing: {', '.join(packages_to_install)}")
     
     try:
-        import shutil
-        uv_cmd = shutil.which("uv")
-        if not uv_cmd:
-            logger.error("uv not found")
-            return False
-            
-        # Check if we're in a uv tool environment by checking the executable path
-        executable_path = sys.executable
-        if "uv-tool" in executable_path or ".local/share/uv/tools/" in executable_path:
-            # We're in a uv tool, assume dependencies are already available
-            if log_level != "ERROR":
-                logger.info("CLI tool detected - assuming dependencies are available")
-            return True
-        else:
-            # Try regular pip install
+        # Try regular pip install
+        result = subprocess.run(
+            [uv_cmd, "pip", "install"] + packages_to_install,
+            capture_output=True, text=True
+        )
+        
+        if result.returncode != 0 and "No virtual environment found" in result.stderr:
+            # Fall back to user install
+            logger.info("Trying user install")
             result = subprocess.run(
-                [uv_cmd, "pip", "install"] + packages_to_install,
+                [uv_cmd, "pip", "install", "--user"] + packages_to_install,
                 capture_output=True, text=True
             )
-            
-            if result.returncode != 0 and "No virtual environment found" in result.stderr:
-                # Fall back to user install
-                logger.info("Trying user install")
-                result = subprocess.run(
-                    [uv_cmd, "pip", "install", "--user"] + packages_to_install,
-                    capture_output=True, text=True
-                )
         
         if result.returncode != 0:
             logger.error(f"Install failed: {result.stderr}")
