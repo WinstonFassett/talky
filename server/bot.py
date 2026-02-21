@@ -80,9 +80,9 @@ async def run_bot(
     from server.lazy_voice_switcher import TTSSwitcher
     from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyManual
     
-    # Create TTS services for local profiles
+    # Create TTS services for your personal profiles
     tts_switcher = TTSSwitcher.from_profile_names(
-        ["local", "local-female"], 
+        ["cloud-dude", "google-puck", "local-kokoro", "local-us-female"], 
         ServiceSwitcherStrategyManual
     )
     logger.info(f"Created TTSSwitcher with {len(tts_switcher.tts_services)} TTS services")
