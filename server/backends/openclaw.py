@@ -259,13 +259,15 @@ class OpenClawLLMService(LLMService):
                 if data.get("type") in ["res", "event"] and data.get("event") != "health":
                     logger.debug(f"📨 Received message: {json.dumps(data)}")
 
-                # Log all requests to see if first one gets response
-                if data.get("type") == "res":
-                    req_id = data.get("id")
-                    if req_id:
-                        logger.info(
-                            f"📨 Response for request {req_id}: {json.dumps(data.get('result', {}))}"
-                        )
+                # Log ALL message types for debugging
+                msg_type = data.get("type")
+                if msg_type == "event":
+                    event_type = data.get("event")
+                    logger.info(f"📨 Event message: {event_type}")
+                elif msg_type == "res":
+                    logger.info(f"📨 Response message: {json.dumps(data.get('result', {}))}")
+                else:
+                    logger.info(f"📨 Other message type: {msg_type}")
 
                 # Handle streaming agent responses
                 if data.get("type") == "event" and data.get("event") == "agent":
@@ -278,6 +280,17 @@ class OpenClawLLMService(LLMService):
                                 self._accumulated_response = ""
                             self._accumulated_response += text_data.get("delta", "")
                             logger.debug(f"📝 Streaming: {text_data.get('delta', '')}")
+                            
+                            # Check if this is the end of streaming
+                            if text_data.get("delta") == "" and hasattr(self, "_accumulated_response"):
+                                # Empty delta often signals end of stream
+                                full_response = self._accumulated_response
+                                logger.info(f"✅ End of streaming, putting response in queue: {full_response[:100]}...")
+                                try:
+                                    self._response_queue.put_nowait(full_response)
+                                except asyncio.QueueFull:
+                                    logger.warning("Response queue full")
+                                delattr(self, "_accumulated_response")
 
                 # Handle final chat message
                 elif data.get("type") == "event" and data.get("event") == "chat":
