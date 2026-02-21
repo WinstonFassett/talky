@@ -1,68 +1,56 @@
+import type { PipecatClient } from '@pipecat-ai/client-js';
 import { usePipecatClientMediaTrack } from '@pipecat-ai/client-react';
 import { CircularWaveform } from '@pipecat-ai/voice-ui-kit';
-import { useEffect, useState } from 'react';
-import type { PipecatClient } from '@pipecat-ai/client-js';
+import { useEffect, useRef, useState } from 'react';
+
+type BotState = 'idle' | 'thinking' | 'speaking';
 
 interface BotVisualizerProps {
   client: PipecatClient | null;
 }
 
 export const BotVisualizer = ({ client }: BotVisualizerProps) => {
-  const [isBotThinking, setIsBotThinking] = useState(false);
-  const [isBotSpeaking, setIsBotSpeaking] = useState(false);
+  const [botState, setBotState] = useState<BotState>('idle');
+  const clientRef = useRef<PipecatClient | null>(null);
   
-  // Use the proper Pipecat hook to get the bot's audio track
-  const botAudioTrack = usePipecatClientMediaTrack('audio', 'bot');
-  // Also try local audio as fallback for testing
-  const localAudioTrack = usePipecatClientMediaTrack('audio', 'local');
-  
-  // Debug: Log the audio track
+  // Update client ref when client changes
   useEffect(() => {
-    console.log('Bot audio track changed:', botAudioTrack);
-    console.log('Track enabled:', botAudioTrack?.enabled);
-    console.log('Track state:', botAudioTrack?.readyState);
-    console.log('Local audio track:', localAudioTrack);
-  }, [botAudioTrack, localAudioTrack]);
-
-  // Listen for bot state changes
+    clientRef.current = client;
+  }, [client]);
+  
+  // Use the proper Pipecat hook to get the bot's audio track with error handling
+  const botAudioTrack = usePipecatClientMediaTrack('audio', 'bot');
+  
+  // Listen for bot state changes with coordinated state management
   useEffect(() => {
     if (!client) return;
 
     const handleBotLlmStarted = () => {
-      console.log('Bot LLM started - setting thinking to true');
-      setIsBotThinking(true);
+      setBotState('thinking');
     };
 
     const handleBotLlmStopped = () => {
-      console.log('Bot LLM stopped - setting thinking to false');
-      setIsBotThinking(false);
+      setBotState('idle');
     };
 
     const handleBotTtsStarted = () => {
-      console.log('Bot TTS started - using synthetic audio visualization');
-      setIsBotThinking(false);
-      // Don't set speaking yet - wait for actual audio to start
+      // TTS starting doesn't mean speaking yet - wait for actual audio
+      setBotState('idle');
     };
 
     const handleBotTtsStopped = () => {
-      console.log('Bot TTS stopped - clearing bot audio track');
-      // Don't clear speaking yet - wait for actual audio to stop
+      // TTS stopping doesn't mean speaking stopped - let audio track handle it
     };
 
     const handleBotStartedSpeaking = () => {
-      console.log('Bot started speaking - using synthetic audio visualization');
-      setIsBotThinking(false);
-      setIsBotSpeaking(true);
-      // Audio track is automatically handled by usePipecatClientMediaTrack
+      setBotState('speaking');
     };
 
     const handleBotStoppedSpeaking = () => {
-      console.log('Bot stopped speaking - clearing bot audio track');
-      setIsBotSpeaking(false);
-      // Audio track is automatically handled by usePipecatClientMediaTrack
+      setBotState('idle');
     };
 
-    // Subscribe to client events using the correct event names
+    // Subscribe to client events
     client.on('botLlmStarted', handleBotLlmStarted);
     client.on('botLlmStopped', handleBotLlmStopped);
     client.on('botTtsStarted', handleBotTtsStarted);
@@ -71,24 +59,31 @@ export const BotVisualizer = ({ client }: BotVisualizerProps) => {
     client.on('botStoppedSpeaking', handleBotStoppedSpeaking);
 
     return () => {
-      client.off('botLlmStarted', handleBotLlmStarted);
-      client.off('botLlmStopped', handleBotLlmStopped);
-      client.off('botTtsStarted', handleBotTtsStarted);
-      client.off('botTtsStopped', handleBotTtsStopped);
-      client.off('botStartedSpeaking', handleBotStartedSpeaking);
-      client.off('botStoppedSpeaking', handleBotStoppedSpeaking);
+      // Use the stored client ref to ensure we clean up the same instance
+      const currentClient = clientRef.current;
+      if (currentClient) {
+        currentClient.off('botLlmStarted', handleBotLlmStarted);
+        currentClient.off('botLlmStopped', handleBotLlmStopped);
+        currentClient.off('botTtsStarted', handleBotTtsStarted);
+        currentClient.off('botTtsStopped', handleBotTtsStopped);
+        currentClient.off('botStartedSpeaking', handleBotStartedSpeaking);
+        currentClient.off('botStoppedSpeaking', handleBotStoppedSpeaking);
+      }
     };
   }, [client]);
+
+  const isBotThinking = botState === 'thinking';
+  const isBotSpeaking = botState === 'speaking';
 
   return (
     <CircularWaveform 
       size={60}
-      audioTrack={isBotSpeaking ? (botAudioTrack || localAudioTrack) : null}
+      audioTrack={isBotSpeaking ? botAudioTrack : null}
       isThinking={isBotThinking}            
       color1="#615fff"
       color2="#EC4899"
       backgroundColor="transparent"
-      rotationEnabled={!isBotSpeaking} // Rotation for idle and thinking, disabled when speaking
+      rotationEnabled={!isBotSpeaking}
       numBars={32}
       barWidth={1}
       sensitivity={2}
