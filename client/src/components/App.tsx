@@ -129,14 +129,14 @@ export const App = ({
           <CircularWaveform 
             size={60}
             audioTrack={isBotSpeaking ? (botAudioTrack || localAudioTrack) : null}
-            isThinking={isBotThinking}
-            color1={isBotSpeaking ? "#10B981" : "#00D3F2"} // Green when speaking
-            color2={isBotSpeaking ? "#34D399" : "#E12AFB"} // Green when speaking
+            isThinking={isBotThinking}            
+            color1="#615fff"
+            color2="#EC4899"
             backgroundColor="transparent"
-            rotationEnabled={!isBotSpeaking} // Disable rotation when speaking
-            numBars={32} // Keep consistent bars
-            barWidth={isBotSpeaking ? 4 : 2} // Wider bars when speaking
-            sensitivity={isBotSpeaking ? 3 : 1} // Much higher sensitivity when speaking
+            rotationEnabled={!isBotSpeaking} // Rotation for idle and thinking, disabled when speaking
+            numBars={32}
+            barWidth={1}
+            sensitivity={2}
           />
           {showTransportSelector ? (
             <TransportSelect
