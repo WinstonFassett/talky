@@ -10,6 +10,7 @@ import {
 
 import type { TransportType } from '../config';
 import { TransportSelect } from './TransportSelect';
+import { BotVisualizer } from './BotVisualizer';
 
 interface AppProps extends PipecatBaseChildProps {
   transportType: TransportType;
@@ -33,17 +34,10 @@ export const App = ({
     client?.initDevices();
   }, [client]);
 
-  // Very conservative autoconnect - only after everything is loaded
   useEffect(() => {
     if (autoconnect && client && handleConnect && !autoconnectAttempted.current) {
-      // Wait for UI to be fully rendered and stable
-      const timer = setTimeout(() => {
-        if (client && handleConnect && !autoconnectAttempted.current) {
-          autoconnectAttempted.current = true;
-          handleConnect();
-        }
-      }, 2000); // Very conservative 2-second delay
-      return () => clearTimeout(timer);
+      autoconnectAttempted.current = true;
+      handleConnect();
     }
   }, [autoconnect, client, handleConnect]);
 
@@ -52,15 +46,16 @@ export const App = ({
   return (
     <div className="flex flex-col w-full h-full">
       <div className="flex items-center justify-between gap-4 p-4">
-        {showTransportSelector ? (
-          <TransportSelect
-            transportType={transportType}
-            onTransportChange={onTransportChange}
-            availableTransports={availableTransports}
-          />
-        ) : (
-          <div /> /* Spacer */
-        )}
+        <div className="flex items-center gap-4">
+          <BotVisualizer client={client} />
+          {showTransportSelector ? (
+            <TransportSelect
+              transportType={transportType}
+              onTransportChange={onTransportChange}
+              availableTransports={availableTransports}
+            />
+          ) : null}
+        </div>
         <div className="flex items-center gap-4">
           <UserAudioControl size="lg" />
           <ConnectButton
@@ -75,9 +70,6 @@ export const App = ({
           <ConversationPanel />
         </div>
       </div>
-      {/* <div className="h-96 overflow-hidden px-4 pb-4">
-        <EventsPanel />
-      </div> */}
     </div>
   );
 };
