@@ -38,9 +38,14 @@ talky say "Hello world"           # Test voice output
 
 **Debug Logging**
 ```bash
-PIPECAT_LOG_LEVEL=DEBUG talky openclaw  # Enable debug logs
-PIPECAT_LOG_LEVEL=INFO talky moltis     # Info level (default)
-PIPECAT_LOG_LEVEL=ERROR talky pi        # Error level only
+TALKY_LOG_LEVEL=ERROR talky openclaw  # Errors only (recommended)
+TALKY_LOG_LEVEL=WARNING talky moltis     # Warnings and errors
+TALKY_LOG_LEVEL=INFO talky pi              # Verbose mode
+TALKY_LOG_LEVEL=DEBUG talky openclaw      # Full debug
+
+# Or use command line arguments
+talky --log-level ERROR openclaw
+talky --log-level DEBUG moltis
 ```
 
 **Example API Keys**
