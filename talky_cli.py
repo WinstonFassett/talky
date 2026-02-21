@@ -22,6 +22,32 @@ sys.path.insert(0, str(_root))
 sys.path.insert(0, str(server_dir))
 
 
+def kill_port_7860():
+    """Kill any processes using port 7860."""
+    try:
+        # Find process using port 7860
+        result = subprocess.run(
+            ["lsof", "-ti", ":7860"],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0 and result.stdout.strip():
+            pids = result.stdout.strip().split('\n')
+            for pid in pids:
+                try:
+                    subprocess.run(["kill", "-9", pid], capture_output=True)
+                    print(f"Killed process {pid} on port 7860")
+                except subprocess.SubprocessError:
+                    pass
+        else:
+            # No process found on port 7860
+            pass
+    except subprocess.SubprocessError:
+        # lsof command failed (probably not on macOS/Linux)
+        pass
+
+
 def cmd_say(args):
     """Handle the 'say' subcommand."""
     # Ensure dependencies are installed before importing
@@ -103,6 +129,9 @@ def cmd_say(args):
 def cmd_run(args):
     """Handle the 'run' subcommand (bot)."""
     # server_dir is already defined globally from script location
+    
+    # Kill any existing process on port 7860
+    kill_port_7860()
     
     # Ensure server dependencies are installed
     from shared.dependency_installer import ensure_dependencies_for_server
