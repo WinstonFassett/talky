@@ -15,6 +15,7 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
   const [voiceProfiles, setVoiceProfiles] = useState<VoiceProfile[]>([]);
   const [currentProfile, setCurrentProfile] = useState<string>('');
   const [loading, setLoading] = useState(true);
+  const [switching, setSwitching] = useState(false);
   const [error, setError] = useState<string>('');
 
   const requestVoiceProfiles = useCallback(async () => {
@@ -142,7 +143,11 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
   }, [client, requestVoiceProfiles, requestCurrentProfile]);
 
   const handleProfileChange = async (profileName: string) => {
-    if (!client || profileName === currentProfile) return;
+    if (!client || profileName === currentProfile || switching) return;
+    
+    // Set loading state to prevent multiple simultaneous changes
+    setSwitching(true);
+    setError('');
     
     try {
       const response = await client.sendClientRequest('setVoiceProfile', {
@@ -150,6 +155,7 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
       });
       
       if (response.type === 'voiceProfileSet' && response.status === 'success') {
+        // Only update local state after server confirms success
         setCurrentProfile(profileName);
       } else if (response.status === 'error') {
         setError(response.message || 'Failed to set voice profile');
@@ -157,6 +163,8 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
     } catch (err) {
       console.error('Error setting voice profile:', err);
       setError('Failed to set voice profile');
+    } finally {
+      setSwitching(false);
     }
   };
 
@@ -164,6 +172,14 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
     return (
       <div className="flex items-center gap-2" data-testid="voice-profile-loading">
         <span className="text-sm text-gray-500">Loading voice profiles...</span>
+      </div>
+    );
+  }
+
+  if (switching) {
+    return (
+      <div className="flex items-center gap-2" data-testid="voice-profile-switching">
+        <span className="text-sm text-blue-500">Switching voice profile...</span>
       </div>
     );
   }
@@ -184,7 +200,7 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
       <Select
         value={currentProfile}
         onValueChange={handleProfileChange}
-        disabled={disabled || voiceProfiles.length === 0}
+        disabled={disabled || voiceProfiles.length === 0 || loading || switching}
       >
         <SelectTrigger className="w-48" id="voice-profile-select">
           <SelectValue placeholder="Select voice profile" />
