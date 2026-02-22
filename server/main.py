@@ -76,6 +76,8 @@ def main():
 
     parser.add_argument("--session", "-s", help="Override session key for LLM backend")
 
+    parser.add_argument("--host", help="Host address for Pipecat server (default: localhost)")
+
     args, remaining = parser.parse_known_args()
 
     # Handle list profiles
@@ -189,6 +191,10 @@ def main():
     elif getattr(args, 'log_level', None) in ['DEBUG', 'INFO', 'WARNING']:
         # Add verbose flag for more verbose levels
         remaining.append('--verbose')
+    
+    # Add host argument if provided
+    if args.host:
+        remaining.extend(['--host', args.host])
     
     sys.argv = [sys.argv[0]] + remaining
 

@@ -30,7 +30,7 @@ logger.remove()
 logger.add(sys.stderr, level="INFO")
 
 # Create MCP server
-mcp = FastMCP(name="pipecat-mcp-server", host="localhost", port=9090)
+mcp = FastMCP(name="pipecat-mcp-server", host="0.0.0.0", port=9090)
 
 
 @mcp.tool()

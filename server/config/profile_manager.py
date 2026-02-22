@@ -365,6 +365,8 @@ class ProfileManager:
     def _load_defaults(self):
         data = self._read_yaml("settings.yaml")
         self.defaults = data.get("defaults", {})
+        # Store the full settings data for network config access
+        self.settings = data
 
     # ------------------------------------------------------------------
     # Accessors

@@ -48,7 +48,7 @@ def kill_port_7860():
         pass
 
 
-def start_client_dev_server():
+def start_client_dev_server(external_binding=False):
     """Start the client dev server if not already running."""
     try:
         # Check if port 5173 is already in use
@@ -58,7 +58,8 @@ def start_client_dev_server():
             text=True,
         )
         if result.stdout.strip():
-            print("📱 Client dev server already running on port 5173")
+            host_msg = "externally" if external_binding else "locally"
+            print(f"📱 Client dev server already running {host_msg} on port 5173")
             return True
         
         # Start the client dev server
@@ -68,13 +69,28 @@ def start_client_dev_server():
             return False
             
         print("📱 Starting client dev server...")
+        if external_binding:
+            print("🌐 External binding enabled (0.0.0.0)")
+        
+        # Set up environment variables for Vite
+        env = os.environ.copy()
+        if external_binding:
+            env["VITE_HOST"] = "0.0.0.0"
+            env["VITE_ALLOWED_HOSTS"] = "true"  # Allow all hosts
+        
+        # Use npm run dev with environment variables
+        npm_args = ["npm", "run", "dev"]
+            
         subprocess.Popen(
-            ["npm", "run", "dev"],
+            npm_args,
             cwd=str(client_dir),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=env,
         )
-        print("📱 Client dev server starting on http://localhost:5173")
+        
+        host_desc = "externally (0.0.0.0)" if external_binding else "locally (localhost)"
+        print(f"📱 Client dev server starting {host_desc} on port 5173")
         
         # Wait a bit for the server to start
         import time
@@ -216,7 +232,21 @@ def cmd_run(args):
     setup_logging(log_level)
     
     # Start client dev server FIRST if not running
-    start_client_dev_server()
+    from server.config.profile_manager import get_profile_manager
+    pm = get_profile_manager()
+    
+    # Get host from config or command line
+    host = getattr(args, "host", None)
+    if not host:
+        try:
+            pm = get_profile_manager()
+            network_config = getattr(pm, 'settings', {}).get("network", {})
+            host = network_config.get("host", "localhost")
+        except:
+            host = "localhost"
+    
+    external_binding = (host == "0.0.0.0")
+    start_client_dev_server(external_binding)
     
     # Kill any existing process on port 7860 (after Vite is ready)
     kill_port_7860()
@@ -249,6 +279,11 @@ def cmd_run(args):
         "--profile",
         talky_profile,
     ]
+
+    # Add host binding if specified
+    if host and host != "localhost":
+        cmd.extend(["--host", host])
+        print(f"🌐 Using host binding: {host}")
 
     if getattr(args, "voice_profile", None):
         cmd.extend(["--voice-profile", args.voice_profile])
@@ -359,6 +394,17 @@ def cmd_mcp(args):
 
     voice_profile = getattr(args, 'voice_profile', None)
     
+    # Get host from config or command line
+    host = getattr(args, "host", None)
+    if not host:
+        try:
+            from server.config.profile_manager import get_profile_manager
+            pm = get_profile_manager()
+            network_config = getattr(pm, 'settings', {}).get("network", {})
+            host = network_config.get("host", "localhost")
+        except:
+            host = "localhost"
+    
     # Validate voice profile if provided
     if voice_profile:
         try:
@@ -376,6 +422,9 @@ def cmd_mcp(args):
         print(f"Starting MCP server with voice profile: {voice_profile}")
     else:
         print("Starting MCP server...")
+    
+    if host and host != "localhost":
+        print(f"🌐 Using host binding: {host}")
     
     try:
         # Add mcp-server to path and import
@@ -435,6 +484,7 @@ def main():
     # === mcp subcommand ===
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP server")
     mcp_parser.add_argument("--voice-profile", "-v", help="Voice profile to use")
+    mcp_parser.add_argument("--host", help="Override host binding (default: from config)")
     mcp_parser.set_defaults(func=cmd_mcp)
 
     # === ls subcommand ===
@@ -453,7 +503,9 @@ def main():
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
     parser.add_argument("--session", "-s", help="Override session key for LLM backend")
 
-    args = parser.parse_args()
+    parser.add_argument("--host", help="Override host binding (default: from config)")
+
+    args, remaining = parser.parse_known_args()
 
     if hasattr(args, "func"):
         args.func(args)
