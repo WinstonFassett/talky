@@ -12,6 +12,7 @@ Pipeline: Speech-to-Text -> LLM -> Text-to-Speech
 import os
 import sys
 import asyncio
+import re
 
 # Add parent directory to path for shared modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -185,6 +186,16 @@ async def run_bot(
                         await rtvi.send_error_response(msg, "Invalid profile name: must be a non-empty string")
                         return
                     
+                    # Validate profile name format (alphanumeric, hyphens, underscores only)
+                    if not re.match(r'^[a-zA-Z0-9_-]+$', profile_name):
+                        await rtvi.send_error_response(msg, "Invalid profile name format")
+                        return
+                    
+                    # Length limit to prevent abuse
+                    if len(profile_name) > 50:
+                        await rtvi.send_error_response(msg, "Profile name too long")
+                        return
+                    
                     new_profile = pm.get_voice_profile(profile_name)
                     if not new_profile:
                         await rtvi.send_error_response(msg, f"Voice profile not found: {profile_name}")
@@ -210,6 +221,7 @@ async def run_bot(
                     if hasattr(tts_service, 'set_voice'):
                         try:
                             tts_service.set_voice(new_profile.tts_voice)
+                            # Update state only after successful voice change
                             voice_switcher["current_profile"] = profile_name
                             logger.info(f"Changed voice to: {new_profile.tts_voice}")
                             

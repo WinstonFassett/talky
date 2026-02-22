@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@pipecat-ai/voice-ui-kit';
+import { useCallback, useEffect, useState } from 'react';
 
 interface VoiceProfile {
   name: string;
@@ -24,7 +24,7 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
     try {
       const response = await client.sendClientRequest('getVoiceProfiles');
       
-      if (response.type === 'voiceProfiles' && response.status === 'success') {
+      if (response.type === 'voiceProfiles' && response.status === 'success' && Array.isArray(response.data)) {
         setVoiceProfiles(response.data);
         setLoading(false);
       } else if (response.status === 'error') {
@@ -44,8 +44,8 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
     try {
       const response = await client.sendClientRequest('getCurrentVoiceProfile');
       
-      if (response.type === 'currentVoiceProfile' && response.status === 'success') {
-        setCurrentProfile(response.data?.name || '');
+      if (response.type === 'currentVoiceProfile' && response.status === 'success' && response.data?.name) {
+        setCurrentProfile(response.data.name);
       }
     } catch (err) {
       console.error('Error requesting current voice profile:', err);
@@ -58,26 +58,26 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
     const handleServerMessage = (message: any) => {
       switch (message.type) {
         case 'voiceProfiles':
-          if (message.status === 'success') {
+          if (message.status === 'success' && Array.isArray(message.data)) {
             setVoiceProfiles(message.data);
             setLoading(false);
           } else if (message.status === 'error') {
-            setError(message.message);
+            setError(message.message || 'Failed to load voice profiles');
             setLoading(false);
           }
           break;
           
         case 'currentVoiceProfile':
-          if (message.status === 'success') {
-            setCurrentProfile(message.data?.name || '');
+          if (message.status === 'success' && message.data?.name) {
+            setCurrentProfile(message.data.name);
           }
           break;
           
         case 'voiceProfileSet':
-          if (message.status === 'success') {
+          if (message.status === 'success' && message.data?.name) {
             setCurrentProfile(message.data.name);
           } else if (message.status === 'error') {
-            setError(message.message);
+            setError(message.message || 'Failed to set voice profile');
           }
           break;
           
@@ -159,10 +159,14 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
         setCurrentProfile(profileName);
       } else if (response.status === 'error') {
         setError(response.message || 'Failed to set voice profile');
+        // Resync current profile from server after failed switch
+        requestCurrentProfile();
       }
     } catch (err) {
       console.error('Error setting voice profile:', err);
       setError('Failed to set voice profile');
+      // Resync current profile from server after failed switch
+      requestCurrentProfile();
     } finally {
       setSwitching(false);
     }
