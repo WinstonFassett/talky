@@ -45,16 +45,17 @@ async def run_bot(
 ):
     """Main bot logic using clean backend/voice separation."""
 
+    # Setup logging to override Pipecat's defaults
+    from logging_config import setup_logging
+    setup_logging()
+
     from server.config.profile_manager import get_profile_manager
 
     pm = get_profile_manager()
 
-    llm_backend_name = (
-        llm_backend_name or os.environ.get("LLM_BACKEND") or pm.get_default_llm_backend()
-    )
-    voice_profile_name = (
-        voice_profile_name or os.environ.get("VOICE_PROFILE") or pm.get_default_voice_profile()
-    )
+    # Use provided parameters or config defaults (no env vars)
+    llm_backend_name = llm_backend_name or pm.get_default_llm_backend()
+    voice_profile_name = voice_profile_name or pm.get_default_voice_profile()
 
     llm_backend = pm.get_llm_backend(llm_backend_name)
     if not llm_backend:
