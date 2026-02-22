@@ -145,6 +145,12 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
   const handleProfileChange = async (profileName: string) => {
     if (!client || profileName === currentProfile || switching) return;
     
+    // Validate that profile exists in available profiles
+    if (!voiceProfiles.find(p => p.name === profileName)) {
+      setError('Invalid voice profile');
+      return;
+    }
+    
     // Set loading state to prevent multiple simultaneous changes
     setSwitching(true);
     setError('');

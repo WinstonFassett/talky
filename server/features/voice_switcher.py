@@ -18,6 +18,7 @@ class VoiceProfileSwitcher:
         self.pm = profile_manager
         self.task = task
         self._lock = asyncio.Lock()
+        self._cleanup_registered = False
         
         # Bootstrap all TTS services and create ServiceSwitcher
         self.tts_service_map = self._bootstrap_tts_services()
@@ -33,9 +34,10 @@ class VoiceProfileSwitcher:
         
         # Create ServiceSwitcher with initial service as first in list
         services = list(self.tts_service_map.values())
-        # Move initial service to front
-        services.remove(initial_service)
-        services.insert(0, initial_service)
+        # Move initial service to front (safe check)
+        if initial_service in services:
+            services.remove(initial_service)
+            services.insert(0, initial_service)
         
         self.tts_switcher = ServiceSwitcher(
             services=services, 
@@ -46,6 +48,11 @@ class VoiceProfileSwitcher:
     def set_task(self, task):
         """Set the task reference (needed for ManuallySwitchServiceFrame)."""
         self.task = task
+        # Register cleanup when task is set
+        if not self._cleanup_registered:
+            import atexit
+            atexit.register(self.cleanup)
+            self._cleanup_registered = True
     
     def _bootstrap_tts_services(self) -> Dict[str, any]:
         """Create TTS services for all providers that have profiles AND valid credentials."""
@@ -147,6 +154,7 @@ class VoiceProfileSwitcher:
     
     async def _handle_set_voice_profile(self, rtvi, msg) -> None:
         """Handle request to switch to a new voice profile."""
+        # Lock the entire operation to prevent race conditions
         async with self._lock:
             try:
                 profile_name = msg.data.get("profileName")
@@ -249,41 +257,66 @@ class VoiceProfileSwitcher:
     
     async def switch_profile(self, profile_name: str) -> bool:
         """Direct method to switch voice profile (for testing or internal use)."""
+        # Lock the entire operation
+        async with self._lock:
+            try:
+                new_profile = self.pm.get_voice_profile(profile_name)
+                if not new_profile:
+                    return False
+                
+                current_profile = self.pm.get_voice_profile(self.current_profile)
+                if not current_profile:
+                    return False
+                
+                # Handle both same-provider and cross-provider switching
+                if new_profile.tts_provider == current_profile.tts_provider:
+                    # Same-provider: use set_voice method
+                    current_tts_service = self.tts_service_map.get(current_profile.tts_provider)
+                    if current_tts_service and hasattr(current_tts_service, 'set_voice'):
+                        current_tts_service.set_voice(new_profile.tts_voice)
+                        self.current_profile = profile_name
+                        logger.info(f"Changed voice within {new_profile.tts_provider}: {new_profile.tts_voice}")
+                        return True
+                    return False
+                else:
+                    # Cross-provider: switch using ServiceSwitcher
+                    if new_profile.tts_provider in self.tts_service_map:
+                        new_tts_service = self.tts_service_map[new_profile.tts_provider]
+                        # Set the voice on the new service
+                        if hasattr(new_tts_service, 'set_voice'):
+                            new_tts_service.set_voice(new_profile.tts_voice)
+                        
+                        # Use ServiceSwitcher to properly switch the service
+                        await self.task.queue_frames([ManuallySwitchServiceFrame(service=new_tts_service)])
+                        
+                        # Update current profile tracking
+                        self.current_profile = profile_name
+                        logger.info(f"Switched TTS provider from {current_profile.tts_provider} to {new_profile.tts_provider}: {new_profile.tts_voice}")
+                        return True
+                    return False
+            except Exception as e:
+                logger.error(f"Failed to switch profile: {e}")
+                return False
+    
+    def cleanup(self):
+        """Clean up TTS services to prevent resource leaks."""
         try:
-            new_profile = self.pm.get_voice_profile(profile_name)
-            if not new_profile:
-                return False
-            
-            current_profile = self.pm.get_voice_profile(self.current_profile)
-            if not current_profile:
-                return False
-            
-            # Handle both same-provider and cross-provider switching
-            if new_profile.tts_provider == current_profile.tts_provider:
-                # Same-provider: use set_voice method
-                current_tts_service = self.tts_service_map.get(current_profile.tts_provider)
-                if current_tts_service and hasattr(current_tts_service, 'set_voice'):
-                    current_tts_service.set_voice(new_profile.tts_voice)
-                    self.current_profile = profile_name
-                    logger.info(f"Changed voice within {new_profile.tts_provider}: {new_profile.tts_voice}")
-                    return True
-                return False
-            else:
-                # Cross-provider: switch using ServiceSwitcher
-                if new_profile.tts_provider in self.tts_service_map:
-                    new_tts_service = self.tts_service_map[new_profile.tts_provider]
-                    # Set the voice on the new service
-                    if hasattr(new_tts_service, 'set_voice'):
-                        new_tts_service.set_voice(new_profile.tts_voice)
-                    
-                    # Use ServiceSwitcher to properly switch the service
-                    await self.task.queue_frames([ManuallySwitchServiceFrame(service=new_tts_service)])
-                    
-                    # Update current profile tracking
-                    self.current_profile = profile_name
-                    logger.info(f"Switched TTS provider from {current_profile.tts_provider} to {new_profile.tts_provider}: {new_profile.tts_voice}")
-                    return True
-                return False
+            for provider, service in self.tts_service_map.items():
+                if hasattr(service, 'close'):
+                    try:
+                        service.close()
+                        logger.info(f"Closed TTS service for {provider}")
+                    except Exception as e:
+                        logger.warning(f"Failed to close TTS service for {provider}: {e}")
+                elif hasattr(service, 'shutdown'):
+                    try:
+                        service.shutdown()
+                        logger.info(f"Shutdown TTS service for {provider}")
+                    except Exception as e:
+                        logger.warning(f"Failed to shutdown TTS service for {provider}: {e}")
         except Exception as e:
-            logger.error(f"Failed to switch profile: {e}")
-            return False
+            logger.error(f"Error during service cleanup: {e}")
+    
+    def __del__(self):
+        """Cleanup when object is destroyed."""
+        self.cleanup()
