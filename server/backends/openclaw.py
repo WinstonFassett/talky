@@ -165,9 +165,12 @@ class OpenClawLLMService(LLMService):
     def __init__(self, *, gateway_url: str = None, agent_id: str = "main", session_key: str = None, **kwargs):
         super().__init__(**kwargs)
 
-        # OpenClaw WebSocket should always use localhost for backend connections
-        # even when frontend is accessed externally
+        # Determine gateway URL based on host binding
         default_gateway = "ws://localhost:18789"
+        if os.getenv("TALKY_HOST") and os.getenv("TALKY_HOST") != "localhost":
+            # Use external hostname when not localhost
+            hostname = os.getenv("TALKY_HOST")
+            default_gateway = f"ws://{hostname}:18789"
         
         self.gateway_url = gateway_url or os.getenv("OPENCLAW_GATEWAY_URL", default_gateway)
         self.agent_id = agent_id

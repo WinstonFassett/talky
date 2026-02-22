@@ -77,6 +77,8 @@ def main():
     parser.add_argument("--session", "-s", help="Override session key for LLM backend")
 
     parser.add_argument("--host", help="Host address for Pipecat server (default: localhost)")
+    
+    parser.add_argument("--ssl", action="store_true", help="Enable HTTPS with self-signed certificates")
 
     args, remaining = parser.parse_known_args()
 
@@ -195,6 +197,11 @@ def main():
     # Add host argument if provided
     if args.host:
         remaining.extend(['--host', args.host])
+    
+    # Add SSL arguments if requested
+    if args.ssl:
+        remaining.extend(['--ssl-keyfile', 'server-key.pem'])
+        remaining.extend(['--ssl-certfile', 'server-cert.pem'])
     
     sys.argv = [sys.argv[0]] + remaining
 
