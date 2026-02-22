@@ -11,6 +11,7 @@ Pipeline: Speech-to-Text -> LLM -> Text-to-Speech
 
 import os
 import sys
+import asyncio
 
 # Add parent directory to path for shared modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -76,19 +77,23 @@ async def run_bot(
     stt = create_stt_service_from_config(voice_profile.stt_provider, model=voice_profile.stt_model)
     logger.info(f"Created STT service: {type(stt).__name__}")
 
-    # Create TTSSwitcher with provider-based switching
-    from server.lazy_voice_switcher import TTSSwitcher
-    from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyManual
-    
-    # Create switcher with just the initial profile for now
+    # Create initial TTS service
     initial_profile = voice_profile_name or pm.get_default_voice_profile()
-    tts_switcher = TTSSwitcher.from_profile_names([initial_profile], ServiceSwitcherStrategyManual)
+    tts = create_tts_service_from_config(
+        voice_profile.tts_provider, 
+        voice_id=voice_profile.tts_voice
+    )
+    logger.info(f"Created TTS service: {type(tts).__name__}")
     
-    # Set global reference for RTVI handlers
+    # Store reference for voice switching - services will be created dynamically
     global voice_switcher
-    voice_switcher = tts_switcher
-    
-    logger.info(f"Created TTSSwitcher with initial profile: {initial_profile}")
+    voice_switcher = {
+        "current_service": tts,
+        "current_profile": initial_profile,
+        "services": {initial_profile: tts},  # Cache of initialized services
+        "task": None,  # Will be set after task creation
+        "pipeline": None  # Will be set after pipeline creation
+    }
 
     # Import LLM service from backend
     module_path = ".".join(llm_backend.service_class.split(".")[:-1])
@@ -122,7 +127,7 @@ async def run_bot(
             stt,
             user_aggregator,
             llm,
-            tts_switcher,
+            tts,
             transport.output(),
             assistant_aggregator,
         ]
@@ -132,6 +137,10 @@ async def run_bot(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
     )
+    
+    # Store task and pipeline references for dynamic service initialization
+    voice_switcher["task"] = task
+    voice_switcher["pipeline"] = pipeline
 
     @task.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
@@ -168,16 +177,23 @@ async def run_bot(
                     await rtvi.send_error_response(msg, f"Voice profile not found: {profile_name}")
                     return
 
-                # Use the TTSSwitcher to change profile
+                # Voice switching with dynamic service initialization
                 if voice_switcher:
-                    # Check if we already have a service for this profile's provider
-                    target_service = voice_switcher.get_service_for_profile(profile_name)
+                    current_service = voice_switcher.get("current_service")
+                    current_profile = voice_switcher.get("current_profile")
+                    services = voice_switcher.get("services", {})
+                    pipeline = voice_switcher.get("pipeline")
+                    task = voice_switcher.get("task")
                     
-                    if target_service:
-                        # Switch to existing service
-                        from pipecat.frames.frames import ManuallySwitchServiceFrame
-                        switch_frame = ManuallySwitchServiceFrame(service=target_service)
-                        await task.queue_frames([switch_frame])
+                    # Get current provider
+                    current_profile_obj = pm.get_voice_profile(current_profile)
+                    current_provider = current_profile_obj.tts_provider if current_profile_obj else None
+                    
+                    # Same provider - just change voice
+                    if profile.tts_provider == current_provider:
+                        current_service.set_voice(profile.tts_voice)
+                        voice_switcher["current_profile"] = profile_name
+                        logger.info(f"Changed voice to: {profile.tts_voice}")
                         
                         await rtvi.send_server_response(msg, {
                             "type": "voiceProfileSet",
@@ -187,18 +203,57 @@ async def run_bot(
                             },
                             "status": "success"
                         })
-                        logger.info(f"Switched to voice profile: {profile_name}")
                     else:
-                        # Create new service for this profile
-                        from shared.service_factory import create_tts_service_from_config
-                        new_service = create_tts_service_from_config(
-                            profile.tts_provider, 
-                            voice_id=profile.tts_voice
-                        )
-                        voice_switcher.add_service(new_service, profile_name)
+                        # Different provider - need to swap service
+                        # Check if we already have this service cached
+                        if profile_name in services:
+                            new_service = services[profile_name]
+                        else:
+                            # Create new service
+                            from shared.service_factory import create_tts_service_from_config
+                            new_service = create_tts_service_from_config(
+                                profile.tts_provider,
+                                voice_id=profile.tts_voice
+                            )
+                            
+                            # Initialize the new service with the task's setup config
+                            from pipecat.processors.frame_processor import FrameProcessorSetup, FrameDirection
+                            setup_config = FrameProcessorSetup(
+                                clock=task._clock,
+                                task_manager=task._task_manager,
+                                observer=task._observer
+                            )
+                            await new_service.setup(setup_config)
+                            
+                            # Send StartFrame to complete initialization
+                            from pipecat.frames.frames import StartFrame
+                            start_frame = StartFrame()
+                            await new_service.process_frame(start_frame, FrameDirection.DOWNSTREAM)
+                            
+                            # Cache it
+                            services[profile_name] = new_service
+                            logger.info(f"Created and initialized new TTS service for: {profile_name}")
                         
-                        switch_frame = ManuallySwitchServiceFrame(service=new_service)
-                        await task.queue_frames([switch_frame])
+                        # Properly link the new service into the pipeline chain
+                        prev_processor = current_service._prev
+                        next_processor = current_service._next
+                        
+                        if prev_processor:
+                            prev_processor._next = new_service
+                            new_service._prev = prev_processor
+                        if next_processor:
+                            new_service._next = next_processor
+                            next_processor._prev = new_service
+                        
+                        # Replace in pipeline processors list
+                        service_index = pipeline.processors.index(current_service)
+                        pipeline.processors[service_index] = new_service
+                        
+                        # Update state
+                        voice_switcher["current_service"] = new_service
+                        voice_switcher["current_profile"] = profile_name
+                        
+                        logger.info(f"Switched to voice profile: {profile_name} (different provider)")
                         
                         await rtvi.send_server_response(msg, {
                             "type": "voiceProfileSet",
@@ -208,7 +263,6 @@ async def run_bot(
                             },
                             "status": "success"
                         })
-                        logger.info(f"Created and switched to voice profile: {profile_name}")
                 else:
                     await rtvi.send_error_response(msg, "Voice switcher not available")
             except Exception as e:
@@ -217,32 +271,26 @@ async def run_bot(
                 
         elif msg.type == "getCurrentVoiceProfile":
             try:
-                # Get the currently active service from the TTSSwitcher
-                if voice_switcher and hasattr(voice_switcher, '_active_service'):
-                    active_service = voice_switcher._active_service
-                    if hasattr(active_service, '_profile_name'):
-                        current_profile_name = active_service._profile_name
-                    else:
-                        await rtvi.send_error_response(msg, "Active service has no profile name")
+                # Get current profile from voice_switcher dict
+                if voice_switcher and voice_switcher.get("current_profile"):
+                    current_profile_name = voice_switcher["current_profile"]
+                    
+                    profile = pm.get_voice_profile(current_profile_name)
+                    if not profile:
+                        await rtvi.send_error_response(msg, f"Voice profile not found: {current_profile_name}")
                         return
-                else:
-                    await rtvi.send_error_response(msg, "Voice switcher not available or no active service")
-                    return
-                
-                profile = pm.get_voice_profile(current_profile_name)
-                if not profile:
-                    await rtvi.send_error_response(msg, f"Voice profile not found: {current_profile_name}")
-                    return
 
-                await rtvi.send_server_response(msg, {
-                    "type": "currentVoiceProfile",
-                    "data": {
-                        "name": profile.name,
-                        "description": profile.description
-                    },
-                    "status": "success"
-                })
-                logger.info(f"Current voice profile: {current_profile_name}")
+                    await rtvi.send_server_response(msg, {
+                        "type": "currentVoiceProfile",
+                        "data": {
+                            "name": profile.name,
+                            "description": profile.description
+                        },
+                        "status": "success"
+                    })
+                    logger.info(f"Current voice profile: {current_profile_name}")
+                else:
+                    await rtvi.send_error_response(msg, "No current voice profile")
             except Exception as e:
                 logger.error(f"Error in getCurrentVoiceProfile: {e}")
                 await rtvi.send_error_response(msg, f"Failed to get current voice profile: {e}")

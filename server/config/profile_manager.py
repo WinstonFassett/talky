@@ -120,15 +120,25 @@ class ProfileManager:
 
     def _load_voice_profiles(self):
         data = self._read_yaml("voice-profiles.yaml")
-        for name, entry in data.get("voice_profiles", {}).items():
+        profiles_data = data.get("voice_profiles", {})
+        
+        # First pass: load the 'default' profile to use as fallback
+        default_entry = profiles_data.get("default", {})
+        default_tts_provider = default_entry.get("tts_provider", "")
+        default_tts_voice = default_entry.get("tts_voice", "")
+        default_stt_provider = default_entry.get("stt_provider", "")
+        default_stt_model = default_entry.get("stt_model", "")
+        
+        # Second pass: load all profiles, falling back to 'default' profile values
+        for name, entry in profiles_data.items():
             self.voice_profiles[name] = VoiceProfile(
                 name=name,
                 description=entry.get("description", ""),
-                tts_provider=entry.get("tts_provider") or self.defaults.get("tts_provider") or "",
-                tts_voice=entry.get("tts_voice") or self.defaults.get("tts_voice") or "",
+                tts_provider=entry.get("tts_provider") or default_tts_provider,
+                tts_voice=entry.get("tts_voice") or default_tts_voice,
                 tts_config=entry.get("tts_config", {}),
-                stt_provider=entry.get("stt_provider") or self.defaults.get("stt_provider") or "",
-                stt_model=entry.get("stt_model") or self.defaults.get("stt_model") or "",
+                stt_provider=entry.get("stt_provider") or default_stt_provider,
+                stt_model=entry.get("stt_model") or default_stt_model,
                 stt_config=entry.get("stt_config", {}),
             )
 

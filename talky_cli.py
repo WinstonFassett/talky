@@ -161,8 +161,14 @@ def cmd_say(args):
         sys.exit(0 if success else 1)
 
     if daemon_is_running():
-        # Use lightweight client
-        cmd = ["python", str(server_dir / "tts_client.py"), args.text]
+        # Use lightweight client with venv python
+        python_path = server_dir.parent / ".venv" / "bin" / "python"
+        if not python_path.exists():
+            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
+        if not python_path.exists():
+            print("Virtual environment not found. Run 'uv sync' first.")
+            sys.exit(1)
+        cmd = [str(python_path), str(server_dir / "tts_client.py"), args.text]
     else:
         # Auto-start daemon, use client with wait
         python_path = server_dir.parent / ".venv" / "bin" / "python"
@@ -179,7 +185,7 @@ def cmd_say(args):
             stderr=subprocess.DEVNULL,
             cwd=server_dir
         )
-        cmd = ["python", str(server_dir / "tts_client.py"), "--wait", "15", args.text]
+        cmd = [str(python_path), str(server_dir / "tts_client.py"), "--wait", "15", args.text]
 
     if args.voice_profile:
         cmd.extend(["-p", args.voice_profile])
