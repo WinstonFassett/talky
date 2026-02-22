@@ -244,10 +244,6 @@ def cmd_run(args):
         cmd.extend(["--voice-profile", args.voice_profile])
     if getattr(args, "debug_client", False):
         cmd.append("--debug-client")
-    if getattr(args, "minimal", False):
-        cmd.append("--minimal")
-    if getattr(args, "essential", False):
-        cmd.append("--essential")
     if getattr(args, "no_open", False):
         cmd.append("--no-open")
     if getattr(args, "local_speech", False):
@@ -436,8 +432,6 @@ def main():
     parser.add_argument("--voice-profile", "-v", help="Voice profile override")
     parser.add_argument("--list-profiles", "-l", action="store_true", help="List available profiles")
     parser.add_argument("--debug-client", "-d", action="store_true", help="Use Pipecat debug client instead of custom React client")
-    parser.add_argument("--minimal", "-m", action="store_true", help="Minimal mode")
-    parser.add_argument("--essential", "-e", action="store_true", help="Essential mode")
     parser.add_argument("--no-open", action="store_true", help="Don't open browser")
     parser.add_argument("--local-speech", action="store_true", help="Use local speech")
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
