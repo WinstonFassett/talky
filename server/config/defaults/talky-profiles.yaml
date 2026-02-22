@@ -1,14 +1,12 @@
-# Talky Profiles — named combos of LLM backend + voice profile
+# Talky Profiles
 talky_profiles:
   openclaw:
-    description: "OpenClaw with cloud voice"
+    description: "OpenClaw"
     llm_backend: "openclaw"
-    voice_profile: "cloud"
   moltis:
-    description: "Moltis with cloud voice"
+    description: "Moltis"
     llm_backend: "moltis"
-    voice_profile: "cloud"
   pi:
-    description: "Pi with cloud voice"
+    description: "Pi"
     llm_backend: "pi"
-    voice_profile: "cloud"
+    
