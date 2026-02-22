@@ -124,11 +124,11 @@ class ProfileManager:
             self.voice_profiles[name] = VoiceProfile(
                 name=name,
                 description=entry.get("description", ""),
-                tts_provider=entry.get("tts_provider") or self.defaults.get("tts_provider", ""),
-                tts_voice=entry.get("tts_voice") or self.defaults.get("tts_voice", ""),
+                tts_provider=entry.get("tts_provider") or self.defaults.get("tts_provider") or "",
+                tts_voice=entry.get("tts_voice") or self.defaults.get("tts_voice") or "",
                 tts_config=entry.get("tts_config", {}),
-                stt_provider=entry.get("stt_provider") or self.defaults.get("stt_provider", ""),
-                stt_model=entry.get("stt_model") or self.defaults.get("stt_model", ""),
+                stt_provider=entry.get("stt_provider") or self.defaults.get("stt_provider") or "",
+                stt_model=entry.get("stt_model") or self.defaults.get("stt_model") or "",
                 stt_config=entry.get("stt_config", {}),
             )
 
@@ -139,7 +139,7 @@ class ProfileManager:
             self.talky_profiles[name] = TalkyProfile(
                 name=name,
                 description=entry.get("description", ""),
-                llm_backend=entry.get("llm_backend") or self.defaults.get("llm_backend", ""),
+                llm_backend=entry.get("llm_backend") or self.defaults.get("llm_backend") or "",
                 voice_profile=vp,
                 system_message=entry.get("system_message"),
             )
