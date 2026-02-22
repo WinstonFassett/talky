@@ -32,6 +32,12 @@ talky say "Hello world"           # Test voice output
 - `talky mcp` - Voice integration for Claude
 - `talky mcp -v cloud-dude` - Use specific voice
 
+## Documentation
+
+- [Integrations](docs/integrations/) - Backend and platform integrations
+- [Remote Access](docs/remote-access.md) - External network access setup
+- [Voice Profiles](docs/voice-profiles.md) - Voice configuration options
+
 **Setup**
 - `talky config` - Create config files
 - Add API keys to `~/.talky/credentials/` (one JSON file per provider)
