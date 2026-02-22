@@ -167,10 +167,22 @@ class OpenClawLLMService(LLMService):
 
         # Determine gateway URL based on host binding
         default_gateway = "ws://localhost:18789"
-        if os.getenv("TALKY_HOST") and os.getenv("TALKY_HOST") != "localhost":
+        talky_host = os.getenv("TALKY_HOST")
+        if talky_host and talky_host != "localhost":
             # Use external hostname when not localhost
-            hostname = os.getenv("TALKY_HOST")
-            default_gateway = f"ws://{hostname}:18789"
+            if talky_host == "0.0.0.0":
+                # For 0.0.0.0 binding, detect actual hostname for WebSocket connections
+                import socket
+                try:
+                    # Try to get the actual hostname that would be used externally
+                    hostname = socket.gethostname()
+                    # Fallback to localhost if hostname resolution fails
+                    default_gateway = f"ws://{hostname}:18789"
+                except Exception:
+                    default_gateway = "ws://localhost:18789"
+            else:
+                hostname = talky_host
+                default_gateway = f"ws://{hostname}:18789"
         
         self.gateway_url = gateway_url or os.getenv("OPENCLAW_GATEWAY_URL", default_gateway)
         self.agent_id = agent_id
