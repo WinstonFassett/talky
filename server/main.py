@@ -27,29 +27,7 @@ def main():
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Set logging level (default: INFO)",
-    )
-
-    parser.add_argument(
-        "--quiet", "-q", action="store_true", help="Quiet mode - only show warnings and errors"
-    )
-
-    parser.add_argument(
-        "--debug", "-d", action="store_true", help="Debug mode - show all logs (not recommended)"
-    )
-
-    parser.add_argument(
-        "--minimal",
-        "-m",
-        action="store_true",
-        help="Minimal mode - only errors and critical issues",
-    )
-
-    parser.add_argument(
-        "--essential",
-        "-e",
-        action="store_true",
-        help="Essential mode - warnings + key bot events (default)",
+        help="Set logging level (default: ERROR)",
     )
 
     parser.add_argument("--no-open", action="store_true", help="Don't auto-open browser")
@@ -94,32 +72,9 @@ def main():
             voice_profile = None
         print("🎤 Using local speech: Whisper STT + Kokoro TTS")
 
-    # Set logging level based on arguments
-    if args.minimal:
-        os.environ["TALKY_LOG_LEVEL"] = "ERROR"
-        from logging_config import setup_minimal_logging
-
-        setup_minimal_logging()
-    elif args.quiet:
-        os.environ["TALKY_LOG_LEVEL"] = "ERROR"
-        from logging_config import configure_logging
-
-        configure_logging()
-    elif args.debug:
-        os.environ["TALKY_LOG_LEVEL"] = "DEBUG"
-        from logging_config import setup_debug_logging
-
-        setup_debug_logging()
-    elif args.log_level:
-        os.environ["TALKY_LOG_LEVEL"] = args.log_level
-        from logging_config import configure_logging
-
-        configure_logging()
-    else:
-        # Default to essential logging
-        from logging_config import setup_essential_logging
-
-        setup_essential_logging()
+    # Setup logging with CLI argument support
+    from logging_config import setup_logging
+    setup_logging(getattr(args, 'log_level', None))
 
     # Use provided talky profile or require explicit selection
     from config.profile_manager import profile_manager
@@ -145,23 +100,16 @@ def main():
     final_voice_profile = voice_profile if voice_profile else talky_profile.voice_profile
     print(f"   Voice Profile: {final_voice_profile}")
 
-    # Set profiles in environment for bot
-    os.environ["LLM_BACKEND"] = talky_profile.llm_backend
-    os.environ["VOICE_PROFILE"] = final_voice_profile
-
-    # Import and run the actual bot
-    import subprocess
+    # Call bot directly with parameters (no env vars needed)
+    import asyncio
+    import bot
+    import webbrowser
     import threading
     import time
 
-    # Add auto-open browser functionality
-    import webbrowser
-
-    import bot
-
     def auto_open_browser():
         """Auto-open browser to appropriate UI based on mode."""
-        if args.no_open or os.environ.get("NO_OPEN_BROWSER") == "1":
+        if args.no_open:
             return
 
         def delayed_open():
@@ -189,7 +137,11 @@ def main():
     # Replace sys.argv to remove our args before passing to Pipecat
     sys.argv = [sys.argv[0]] + remaining
 
-    # Call Pipecat's main which will call bot()
+    # Set environment variables for bot() function (Pipecat calls bot(), not run_bot)
+    os.environ["LLM_BACKEND"] = talky_profile.llm_backend
+    os.environ["VOICE_PROFILE"] = final_voice_profile
+
+    # Call Pipecat's main which will call bot() with proper transport
     from pipecat.runner.run import main
 
     main()

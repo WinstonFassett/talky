@@ -11,6 +11,7 @@ import {
 import type { TransportType } from '../config';
 import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
+import { VoiceProfileSelect } from './VoiceProfileSelect';
 
 interface AppProps extends PipecatBaseChildProps {
   transportType: TransportType;
@@ -57,6 +58,7 @@ export const App = ({
       <div className="flex items-center justify-between gap-4 p-4">
         <div className="flex items-center gap-4">
           <BotVisualizer client={client} />
+          <VoiceProfileSelect client={client} />
           {showTransportSelector ? (
             <TransportSelect
               transportType={transportType}

@@ -161,8 +161,14 @@ def cmd_say(args):
         sys.exit(0 if success else 1)
 
     if daemon_is_running():
-        # Use lightweight client
-        cmd = ["python", str(server_dir / "tts_client.py"), args.text]
+        # Use lightweight client with venv python
+        python_path = server_dir.parent / ".venv" / "bin" / "python"
+        if not python_path.exists():
+            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
+        if not python_path.exists():
+            print("Virtual environment not found. Run 'uv sync' first.")
+            sys.exit(1)
+        cmd = [str(python_path), str(server_dir / "tts_client.py"), args.text]
     else:
         # Auto-start daemon, use client with wait
         python_path = server_dir.parent / ".venv" / "bin" / "python"
@@ -179,7 +185,7 @@ def cmd_say(args):
             stderr=subprocess.DEVNULL,
             cwd=server_dir
         )
-        cmd = ["python", str(server_dir / "tts_client.py"), "--wait", "15", args.text]
+        cmd = [str(python_path), str(server_dir / "tts_client.py"), "--wait", "15", args.text]
 
     if args.voice_profile:
         cmd.extend(["-p", args.voice_profile])
@@ -238,10 +244,6 @@ def cmd_run(args):
         cmd.extend(["--voice-profile", args.voice_profile])
     if getattr(args, "debug_client", False):
         cmd.append("--debug-client")
-    if getattr(args, "minimal", False):
-        cmd.append("--minimal")
-    if getattr(args, "essential", False):
-        cmd.append("--essential")
     if getattr(args, "no_open", False):
         cmd.append("--no-open")
     if getattr(args, "local_speech", False):
@@ -430,8 +432,6 @@ def main():
     parser.add_argument("--voice-profile", "-v", help="Voice profile override")
     parser.add_argument("--list-profiles", "-l", action="store_true", help="List available profiles")
     parser.add_argument("--debug-client", "-d", action="store_true", help="Use Pipecat debug client instead of custom React client")
-    parser.add_argument("--minimal", "-m", action="store_true", help="Minimal mode")
-    parser.add_argument("--essential", "-e", action="store_true", help="Essential mode")
     parser.add_argument("--no-open", action="store_true", help="Don't open browser")
     parser.add_argument("--local-speech", action="store_true", help="Use local speech")
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")

@@ -1,14 +1,18 @@
-# Talky Profiles — named combos of LLM backend + voice profile
+# Talky Profiles Configuration - extends defaults from settings.yaml
+# You may choose to specify only what differs from defaults
 talky_profiles:
+
+  # OpenClaw
   openclaw:
-    description: "OpenClaw with cloud voice"
-    llm_backend: "openclaw"
-    voice_profile: "cloud"
+    description: "OpenClaw"
+
+  # Moltis
   moltis:
-    description: "Moltis with cloud voice"
+    description: "Moltis"
     llm_backend: "moltis"
-    voice_profile: "cloud"
+
+  # Pi Coding Agent
   pi:
-    description: "Pi with cloud voice"
+    description: "Pi Coding Agent"
     llm_backend: "pi"
-    voice_profile: "cloud"
+    

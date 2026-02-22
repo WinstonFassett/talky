@@ -68,22 +68,68 @@ def create_tts_service(
     return create_tts_service_from_config(provider, **kwargs)
 
 
-def create_services_from_env():
-    """Create STT/TTS services from environment variables.
-
-    Uses same env vars as our main talky:
-    - STT_PROVIDER (default: whisper)
-    - TTS_PROVIDER (default: kokoro)
-    - Voice-specific API keys
-
+def create_services_from_profile():
+    """Create STT/TTS services from voice profile configuration.
+    
+    Uses the talky voice profile system instead of environment variables.
+    Requires proper configuration setup - no fallbacks.
+    
     Returns:
         Tuple of (stt_service, tts_service)
-
+        
+    Raises:
+        ValueError: If configuration is missing or invalid
     """
-    stt_provider = os.getenv("STT_PROVIDER", "whisper")
-    tts_provider = os.getenv("TTS_PROVIDER", "kokoro")
+    # Import profile manager to access voice profiles
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "server"))
+    from config.profile_manager import get_profile_manager
+    
+    pm = get_profile_manager()
+    
+    # Get default voice profile from config - fail if not set
+    default_profile_name = pm.get_default_voice_profile()
+    if not default_profile_name:
+        raise ValueError(
+            "No default voice profile configured. Run 'talky config' to set up your configuration."
+        )
+    
+    profile = pm.get_voice_profile(default_profile_name)
+    if not profile:
+        raise ValueError(
+            f"Default voice profile '{default_profile_name}' not found. "
+            f"Run 'talky config' to set up your configuration."
+        )
+    
+    # Use the voice profile's configured providers
+    stt_provider = profile.stt_provider
+    tts_provider = profile.tts_provider
+    
+    if not stt_provider:
+        raise ValueError(
+            f"Voice profile '{default_profile_name}' has no STT provider configured. "
+            f"Run 'talky config' to fix your configuration."
+        )
+    
+    if not tts_provider:
+        raise ValueError(
+            f"Voice profile '{default_profile_name}' has no TTS provider configured. "
+            f"Run 'talky config' to fix your configuration."
+        )
 
-    stt = create_stt_service(stt_provider)
-    tts = create_tts_service(tts_provider)
+    try:
+        stt = create_stt_service(stt_provider)
+        tts = create_tts_service(tts_provider)
+    except ValueError as e:
+        if "Credentials required" in str(e):
+            raise ValueError(
+                f"Credentials required for {stt_provider if 'STT' in str(e) else tts_provider}. "
+                f"Set up credentials in ~/.talky/credentials/ or run 'talky config'."
+            )
+        raise
+    except Exception as e:
+        raise ValueError(
+            f"Failed to create services for profile '{default_profile_name}': {e}. "
+            f"Check your configuration and credentials."
+        )
 
     return stt, tts

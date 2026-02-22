@@ -81,7 +81,7 @@ def create_stt_service_from_config(provider: str, **kwargs):
         provider: Provider name (e.g. "deepgram", "whisper_local")
         **kwargs: Extra args passed to the service constructor
     """
-    from config.profile_manager import get_profile_manager
+    from server.config.profile_manager import get_profile_manager
 
     pm = get_profile_manager()
     config = pm.get_voice_backend_config("stt", provider)
@@ -101,7 +101,7 @@ def create_tts_service_from_config(provider: str, **kwargs):
         provider: Provider name (e.g. "google", "kokoro")
         **kwargs: Extra args passed to the service constructor
     """
-    from config.profile_manager import get_profile_manager
+    from server.config.profile_manager import get_profile_manager
 
     pm = get_profile_manager()
     config = pm.get_voice_backend_config("tts", provider)

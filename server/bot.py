@@ -11,6 +11,7 @@ Pipeline: Speech-to-Text -> LLM -> Text-to-Speech
 
 import os
 import sys
+import asyncio
 
 # Add parent directory to path for shared modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,23 +19,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import importlib
 
 from loguru import logger
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.frames.frames import LLMRunFrame, ManuallySwitchServiceFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.service_switcher import ServiceSwitcher, ServiceSwitcherStrategyManual
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-
-from shared.voice_config import (
-    create_vad_analyzer,
-    configure_quiet_logging,
-)
+from pipecat.transports.base_transport import BaseTransport
 from shared.service_factory import create_stt_service_from_config, create_tts_service_from_config
+from server.features.voice_switcher import VoiceProfileSwitcher
 from pipecat.runner.types import RunnerArguments, SmallWebRTCRunnerArguments
-from pipecat.transports.base_transport import BaseTransport, TransportParams
+from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
@@ -44,18 +44,18 @@ async def run_bot(
     voice_profile_name: str = None,
 ):
     """Main bot logic using clean backend/voice separation."""
-    configure_quiet_logging()
 
-    from config.profile_manager import get_profile_manager
+    # Setup logging to override Pipecat's defaults
+    from logging_config import setup_logging
+    setup_logging()
+
+    from server.config.profile_manager import get_profile_manager
 
     pm = get_profile_manager()
 
-    llm_backend_name = (
-        llm_backend_name or os.environ.get("LLM_BACKEND") or pm.get_default_llm_backend()
-    )
-    voice_profile_name = (
-        voice_profile_name or os.environ.get("VOICE_PROFILE") or pm.get_default_voice_profile()
-    )
+    # Use provided parameters or config defaults (no env vars)
+    llm_backend_name = llm_backend_name or pm.get_default_llm_backend()
+    voice_profile_name = voice_profile_name or pm.get_default_voice_profile()
 
     llm_backend = pm.get_llm_backend(llm_backend_name)
     if not llm_backend:
@@ -72,15 +72,18 @@ async def run_bot(
     stt = create_stt_service_from_config(voice_profile.stt_provider, model=voice_profile.stt_model)
     logger.info(f"Created STT service: {type(stt).__name__}")
 
-    # Create TTS service
-    tts = create_tts_service_from_config(
-        voice_profile.tts_provider, voice_id=voice_profile.tts_voice
-    )
-    logger.info(f"Created TTS service: {type(tts).__name__}")
+    # Create voice profile switcher (handles TTS service creation internally)
+    voice_switcher = VoiceProfileSwitcher(voice_profile_name, pm, None)  # task set later
+    tts_switcher = voice_switcher.get_service_switcher()
+    logger.info(f"Created voice profile switcher")
 
     # Import LLM service from backend
     module_path = ".".join(llm_backend.service_class.split(".")[:-1])
     class_name = llm_backend.service_class.split(".")[-1]
+    
+    # Fix module path to include server prefix if needed
+    if not module_path.startswith("server.") and not module_path.startswith("."):
+        module_path = f"server.{module_path}"
 
     llm_service_module = importlib.import_module(module_path)
     llm_service_class = getattr(llm_service_module, class_name)
@@ -97,7 +100,7 @@ async def run_bot(
     context = LLMContext(messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=create_vad_analyzer()),
+        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
     pipeline = Pipeline(
@@ -106,7 +109,7 @@ async def run_bot(
             stt,
             user_aggregator,
             llm,
-            tts,
+            tts_switcher,  # Use ServiceSwitcher instead of direct TTS
             transport.output(),
             assistant_aggregator,
         ]
@@ -117,9 +120,20 @@ async def run_bot(
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
     )
 
+    # Set task reference in voice switcher (needed for ManuallySwitchServiceFrame)
+    voice_switcher.set_task(task)
+
     @task.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
-        pass
+        logger.info("Client ready event fired")
+
+    @task.rtvi.event_handler("on_client_message")
+    async def on_client_message(rtvi, msg):
+        """Handle custom client messages - delegate to voice switcher for voice profile control."""
+        if msg.type in ["getVoiceProfiles", "getCurrentVoiceProfile", "setVoiceProfile"]:
+            await voice_switcher.handle_message(rtvi, msg)
+        else:
+            await rtvi.send_error_response(msg, f"Unknown message type: {msg.type}")
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
@@ -143,11 +157,16 @@ async def run_bot(
 
 async def bot(runner_args: RunnerArguments):
     """Main bot entry point."""
-    llm_backend_name = os.getenv("LLM_BACKEND")
-    voice_profile_name = os.getenv("VOICE_PROFILE")
-
-    if not llm_backend_name or not voice_profile_name:
-        raise ValueError("Both LLM_BACKEND and VOICE_PROFILE environment variables must be set")
+    from config.profile_manager import get_profile_manager
+    
+    pm = get_profile_manager()
+    
+    # Read config directly, no env var dependency
+    llm_backend_name = pm.get_default_llm_backend()
+    voice_profile_name = pm.get_default_voice_profile()
+    
+    logger.info(f"Using LLM backend: {llm_backend_name}")
+    logger.info(f"Using voice profile: {voice_profile_name}")
 
     transport = None
 
