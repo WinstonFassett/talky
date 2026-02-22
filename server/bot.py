@@ -170,6 +170,10 @@ async def run_bot(
                 current_profile_obj = pm.get_voice_profile(current_profile_name)
                 current_provider = current_profile_obj.tts_provider if current_profile_obj else None
                 
+                if not current_profile_obj:
+                    await rtvi.send_error_response(msg, f"Current voice profile not found: {current_profile_name}")
+                    return
+                
                 # Same provider - just change voice
                 if profile.tts_provider == current_provider:
                     current_service.set_voice(profile.tts_voice)
@@ -229,6 +233,13 @@ async def run_bot(
                     service_index = pipeline.processors.index(current_service)
                     pipeline.processors[service_index] = new_service
                     
+                    # Cleanup old service to prevent memory leaks
+                    if hasattr(current_service, 'cleanup'):
+                        try:
+                            await current_service.cleanup()
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to cleanup old TTS service: {cleanup_error}")
+                    
                     # Update state
                     voice_switcher["current_service"] = new_service
                     voice_switcher["current_profile"] = profile_name
@@ -246,6 +257,7 @@ async def run_bot(
             except Exception as e:
                 logger.error(f"Error in setVoiceProfile: {e}")
                 await rtvi.send_error_response(msg, f"Failed to set voice profile: {e}")
+                # Don't change voice_switcher state on error to maintain consistency
                 
         elif msg.type == "getCurrentVoiceProfile":
             try:
