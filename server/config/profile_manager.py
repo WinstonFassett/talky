@@ -174,10 +174,10 @@ class ProfileManager:
         return {n: p.description for n, p in self.talky_profiles.items()}
 
     def get_default_llm_backend(self) -> str:
-        return self.defaults.get("llm_backend", "moltis")
+        return self.defaults.get("llm_backend") or ""
 
     def get_default_voice_profile(self) -> str:
-        return self.defaults.get("voice_profile", "cloud")
+        return self.defaults.get("voice_profile") or ""
 
     def resolve_talky_profile(self, name: str) -> Dict[str, Any]:
         """Resolve a talky profile name into LLM backend + voice profile + configs."""
