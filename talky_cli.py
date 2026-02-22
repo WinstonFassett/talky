@@ -70,26 +70,20 @@ def start_client_dev_server(external_binding=False):
             
         print("📱 Starting client dev server...")
         if external_binding:
-            print("🌐 External binding enabled (0.0.0.0)")
+            print("🌐 External binding enabled (HTTPS for WebRTC)")
         
-        # Set up environment variables for Vite
-        env = os.environ.copy()
-        if external_binding:
-            env["VITE_HOST"] = "0.0.0.0"
-            env["VITE_ALLOWED_HOSTS"] = "true"  # Allow all hosts
-        
-        # Use npm run dev with environment variables
-        npm_args = ["npm", "run", "dev"]
+        # Choose config based on external binding
+        config_file = "vite.config.https.ts" if external_binding else "vite.config.ts"
+        npm_args = ["npm", "run", "dev:https" if external_binding else "dev"]
             
         subprocess.Popen(
             npm_args,
             cwd=str(client_dir),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            env=env,
         )
         
-        host_desc = "externally (0.0.0.0)" if external_binding else "locally (localhost)"
+        host_desc = "externally (HTTPS)" if external_binding else "locally (HTTP)"
         print(f"📱 Client dev server starting {host_desc} on port 5173")
         
         # Wait a bit for the server to start
@@ -284,6 +278,9 @@ def cmd_run(args):
     if host and host != "localhost":
         cmd.extend(["--host", host])
         print(f"🌐 Using host binding: {host}")
+        # Add SSL for external access (HTTPS required for WebRTC)
+        cmd.extend(["--ssl"])
+        print("🔒 HTTPS enabled for external access")
 
     if getattr(args, "voice_profile", None):
         cmd.extend(["--voice-profile", args.voice_profile])
