@@ -165,24 +165,32 @@ class OpenClawLLMService(LLMService):
     def __init__(self, *, gateway_url: str = None, agent_id: str = "main", session_key: str = None, **kwargs):
         super().__init__(**kwargs)
 
-        # Determine gateway URL based on host binding
+        # Determine gateway URL based on config file settings
         default_gateway = "ws://localhost:18789"
-        talky_host = os.getenv("TALKY_HOST")
-        if talky_host and talky_host != "localhost":
-            # Use external hostname when not localhost
-            if talky_host == "0.0.0.0":
-                # For 0.0.0.0 binding, detect actual hostname for WebSocket connections
-                import socket
-                try:
-                    # Try to get the actual hostname that would be used externally
-                    hostname = socket.gethostname()
-                    # Fallback to localhost if hostname resolution fails
+        try:
+            from server.config.profile_manager import get_profile_manager
+            pm = get_profile_manager()
+            network_config = getattr(pm, 'settings', {}).get("network", {})
+            config_host = network_config.get("host", "localhost")
+            
+            if config_host and config_host != "localhost":
+                # Use external hostname when not localhost
+                if config_host == "0.0.0.0":
+                    # For 0.0.0.0 binding, detect actual hostname for WebSocket connections
+                    import socket
+                    try:
+                        # Try to get the actual hostname that would be used externally
+                        hostname = socket.gethostname()
+                        # Fallback to localhost if hostname resolution fails
+                        default_gateway = f"ws://{hostname}:18789"
+                    except Exception:
+                        default_gateway = "ws://localhost:18789"
+                else:
+                    hostname = config_host
                     default_gateway = f"ws://{hostname}:18789"
-                except Exception:
-                    default_gateway = "ws://localhost:18789"
-            else:
-                hostname = talky_host
-                default_gateway = f"ws://{hostname}:18789"
+        except Exception:
+            # Fallback to localhost if config reading fails
+            pass
         
         self.gateway_url = gateway_url or os.getenv("OPENCLAW_GATEWAY_URL", default_gateway)
         self.agent_id = agent_id
