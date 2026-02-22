@@ -25,7 +25,7 @@ const botStartPublicApiKey = import.meta.env.VITE_BOT_START_PUBLIC_API_KEY;
 
 if (!import.meta.env.VITE_BOT_START_URL) {
   console.warn(
-    'VITE_BOT_START_URL not configured, using default: http://localhost:7860/start'
+    `VITE_BOT_START_URL not configured, using default: ${window.location.protocol}//${window.location.hostname}:7860/start`
   );
 }
 
