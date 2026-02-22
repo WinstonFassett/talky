@@ -68,20 +68,42 @@ def create_tts_service(
     return create_tts_service_from_config(provider, **kwargs)
 
 
-def create_services_from_env():
-    """Create STT/TTS services from environment variables.
-
-    Uses same env vars as our main talky:
-    - STT_PROVIDER (default: whisper)
-    - TTS_PROVIDER (default: kokoro)
-    - Voice-specific API keys
-
+def create_services_from_profile():
+    """Create STT/TTS services from voice profile configuration.
+    
+    Uses the talky voice profile system instead of environment variables.
+    Falls back to defaults if no profile is specified.
+    
     Returns:
         Tuple of (stt_service, tts_service)
-
     """
-    stt_provider = os.getenv("STT_PROVIDER", "whisper")
-    tts_provider = os.getenv("TTS_PROVIDER", "kokoro")
+    # Import profile manager to access voice profiles
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "server"))
+    from config.profile_manager import get_profile_manager
+    
+    try:
+        pm = get_profile_manager()
+        
+        # Get default voice profile from config
+        default_profile_name = pm.get_default_voice_profile()
+        if default_profile_name:
+            profile = pm.get_voice_profile(default_profile_name)
+            if profile:
+                # Use the voice profile's configured providers
+                stt_provider = profile.stt_provider
+                tts_provider = profile.tts_provider
+            else:
+                # Fallback to defaults if profile not found
+                stt_provider = "whisper"
+                tts_provider = "kokoro"
+        else:
+            # Fallback to defaults if no default profile
+            stt_provider = "whisper"
+            tts_provider = "kokoro"
+    except Exception:
+        # If profile manager fails, fallback to defaults
+        stt_provider = "whisper"
+        tts_provider = "kokoro"
 
     stt = create_stt_service(stt_provider)
     tts = create_tts_service(tts_provider)
