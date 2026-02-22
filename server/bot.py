@@ -12,7 +12,6 @@ Pipeline: Speech-to-Text -> LLM -> Text-to-Speech
 import os
 import sys
 import asyncio
-import re
 
 # Add parent directory to path for shared modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,13 +32,11 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.transports.base_transport import BaseTransport
 
 from shared.service_factory import create_stt_service_from_config, create_tts_service_from_config
+from server.features.voice_switcher import VoiceProfileSwitcher
 from pipecat.runner.types import RunnerArguments, SmallWebRTCRunnerArguments
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
-
-# Async lock for voice profile switching to prevent race conditions
-voice_switch_lock = asyncio.Lock()
 
 async def run_bot(
     transport: BaseTransport,
@@ -124,11 +121,8 @@ async def run_bot(
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
     )
 
-    # Store current voice profile for switching - make it accessible in closures
-    voice_switcher = {
-        "current_profile": voice_profile_name,
-        "tts_service": tts,
-    }
+    # Create voice profile switcher
+    voice_switcher = VoiceProfileSwitcher(tts, voice_profile_name, pm)
 
     @task.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
@@ -136,116 +130,9 @@ async def run_bot(
 
     @task.rtvi.event_handler("on_client_message")
     async def on_client_message(rtvi, msg):
-        """Handle custom client messages for voice profile control."""
-        logger.debug(f"Received client message: {msg.type}")
-        
-        if msg.type == "getVoiceProfiles":
-            try:
-                profiles = pm.list_voice_profiles()
-                await rtvi.send_server_response(msg, {
-                    "type": "voiceProfiles",
-                    "data": [
-                        {"name": name, "description": desc}
-                        for name, desc in profiles.items()
-                    ],
-                    "status": "success"
-                })
-                logger.info(f"Sent {len(profiles)} voice profiles to client")
-            except Exception as e:
-                logger.error(f"Error in getVoiceProfiles: {e}")
-                await rtvi.send_error_response(msg, f"Failed to get voice profiles: {e}")
-                
-        elif msg.type == "getCurrentVoiceProfile":
-            try:
-                current_profile_name = voice_switcher["current_profile"]
-                profile = pm.get_voice_profile(current_profile_name)
-                if not profile:
-                    await rtvi.send_error_response(msg, f"Voice profile not found: {current_profile_name}")
-                    return
-
-                await rtvi.send_server_response(msg, {
-                    "type": "currentVoiceProfile",
-                    "data": {
-                        "name": profile.name,
-                        "description": profile.description
-                    },
-                    "status": "success"
-                })
-                logger.debug(f"Current voice profile: {current_profile_name}")
-            except Exception as e:
-                logger.error(f"Error in getCurrentVoiceProfile: {e}")
-                await rtvi.send_error_response(msg, f"Failed to get current voice profile: {e}")
-                
-        elif msg.type == "setVoiceProfile":
-            async with voice_switch_lock:
-                try:
-                    profile_name = msg.data.get("profileName")
-                    
-                    # Input validation
-                    if not profile_name or not isinstance(profile_name, str):
-                        await rtvi.send_error_response(msg, "Invalid profile name: must be a non-empty string")
-                        return
-                    
-                    # Validate profile name format (alphanumeric, hyphens, underscores only)
-                    if not re.match(r'^[a-zA-Z0-9_-]+$', profile_name):
-                        await rtvi.send_error_response(msg, "Invalid profile name format")
-                        return
-                    
-                    # Length limit to prevent abuse
-                    if len(profile_name) > 50:
-                        await rtvi.send_error_response(msg, "Profile name too long")
-                        return
-                    
-                    new_profile = pm.get_voice_profile(profile_name)
-                    if not new_profile:
-                        await rtvi.send_error_response(msg, f"Voice profile not found: {profile_name}")
-                        return
-
-                    current_profile_name = voice_switcher["current_profile"]
-                    current_profile = pm.get_voice_profile(current_profile_name)
-                    if not current_profile:
-                        await rtvi.send_error_response(msg, f"Current voice profile not found: {current_profile_name}")
-                        return
-
-                    # Only allow same-provider switching for safety
-                    if new_profile.tts_provider != current_profile.tts_provider:
-                        await rtvi.send_error_response(
-                            msg, 
-                            f"Cannot switch from {current_profile.tts_provider} to {new_profile.tts_provider}. "
-                            f"Only same-provider voice changes are supported."
-                        )
-                        return
-
-                    # Try to change voice using set_voice method
-                    tts_service = voice_switcher["tts_service"]
-                    if hasattr(tts_service, 'set_voice'):
-                        try:
-                            tts_service.set_voice(new_profile.tts_voice)
-                            # Update state only after successful voice change
-                            voice_switcher["current_profile"] = profile_name
-                            logger.info(f"Changed voice to: {new_profile.tts_voice}")
-                            
-                            await rtvi.send_server_response(msg, {
-                                "type": "voiceProfileSet",
-                                "data": {
-                                    "name": new_profile.name,
-                                    "description": new_profile.description
-                                },
-                                "status": "success"
-                            })
-                        except Exception as e:
-                            logger.error(f"Failed to set voice: {e}")
-                            await rtvi.send_error_response(msg, f"Failed to change voice: {e}")
-                    else:
-                        await rtvi.send_error_response(
-                            msg, 
-                            f"Current TTS service doesn't support voice changes. "
-                            f"Service: {type(tts_service).__name__}"
-                        )
-                        
-                except Exception as e:
-                    logger.error(f"Error in setVoiceProfile: {e}")
-                    await rtvi.send_error_response(msg, f"Failed to set voice profile: {e}")
+        """Handle custom client messages - delegate to voice switcher for voice profile control."""
+        if msg.type in ["getVoiceProfiles", "getCurrentVoiceProfile", "setVoiceProfile"]:
+            await voice_switcher.handle_message(rtvi, msg)
         else:
             await rtvi.send_error_response(msg, f"Unknown message type: {msg.type}")
 
