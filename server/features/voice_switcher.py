@@ -5,6 +5,7 @@ import re
 from typing import Dict, Optional
 
 from loguru import logger
+from shared.service_factory import create_tts_service_from_config
 
 
 class VoiceProfileSwitcher:
@@ -98,22 +99,43 @@ class VoiceProfileSwitcher:
                     await rtvi.send_error_response(msg, f"Current voice profile not found: {self.current_profile}")
                     return
 
-                # Only allow same-provider switching for safety
-                if new_profile.tts_provider != current_profile.tts_provider:
-                    await rtvi.send_error_response(
-                        msg, 
-                        f"Cannot switch from {current_profile.tts_provider} to {new_profile.tts_provider}. "
-                        f"Only same-provider voice changes are supported."
-                    )
-                    return
-
-                # Try to change voice using set_voice method
-                if hasattr(self.tts_service, 'set_voice'):
+                # Handle both same-provider and cross-provider switching
+                if new_profile.tts_provider == current_profile.tts_provider:
+                    # Same-provider: use set_voice method
+                    if hasattr(self.tts_service, 'set_voice'):
+                        try:
+                            self.tts_service.set_voice(new_profile.tts_voice)
+                            self.current_profile = profile_name
+                            logger.info(f"Changed voice within {new_profile.tts_provider}: {new_profile.tts_voice}")
+                            
+                            await rtvi.send_server_response(msg, {
+                                "type": "voiceProfileSet",
+                                "data": {
+                                    "name": new_profile.name,
+                                    "description": new_profile.description
+                                },
+                                "status": "success"
+                            })
+                        except Exception as e:
+                            logger.error(f"Failed to set voice: {e}")
+                            await rtvi.send_error_response(msg, f"Failed to change voice: {e}")
+                    else:
+                        await rtvi.send_error_response(
+                            msg, 
+                            f"Current TTS service doesn't support voice changes. "
+                            f"Service: {type(self.tts_service).__name__}"
+                        )
+                else:
+                    # Cross-provider: create new TTS service
                     try:
-                        self.tts_service.set_voice(new_profile.tts_voice)
-                        # Update state only after successful voice change
+                        new_tts_service = create_tts_service_from_config(
+                            new_profile.tts_provider, 
+                            voice_id=new_profile.tts_voice
+                        )
+                        # Replace the current TTS service
+                        self.tts_service = new_tts_service
                         self.current_profile = profile_name
-                        logger.info(f"Changed voice to: {new_profile.tts_voice}")
+                        logger.info(f"Switched TTS provider from {current_profile.tts_provider} to {new_profile.tts_provider}: {new_profile.tts_voice}")
                         
                         await rtvi.send_server_response(msg, {
                             "type": "voiceProfileSet",
@@ -124,14 +146,8 @@ class VoiceProfileSwitcher:
                             "status": "success"
                         })
                     except Exception as e:
-                        logger.error(f"Failed to set voice: {e}")
-                        await rtvi.send_error_response(msg, f"Failed to change voice: {e}")
-                else:
-                    await rtvi.send_error_response(
-                        msg, 
-                        f"Current TTS service doesn't support voice changes. "
-                        f"Service: {type(self.tts_service).__name__}"
-                    )
+                        logger.error(f"Failed to create new TTS service: {e}")
+                        await rtvi.send_error_response(msg, f"Failed to switch TTS provider: {e}")
                     
             except Exception as e:
                 logger.error(f"Error in setVoiceProfile: {e}")
@@ -152,17 +168,26 @@ class VoiceProfileSwitcher:
             if not current_profile:
                 return False
             
-            # Only allow same-provider switching
-            if new_profile.tts_provider != current_profile.tts_provider:
+            # Handle both same-provider and cross-provider switching
+            if new_profile.tts_provider == current_profile.tts_provider:
+                # Same-provider: use set_voice method
+                if hasattr(self.tts_service, 'set_voice'):
+                    self.tts_service.set_voice(new_profile.tts_voice)
+                    self.current_profile = profile_name
+                    logger.info(f"Changed voice within {new_profile.tts_provider}: {new_profile.tts_voice}")
+                    return True
                 return False
-            
-            if hasattr(self.tts_service, 'set_voice'):
-                self.tts_service.set_voice(new_profile.tts_voice)
+            else:
+                # Cross-provider: create new TTS service
+                new_tts_service = create_tts_service_from_config(
+                    new_profile.tts_provider, 
+                    voice_id=new_profile.tts_voice
+                )
+                # Replace the current TTS service
+                self.tts_service = new_tts_service
                 self.current_profile = profile_name
-                logger.info(f"Changed voice to: {new_profile.tts_voice}")
+                logger.info(f"Switched TTS provider from {current_profile.tts_provider} to {new_profile.tts_provider}: {new_profile.tts_voice}")
                 return True
-            
-            return False
         except Exception as e:
             logger.error(f"Failed to switch profile: {e}")
             return False
