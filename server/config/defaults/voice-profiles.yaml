@@ -5,17 +5,12 @@ voice_profiles:
   
   # Default to local whisper and kokoro Heart
   default:
-    description: "Local Kokoro Heart"
+    description: "Local Kokoro Heart (default)"
     tts_provider: kokoro
     tts_voice: af_heart
     stt_provider: whisper_local
 
   # Local Kokoro voices
-  kokoro-heart:
-    description: "Local Kokoro Heart"
-    tts_provider: kokoro
-    tts_voice: af_heart
-    
   kokoro-sky:
     description: "Local Kokoro US Sky"
     tts_provider: kokoro
@@ -27,10 +22,10 @@ voice_profiles:
     stt_provider: whisper_local
     stt_model: mlx-community/whisper-large-v3-turbo
     
-  assemblyai:
-    description: "AssemblyAI STT"
-    stt_provider: assemblyai
-    stt_model: best
+  # assemblyai:
+  #   description: "AssemblyAI STT"
+  #   stt_provider: assemblyai
+  #   stt_model: best
 
   # Google TTS Voice Profiles
   # default:

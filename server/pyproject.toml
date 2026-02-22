@@ -9,11 +9,16 @@ dependencies = [
     "loguru",
     "mlx-whisper>=0.4.3",
 ]
+# Note: opencv-python excluded to avoid AVFoundation symbol conflicts with 'av' library
+# Add opencv-python manually if you need computer vision features
 
 [dependency-groups]
 dev = [
     "pyright>=1.1.404,<2",
     "ruff>=0.12.11,<1",
+]
+vision = [
+    "opencv-python>=4.0.0",
 ]
 
 [tool.ruff]

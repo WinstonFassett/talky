@@ -1,0 +1,18 @@
+# Core Talky Profiles - authoritative combinations for all users
+# Users can disable these in their personal ~/.talky/talky-profiles.yaml
+talky_profiles:
+
+  # OpenClaw
+  openclaw:
+    description: "OpenClaw"
+
+  # Moltis
+  moltis:
+    description: "Moltis"
+    llm_backend: "moltis"
+
+  # Pi Coding Agent
+  pi:
+    description: "Pi Coding Agent"
+    llm_backend: "pi"
+    

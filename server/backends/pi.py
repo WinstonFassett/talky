@@ -20,6 +20,8 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
+from server.config.voice_prompts import format_voice_message
+
 
 class PiLLMService(LLMService):
     """Pi LLM service - RPC subprocess-based implementation for voice"""
@@ -158,6 +160,9 @@ class PiLLMService(LLMService):
                 await self.push_frame(LLMFullResponseEndFrame())
                 return
 
+            # Format message with voice conversation guidance
+            full_message = format_voice_message(last_user_message)
+
             logger.info(f"🗣️  User: {last_user_message[:100]}...")
 
             # Clear response queue
@@ -168,7 +173,7 @@ class PiLLMService(LLMService):
                     break
 
             # Send prompt to pi
-            prompt = {"type": "prompt", "message": last_user_message}
+            prompt = {"type": "prompt", "message": full_message}
 
             prompt_json = json.dumps(prompt) + "\n"
             self._pi_process.stdin.write(prompt_json.encode())

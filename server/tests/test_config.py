@@ -190,6 +190,40 @@ def test_service_factory_handles_credentials(tmp_path, monkeypatch):
     assert creds["credentials_path"] == "/tmp/test.json"
 
 
+def test_profile_manager_loads_defaults_with_user_config(tmp_path):
+    """Test that defaults are loaded even when user config exists (regression test for missing profiles)."""
+    from server.config.profile_manager import ProfileManager
+    import yaml
+    
+    # Create a user config that only has some profiles (simulating existing user)
+    user_profiles = {
+        "talky_profiles": {
+            "user_profile": {
+                "description": "User Profile",
+                "llm_backend": "test-backend", 
+                "voice_profile": "test-voice"
+            }
+        }
+    }
+    
+    # Create other required config files first
+    _write_all_yamls(tmp_path)
+    
+    # Override the talky-profiles.yaml with our user config (no defaults)
+    (tmp_path / "talky-profiles.yaml").write_text(yaml.dump(user_profiles))
+    
+    pm = ProfileManager(config_dir=tmp_path)
+    
+    # Should have both the user profile AND the core+defaults profiles
+    profiles = list(pm.talky_profiles.keys())
+    assert "user_profile" in profiles, "User profile should be loaded"
+    
+    # Should have core+defaults profiles like "local" (from defaults)
+    core_defaults_profiles = ["local", "google", "developer", "pi-coding"]
+    found_core_defaults = [p for p in core_defaults_profiles if p in profiles]
+    assert len(found_core_defaults) > 0, f"Should load core/defaults profiles, found: {profiles}"
+
+
 def test_service_factory_raises_on_missing_provider(tmp_path):
     """Unknown provider → ValueError."""
     import shared.service_factory as sf

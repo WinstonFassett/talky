@@ -1,44 +1,5 @@
-# Voice Backends — provider definitions for STT and TTS
-# service_class is a dotted import path to a Pipecat service class
-voice_backends:
-  tts:
-    kokoro:
-      description: "Local TTS via Kokoro (no API key)"
-      requires_credentials: false
-      service_class: "pipecat.services.kokoro.tts.KokoroTTSService"
-      default_voice: "af_heart"
+# Voice Backends Template - Minimal for new users
+# New users get this copied to ~/.talky/ then extend with their own configs
+# This extends the core backends from server/config/core/voice-backends.yaml
 
-    google:
-      description: "Google Cloud TTS"
-      requires_credentials: true
-      service_class: "pipecat.services.google.tts.GoogleTTSService"
-      credential_type: "google"
-      default_voice: "en-US-Chirp3-HD-Puck"
-
-  stt:
-    whisper_local:
-      description: "Local Whisper via MLX (no API key, macOS)"
-      requires_credentials: false
-      service_class: pipecat.services.whisper.stt.WhisperSTTServiceMLX
-      default_model: "mlx-community/whisper-large-v3-turbo"
-
-    deepgram:
-      description: "Deepgram STT"
-      requires_credentials: true
-      service_class: "pipecat.services.deepgram.stt.DeepgramSTTService"
-      credential_type: "deepgram"
-      default_model: "nova-2"
-    
-    assemblyai:
-      description: "AssemblyAI STT"
-      requires_credentials: true
-      service_class: "pipecat.services.assemblyai.stt.AssemblyAISTTService"
-      credential_type: "assemblyai"
-      default_model: "best"
-    
-    google:
-      description: "Google Cloud Speech-to-Text"
-      requires_credentials: true
-      service_class: "pipecat.services.google.stt.GoogleSTTService"
-      credential_type: "google"
-      default_model: "latest_short"
+voice_backends: {}

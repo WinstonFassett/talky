@@ -205,6 +205,16 @@ def cmd_run(args):
     """Handle the 'run' subcommand (bot)."""
     # server_dir is already defined globally from script location
     
+    # CRITICAL: Setup logging early to catch dependency installer logs
+    log_level = getattr(args, "log_level", None)
+    if log_level:
+        os.environ["TALKY_LOG_LEVEL"] = log_level
+    
+    # Import and setup logging before dependency check
+    sys.path.insert(0, str(server_dir))
+    from logging_config import setup_logging
+    setup_logging(log_level)
+    
     # Start client dev server FIRST if not running
     start_client_dev_server()
     
@@ -242,6 +252,8 @@ def cmd_run(args):
 
     if getattr(args, "voice_profile", None):
         cmd.extend(["--voice-profile", args.voice_profile])
+    if getattr(args, "config_dir", None):
+        cmd.extend(["--config-dir", args.config_dir])
     if getattr(args, "debug_client", False):
         cmd.append("--debug-client")
     if getattr(args, "no_open", False):
@@ -251,6 +263,9 @@ def cmd_run(args):
 
     if getattr(args, "log_level", None):
         cmd.extend(["--log-level", args.log_level])
+
+    if getattr(args, "session", None):
+        cmd.extend(["--session", args.session])
 
     result = subprocess.run(cmd)
     sys.exit(result.returncode)
@@ -405,7 +420,7 @@ def main():
     # === say subcommand ===
     say_parser = subparsers.add_parser("say", help="Text-to-speech")
     say_parser.add_argument("text", nargs="?", help="Text to speak")
-    say_parser.add_argument("-p", "--voice-profile", help="Voice profile")
+    say_parser.add_argument("-p", "-v", "--voice-profile", help="Voice profile")
     say_parser.add_argument("--provider", help="TTS provider")
     say_parser.add_argument("--voice", help="Voice ID")
     say_parser.add_argument("-o", "--output", help="Save to file")
@@ -430,11 +445,13 @@ def main():
     parser.add_argument("profile", nargs="?", help="Talky profile name")
     parser.add_argument("--profile", "-p", dest="profile_flag", help="Talky profile")
     parser.add_argument("--voice-profile", "-v", help="Voice profile override")
+    parser.add_argument("--config-dir", "-c", help="Config directory (default: ~/.talky)")
     parser.add_argument("--list-profiles", "-l", action="store_true", help="List available profiles")
     parser.add_argument("--debug-client", "-d", action="store_true", help="Use Pipecat debug client instead of custom React client")
     parser.add_argument("--no-open", action="store_true", help="Don't open browser")
     parser.add_argument("--local-speech", action="store_true", help="Use local speech")
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
+    parser.add_argument("--session", "-s", help="Override session key for LLM backend")
 
     args = parser.parse_args()
 
@@ -443,8 +460,24 @@ def main():
     else:
         # No subcommand, use default profile or show help
         if not args.profile and not args.profile_flag:
-            # Use openclaw as default (now uses defaults from settings)
-            args.profile = "openclaw"
+            # Use default from settings.yaml
+            try:
+                from server.config.profile_manager import get_profile_manager
+                pm = get_profile_manager()
+                default_backend = pm.defaults.get("llm_backend")
+                if default_backend and default_backend in pm.list_talky_profiles():
+                    args.profile = default_backend
+                else:
+                    # Fallback to first available profile
+                    profiles = pm.list_talky_profiles()
+                    if profiles:
+                        args.profile = profiles[0]
+                    else:
+                        print("❌ Error: No talky profiles configured.")
+                        return
+            except Exception as e:
+                print(f"❌ Error loading profiles: {e}")
+                return
         cmd_run(args)
 
 

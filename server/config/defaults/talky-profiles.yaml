@@ -1,5 +1,7 @@
-# Talky Profiles Configuration - extends defaults from settings.yaml
-# You may choose to specify only what differs from defaults
+# Talky Profiles Template - Empty for new users
+# New users get this copied to ~/.talky/ then extend with their own configs
+# This extends the core profiles from server/config/core/talky-profiles.yaml
+
 talky_profiles:
 
   # OpenClaw
@@ -15,4 +17,3 @@ talky_profiles:
   pi:
     description: "Pi Coding Agent"
     llm_backend: "pi"
-    

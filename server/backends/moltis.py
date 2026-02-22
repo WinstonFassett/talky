@@ -23,6 +23,8 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
+from server.config.voice_prompts import format_voice_message
+
 
 class MoltisLLMService(LLMService):
     """Moltis LLM service - simple WebSocket-based implementation"""
@@ -246,6 +248,9 @@ class MoltisLLMService(LLMService):
                 await self.push_frame(LLMFullResponseEndFrame())
                 return
 
+            # Format message with voice conversation guidance
+            full_message = format_voice_message(last_user_message)
+            
             logger.info(f"🗣️  User: {last_user_message[:100]}...")
 
             # Clear queue
@@ -264,7 +269,7 @@ class MoltisLLMService(LLMService):
                         "id": str(request_id),
                         "method": "chat.send",
                         "params": {
-                            "text": last_user_message,
+                            "text": full_message,
                             "idempotencyKey": f"pipecat-{request_id}",
                         },
                     }

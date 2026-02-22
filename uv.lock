@@ -5093,6 +5093,9 @@ dev = [
     { name = "pyright" },
     { name = "ruff" },
 ]
+vision = [
+    { name = "opencv-python" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -5107,6 +5110,7 @@ dev = [
     { name = "pyright", specifier = ">=1.1.404,<2" },
     { name = "ruff", specifier = ">=0.12.11,<1" },
 ]
+vision = [{ name = "opencv-python", specifier = ">=4.0.0" }]
 
 [[package]]
 name = "talky-workspace"

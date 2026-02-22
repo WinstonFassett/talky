@@ -25,6 +25,8 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
+from server.config.voice_prompts import format_voice_message
+
 
 def base64url_encode(data: bytes) -> str:
     """Base64url encode without padding"""
@@ -132,11 +134,14 @@ class OpenClawLLMService(LLMService):
     SCOPES = ["operator.admin", "operator.approvals", "operator.pairing"]
     SESSION_KEY = "voice-session"
 
-    def __init__(self, *, gateway_url: str = None, agent_id: str = "main", **kwargs):
+    def __init__(self, *, gateway_url: str = None, agent_id: str = "main", session_key: str = None, **kwargs):
         super().__init__(**kwargs)
 
         self.gateway_url = gateway_url or os.getenv("OPENCLAW_GATEWAY_URL", "ws://localhost:18789")
         self.agent_id = agent_id
+        
+        # Use provided session key or fall back to default
+        self.session_key = session_key or self.SESSION_KEY
 
         # OpenClaw uses WebSocket connections with auth tokens
         self.tokens = None
@@ -389,6 +394,9 @@ class OpenClawLLMService(LLMService):
                 await self.push_frame(LLMFullResponseEndFrame())
                 return
 
+            # Format message with voice conversation guidance
+            full_message = format_voice_message(last_user_message)
+
             logger.info(f"🗣️  User: {last_user_message[:100]}...")
 
             # Clear queue
@@ -405,8 +413,8 @@ class OpenClawLLMService(LLMService):
                 "id": str(request_id),
                 "method": "chat.send",
                 "params": {
-                    "sessionKey": self.SESSION_KEY,
-                    "message": last_user_message,
+                    "sessionKey": self.session_key,
+                    "message": full_message,
                     "idempotencyKey": f"pipecat-{request_id}",
                 },
             }

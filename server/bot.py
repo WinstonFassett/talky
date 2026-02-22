@@ -38,24 +38,37 @@ from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
+def run_bot_main(transport, llm_profile_name: str = None, voice_profile_name: str = None, session_key: str = None):
+    """Run bot with given transport and profiles - for programmatic use"""
+    # Import and run the actual bot
+    # Call bot with the transport
+    import asyncio
+
+    import bot
+
+    return asyncio.run(bot.run_bot(transport, llm_profile_name, voice_profile_name, session_key))
+
 async def run_bot(
     transport: BaseTransport,
     llm_backend_name: str = None,
     voice_profile_name: str = None,
+    session_key: str = None,
 ):
     """Main bot logic using clean backend/voice separation."""
 
-    # Setup logging to override Pipecat's defaults
-    from logging_config import setup_logging
-    setup_logging()
-
     from server.config.profile_manager import get_profile_manager
+    import os
 
-    pm = get_profile_manager()
+    # Use CONFIG_DIR from environment if set
+    config_dir = os.environ.get("CONFIG_DIR")
+    pm = get_profile_manager(config_dir=config_dir)
 
     # Use provided parameters or config defaults (no env vars)
     llm_backend_name = llm_backend_name or pm.get_default_llm_backend()
     voice_profile_name = voice_profile_name or pm.get_default_voice_profile()
+
+    # Get session override from CLI parameter first
+    session_override = session_key or os.environ.get("SESSION_KEY")
 
     llm_backend = pm.get_llm_backend(llm_backend_name)
     if not llm_backend:
@@ -67,6 +80,8 @@ async def run_bot(
 
     logger.info(f"Using LLM backend: {llm_backend.name}")
     logger.info(f"Using voice profile: {voice_profile.name}")
+    if session_override:
+        logger.info(f"Using session override: {session_override}")
 
     # Create STT service
     stt = create_stt_service_from_config(voice_profile.stt_provider, model=voice_profile.stt_model)
@@ -87,15 +102,18 @@ async def run_bot(
 
     llm_service_module = importlib.import_module(module_path)
     llm_service_class = getattr(llm_service_module, class_name)
-    llm = llm_service_class(**llm_backend.config)
+    
+    # Prepare backend config with session override (CLI > talky profile > backend config)
+    backend_config = llm_backend.config.copy()
+    
+    # Apply session override if provided
+    if session_override:
+        backend_config["session_key"] = session_override
+        logger.info(f"Applied CLI session override: {session_override}")
+    
+    llm = llm_service_class(**backend_config)
 
-    # Add directory context to system message
-    current_dir = os.getcwd()
-    system_message_with_context = (
-        f"{llm_backend.system_message}\n\nContext: You are running in the directory: {current_dir}"
-    )
-
-    messages = [{"role": "system", "content": system_message_with_context}]
+    messages = []
 
     context = LLMContext(messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
@@ -161,12 +179,15 @@ async def bot(runner_args: RunnerArguments):
     
     pm = get_profile_manager()
     
-    # Read config directly, no env var dependency
-    llm_backend_name = pm.get_default_llm_backend()
-    voice_profile_name = pm.get_default_voice_profile()
+    # Read config from environment variables set by main.py
+    llm_backend_name = os.environ.get("LLM_BACKEND") or pm.get_default_llm_backend()
+    voice_profile_name = os.environ.get("VOICE_PROFILE") or pm.get_default_voice_profile()
+    session_key = os.environ.get("SESSION_KEY")  # Get session from env var
     
     logger.info(f"Using LLM backend: {llm_backend_name}")
     logger.info(f"Using voice profile: {voice_profile_name}")
+    if session_key:
+        logger.info(f"Using session from environment: {session_key}")
 
     transport = None
 
@@ -184,7 +205,7 @@ async def bot(runner_args: RunnerArguments):
             logger.error(f"Unsupported runner arguments type: {type(runner_args)}")
             return
 
-    await run_bot(transport, llm_backend_name, voice_profile_name)
+    await run_bot(transport, llm_backend_name, voice_profile_name, session_key)
 
 
 if __name__ == "__main__":

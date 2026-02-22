@@ -1,0 +1,23 @@
+# LLM Backends — each needs service_class (dotted import path), config
+llm_backends:
+  openclaw:
+    description: "OpenClaw - OpenAI-compatible LLM"
+    service_class: "server.backends.openclaw.OpenClawLLMService"
+    config:
+      model: "gpt-4o"
+      api_key: ""  # Will be loaded from credentials
+      session_key: "voice-session"  # Default session key for OpenClaw
+  moltis:
+    description: "Moltis - Anthropic Claude"
+    service_class: "server.backends.moltis.MoltisLLMService"
+    config:
+      model: "claude-3-5-sonnet-20241022"
+      api_key: ""  # Will be loaded from credentials
+      session_key: "agent:main:voice"  # Default session key
+  pi:
+    description: "Pi - Coding Agent"
+    service_class: "server.backends.pi.PiLLMService"
+    config:
+      model: "claude-3-5-sonnet-20241022"
+      api_key: ""  # Will be loaded from credentials
+      session_key: ""  # Optional session key for Pi

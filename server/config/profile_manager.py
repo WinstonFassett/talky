@@ -25,7 +25,6 @@ class LLMBackend:
     description: str
     service_class: str
     config: Dict[str, Any]
-    system_message: str
 
 
 @dataclass
@@ -46,7 +45,8 @@ class TalkyProfile:
     description: str
     llm_backend: str
     voice_profile: str
-    system_message: Optional[str] = None
+    session_key: Optional[str] = None  # Override session for LLM backend
+    system_message: Optional[str] = None  # Optional system message
 
 
 class ProfileManager:
@@ -104,19 +104,139 @@ class ProfileManager:
             return yaml.safe_load(f) or {}
 
     def _load_llm_backends(self):
-        data = self._read_yaml("llm-backends.yaml")
-        for name, entry in data.get("llm_backends", {}).items():
-            self.llm_backends[name] = LLMBackend(
-                name=name,
-                description=entry.get("description", ""),
-                service_class=entry.get("service_class", ""),
-                config=entry.get("config", {}),
-                system_message=entry.get("system_message", ""),
-            )
+        """Load LLM backends by merging core + defaults + user extensions."""
+        # Start with core backends from core/ folder
+        core_path = Path(__file__).parent / "core" / "llm-backends.yaml"
+        core_backends = {}
+        if core_path.exists():
+            with open(core_path) as f:
+                core_data = yaml.safe_load(f) or {}
+            core_backends = core_data.get("llm_backends", {})
+        
+        # Extend with defaults (if any) - for new user templates
+        defaults_path = BUNDLED_DEFAULTS / "llm-backends.yaml"
+        if defaults_path.exists():
+            with open(defaults_path) as f:
+                defaults_data = yaml.safe_load(f) or {}
+            defaults_backends = defaults_data.get("llm_backends", {})
+            
+            # Merge defaults into core (defaults extend core)
+            for name, config in defaults_backends.items():
+                if name not in core_backends:
+                    core_backends[name] = config
+        
+        # Load user extensions/overrides from YAML
+        try:
+            data = self._read_yaml("llm-backends.yaml")
+            user_backends = data.get("llm_backends", {})
+            
+            if user_backends:  # Check if user_backends is not empty
+                # Merge user backends (deep merge to allow partial overrides)
+                for name, user_config in user_backends.items():
+                    if name in core_backends:
+                        # Override existing core backend
+                        self.llm_backends[name] = LLMBackend(
+                            name=name,
+                            description=user_config.get("description", core_backends[name]["description"]),
+                            service_class=user_config.get("service_class", core_backends[name]["service_class"]),
+                            config={
+                                **core_backends[name]["config"],
+                                **user_config.get("config", {})
+                            },
+                        )
+                    else:
+                        # Add new user-defined backend
+                        self.llm_backends[name] = LLMBackend(
+                            name=name,
+                            description=user_config.get("description", ""),
+                            service_class=user_config.get("service_class", ""),
+                            config=user_config.get("config", {}),
+                        )
+            else:
+                # No user extensions - use core (+ defaults) backends
+                for name, config in core_backends.items():
+                    self.llm_backends[name] = LLMBackend(
+                        name=name,
+                        description=config["description"],
+                        service_class=config["service_class"],
+                        config=config["config"],
+                    )
+                        
+        except FileNotFoundError:
+            # No user extensions file - use core (+ defaults) backends
+            for name, config in core_backends.items():
+                self.llm_backends[name] = LLMBackend(
+                    name=name,
+                    description=config["description"],
+                    service_class=config["service_class"],
+                    config=config["config"],
+                )
+        except Exception as e:
+            logger.warning(f"Error loading user LLM backends: {e}. Using core backends only.")
+            # Fallback to core backends
+            for name, config in core_backends.items():
+                self.llm_backends[name] = LLMBackend(
+                    name=name,
+                    description=config["description"],
+                    service_class=config["service_class"],
+                    config=config["config"],
+                )
 
     def _load_voice_backends(self):
-        data = self._read_yaml("voice-backends.yaml")
-        self.voice_backends = data.get("voice_backends", {})
+        """Load voice backends by merging core + defaults + user extensions."""
+        # Start with core backends from core/ folder
+        core_path = Path(__file__).parent / "core" / "voice-backends.yaml"
+        if core_path.exists():
+            with open(core_path) as f:
+                core_data = yaml.safe_load(f) or {}
+            self.voice_backends = core_data.get("voice_backends", {})
+        else:
+            self.voice_backends = {}
+        
+        # Extend with defaults (if any) - for new user templates
+        defaults_path = BUNDLED_DEFAULTS / "voice-backends.yaml"
+        if defaults_path.exists():
+            with open(defaults_path) as f:
+                defaults_data = yaml.safe_load(f) or {}
+            defaults_backends = defaults_data.get("voice_backends", {})
+            
+            # Merge defaults into core (defaults extend core)
+            for backend_type, providers in defaults_backends.items():
+                if backend_type not in self.voice_backends:
+                    self.voice_backends[backend_type] = {}
+                
+                for provider_name, config in providers.items():
+                    if provider_name not in self.voice_backends[backend_type]:
+                        self.voice_backends[backend_type][provider_name] = config
+        
+        # Load user extensions/overrides from YAML
+        try:
+            data = self._read_yaml("voice-backends.yaml")
+            user_backends = data.get("voice_backends", {})
+            
+            if user_backends:  # Check if user_backends is not empty
+                # Merge user backends (deep merge to allow partial overrides)
+                for backend_type, providers in user_backends.items():
+                    if backend_type not in self.voice_backends:
+                        self.voice_backends[backend_type] = {}
+                    
+                    if providers:  # Check if providers is not empty
+                        for provider_name, config in providers.items():
+                            if provider_name in self.voice_backends[backend_type]:
+                                # Override existing core backend
+                                self.voice_backends[backend_type][provider_name] = {
+                                    **self.voice_backends[backend_type][provider_name],
+                                    **config  # User config takes precedence
+                                }
+                            else:
+                                # Add new user-defined backend
+                                self.voice_backends[backend_type][provider_name] = config
+                        
+        except FileNotFoundError:
+            # No user extensions file - use core (+ defaults) backends
+            pass
+        except Exception as e:
+            logger.warning(f"Error loading user voice backends: {e}. Using core backends only.")
 
     def _load_voice_profiles(self):
         data = self._read_yaml("voice-profiles.yaml")
@@ -143,16 +263,104 @@ class ProfileManager:
             )
 
     def _load_talky_profiles(self):
-        data = self._read_yaml("talky-profiles.yaml")
-        for name, entry in data.get("talky_profiles", {}).items():
-            vp = entry.get("voice_profile") or self.defaults.get("voice_profile") or ""
-            self.talky_profiles[name] = TalkyProfile(
-                name=name,
-                description=entry.get("description", ""),
-                llm_backend=entry.get("llm_backend") or self.defaults.get("llm_backend") or "",
-                voice_profile=vp,
-                system_message=entry.get("system_message"),
-            )
+        """Load talky profiles by merging core + defaults + user extensions."""
+        # Start with core profiles from core/ folder
+        core_path = Path(__file__).parent / "core" / "talky-profiles.yaml"
+        core_profiles = {}
+        if core_path.exists():
+            with open(core_path) as f:
+                core_data = yaml.safe_load(f) or {}
+            core_profiles = core_data.get("talky_profiles", {})
+        
+        # Extend with defaults (if any) - for new user templates
+        defaults_path = BUNDLED_DEFAULTS / "talky-profiles.yaml"
+        if defaults_path.exists():
+            with open(defaults_path) as f:
+                defaults_data = yaml.safe_load(f) or {}
+            defaults_profiles = defaults_data.get("talky_profiles", {})
+            
+            # Merge defaults into core (defaults extend core)
+            for name, config in defaults_profiles.items():
+                if name not in core_profiles:
+                    core_profiles[name] = config
+        
+        # Load user extensions/overrides from YAML
+        try:
+            data = self._read_yaml("talky-profiles.yaml")
+            user_profiles = data.get("talky_profiles", {})
+            
+            # First, load all core+defaults profiles
+            for name, config in core_profiles.items():
+                enabled = config.get("enabled", True)
+                if enabled:
+                    self.talky_profiles[name] = TalkyProfile(
+                        name=name,
+                        description=config.get("description", ""),
+                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend") or "",
+                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile") or "",
+                        session_key=config.get("session_key"),
+                    )
+            
+            # Then apply user overrides
+            for name, user_config in user_profiles.items():
+                if name in core_profiles:
+                    # Override existing core profile
+                    merged_config = {
+                        **core_profiles[name],
+                        **user_config  # User config takes precedence
+                    }
+                    # Check if profile is enabled (default to true if not specified)
+                    enabled = merged_config.get("enabled", True)
+                    if enabled:
+                        self.talky_profiles[name] = TalkyProfile(
+                            name=name,
+                            description=merged_config.get("description", ""),
+                            llm_backend=merged_config.get("llm_backend") or self.defaults.get("llm_backend") or "",
+                            voice_profile=merged_config.get("voice_profile") or self.defaults.get("voice_profile") or "",
+                            session_key=merged_config.get("session_key"),
+                            system_message=merged_config.get("system_message"),
+                        )
+                    else:
+                        # User disabled the profile, remove it
+                        self.talky_profiles.pop(name, None)
+                else:
+                    # Add new user-defined profile
+                    enabled = user_config.get("enabled", True)
+                    if enabled:
+                        self.talky_profiles[name] = TalkyProfile(
+                            name=name,
+                            description=user_config.get("description", ""),
+                            llm_backend=user_config.get("llm_backend") or self.defaults.get("llm_backend") or "",
+                            voice_profile=user_config.get("voice_profile") or self.defaults.get("voice_profile") or "",
+                            session_key=user_config.get("session_key"),
+                            system_message=user_config.get("system_message"),
+                        )
+                        
+        except FileNotFoundError:
+            # No user extensions file - use core (+ defaults) profiles
+            for name, config in core_profiles.items():
+                enabled = config.get("enabled", True)
+                if enabled:
+                    self.talky_profiles[name] = TalkyProfile(
+                        name=name,
+                        description=config.get("description", ""),
+                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend") or "",
+                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile") or "",
+                        session_key=config.get("session_key"),
+                    )
+        except Exception as e:
+            logger.warning(f"Error loading user talky profiles: {e}. Using core profiles only.")
+            # Fallback to core profiles
+            for name, config in core_profiles.items():
+                enabled = config.get("enabled", True)
+                if enabled:
+                    self.talky_profiles[name] = TalkyProfile(
+                        name=name,
+                        description=config.get("description", ""),
+                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend") or "",
+                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile") or "",
+                        session_key=config.get("session_key"),
+                    )
 
     def _load_defaults(self):
         data = self._read_yaml("settings.yaml")
