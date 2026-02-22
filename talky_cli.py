@@ -48,6 +48,27 @@ def kill_port_7860():
         pass
 
 
+def validate_certificates(client_dir: Path, external_binding: bool) -> bool:
+    """Validate SSL certificate files exist for HTTPS configuration."""
+    if not external_binding:
+        return True  # No validation needed for HTTP
+    
+    cert_file = client_dir / "localhost-cert.pem"
+    key_file = client_dir / "localhost-key.pem"
+    
+    if not cert_file.exists():
+        print(f"❌ SSL certificate not found: {cert_file}")
+        print("   Generate certificates with: openssl req -x509 -newkey rsa:2048 -keyout localhost-key.pem -out localhost-cert.pem -days 365 -nodes")
+        return False
+    
+    if not key_file.exists():
+        print(f"❌ SSL private key not found: {key_file}")
+        print("   Generate certificates with: openssl req -x509 -newkey rsa:2048 -keyout localhost-key.pem -out localhost-cert.pem -days 365 -nodes")
+        return False
+    
+    return True
+
+
 def start_client_dev_server(external_binding=False):
     """Start the client dev server if not already running."""
     try:
@@ -66,6 +87,10 @@ def start_client_dev_server(external_binding=False):
         client_dir = server_dir.parent / "client"
         if not client_dir.exists():
             print("⚠️ Client directory not found")
+            return False
+        
+        # Validate certificates for HTTPS
+        if not validate_certificates(client_dir, external_binding):
             return False
             
         print("📱 Starting client dev server...")
@@ -233,7 +258,6 @@ def cmd_run(args):
     host = getattr(args, "host", None)
     if not host:
         try:
-            pm = get_profile_manager()
             network_config = getattr(pm, 'settings', {}).get("network", {})
             host = network_config.get("host", "localhost")
         except:

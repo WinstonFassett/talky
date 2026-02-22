@@ -200,6 +200,20 @@ def main():
     
     # Add SSL arguments if requested
     if args.ssl:
+        # Validate certificate files exist
+        from pathlib import Path
+        server_dir = Path(__file__).parent
+        key_file = server_dir / "server-key.pem"
+        cert_file = server_dir / "server-cert.pem"
+        
+        if not key_file.exists():
+            print(f"❌ SSL private key not found: {key_file}")
+            sys.exit(1)
+        
+        if not cert_file.exists():
+            print(f"❌ SSL certificate not found: {cert_file}")
+            sys.exit(1)
+        
         remaining.extend(['--ssl-keyfile', 'server-key.pem'])
         remaining.extend(['--ssl-certfile', 'server-cert.pem'])
     
