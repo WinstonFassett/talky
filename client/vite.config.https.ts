@@ -1,13 +1,23 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// Get allowed hosts from environment or use defaults
+const getAllowedHosts = (): string[] => {
+  const envHosts = process.env.VITE_ALLOWED_HOSTS;
+  if (envHosts) {
+    return envHosts.split(',').map((h: string) => h.trim());
+  }
+  // Default hosts for development
+  return ['localhost', '127.0.0.1'];
+};
+
 // HTTPS config for external access
 export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
     port: 5173,
-    allowedHosts: ['macbook-pro.tailc3138.ts.net', 'localhost', '127.0.0.1'],
+    allowedHosts: getAllowedHosts(),
     https: {
       key: './localhost-key.pem',
       cert: './localhost-cert.pem',
