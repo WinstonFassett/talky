@@ -1,12 +1,18 @@
-# Talky Profiles
+# Talky Profiles Configuration - extends defaults from settings.yaml
+# You may choose to specify only what differs from defaults
 talky_profiles:
+
+  # OpenClaw
   openclaw:
     description: "OpenClaw"
-    llm_backend: "openclaw"
+
+  # Moltis
   moltis:
     description: "Moltis"
     llm_backend: "moltis"
+
+  # Pi Coding Agent
   pi:
-    description: "Pi"
+    description: "Pi Coding Agent"
     llm_backend: "pi"
     

@@ -1,26 +1,46 @@
 # Voice Profiles — named combos of TTS + STT providers
-# Only local, freely available services included as templates
+# Other profiles inherit from 'default' unless they override
+
 voice_profiles:
-  cloud:
-    description: "Google Puck"
-    tts_provider: "google"
-    tts_voice: "en-US-Chirp3-HD-Puck"
-    tts_config: {}
-    
-  local:
-    description: "Local Kokoro Heart"
-    tts_provider: "kokoro"
-    tts_voice: "af_heart"
-    tts_config: {}
-    stt_provider: "whisper_local"
-    stt_model: "mlx-community/whisper-large-v3-turbo"
-    stt_config: {}
   
-  local-sky:
-    description: "Local Kokoro Sky"
-    tts_provider: "kokoro"
-    tts_voice: "af_sky"
-    tts_config: {}
-    stt_provider: "whisper_local"
-    stt_model: "mlx-community/whisper-large-v3-turbo"
-    stt_config: {}
+  # Default to local whisper and kokoro Heart
+  default:
+    description: "Local Kokoro Heart"
+    tts_provider: kokoro
+    tts_voice: af_heart
+    stt_provider: whisper_local
+
+  # Local Kokoro voices
+  kokoro-heart:
+    description: "Local Kokoro Heart"
+    tts_provider: kokoro
+    tts_voice: af_heart
+    
+  kokoro-sky:
+    description: "Local Kokoro US Sky"
+    tts_provider: kokoro
+    tts_voice: af_sky
+    
+  # STT-only profiles (inherit TTS from default)
+  local-whisper:
+    description: "Local Whisper STT"
+    stt_provider: whisper_local
+    stt_model: mlx-community/whisper-large-v3-turbo
+    
+  assemblyai:
+    description: "AssemblyAI STT"
+    stt_provider: assemblyai
+    stt_model: best
+
+  # Google TTS Voice Profiles
+  # default:
+  #   description: "Google Puck"
+  #   tts_provider: google
+  #   tts_voice: en-US-Chirp3-HD-Puck
+  #   stt_provider: deepgram
+    
+  # Google TTS voices
+  # google-puck:
+  #   description: "Google Puck"
+  #   tts_provider: google
+  #   tts_voice: en-US-Chirp3-HD-Puck
