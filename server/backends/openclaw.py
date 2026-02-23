@@ -10,6 +10,7 @@ import json
 import os
 import ssl
 import time
+from typing import Optional
 import websockets
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
