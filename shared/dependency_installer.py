@@ -28,7 +28,7 @@ PROVIDER_DEPS = {
     "whisper_local": ["mlx-whisper>=0.4.3; sys_platform == 'darwin'"],
     "openai": ["openai>=1.0.0"],
     "elevenlabs": ["elevenlabs>=1.0.0"],
-    "cartesia": ["cartesia>=1.0.0"],
+    "cartesia": ["cartesia>=2.0.0,<3.0.0"],
     "pipecat-core": ["pipecat-ai[kokoro,local,silero,webrtc]"],
     "pipecat-cloud": ["pipecat-ai[webrtc]"],  # Cloud-only - no local processing
 }
