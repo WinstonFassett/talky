@@ -167,16 +167,48 @@ def main():
             # Wait for server to be ready
             time.sleep(3)
 
+            # Determine host and protocol
+            host = getattr(args, 'host', 'localhost')
+            if host == '0.0.0.0':
+                # For external binding, try to get external hostname from config
+                try:
+                    from config.profile_manager import get_profile_manager
+                    pm = get_profile_manager()
+                    network_config = getattr(pm, 'settings', {}).get("network", {})
+                    external_host = network_config.get("external_host")
+                    if external_host:
+                        host = external_host
+                    else:
+                        # Try to detect hostname, but warn user to configure it
+                        import socket
+                        host = socket.gethostname()
+                        print(f"⚠️  No external_host configured in settings.yaml, using detected hostname: {host}")
+                        print("   Set external_host in ~/.talky/settings.yaml for reliable external access")
+                except:
+                    print("⚠️  Could not detect external hostname - configure external_host in settings.yaml")
+                    host = 'localhost'
+            
+            protocol = 'https' if getattr(args, 'ssl', False) else 'http'
+            frontend_port = 5173
+            backend_port = 7860
+
             # Try to open custom Vite client first
-            vite_url = "http://localhost:5173?autoconnect=true"
+            vite_url = f"{protocol}://{host}:{frontend_port}?autoconnect=true"
             try:
                 webbrowser.open(vite_url)
                 print(f"🌐 Opened browser to custom UI: {vite_url}")
             except Exception as e:
+                print(f"⚠️  Could not auto-open browser: {e}")
+                print(f"🔗 Connect manually to: {vite_url}")
+                
                 # Fallback to debug UI
-                url = "http://localhost:7860/client?autoconnect=true"
-                webbrowser.open(url)
-                print(f"🌐 Opened browser to debug UI (fallback): {url}")
+                url = f"{protocol}://{host}:{backend_port}/client?autoconnect=true"
+                try:
+                    webbrowser.open(url)
+                    print(f"🌐 Opened browser to debug UI (fallback): {url}")
+                except Exception as e2:
+                    print(f"⚠️  Could not open debug UI either")
+                    print(f"🔗 Debug UI fallback: {url}")
 
         # Start delayed browser open in background thread
         threading.Thread(target=delayed_open, daemon=True).start()
