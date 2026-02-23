@@ -271,6 +271,12 @@ def cmd_run(args):
     sys.exit(result.returncode)
 
 
+def cmd_auth(args):
+    """Manage provider credentials."""
+    from talky_auth import run_auth_tui
+    run_auth_tui()
+
+
 def cmd_config(args):
     """Setup wizard for talky configuration."""
     import shutil
@@ -403,7 +409,7 @@ def cmd_mcp(args):
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as profile name
-    known_commands = {"say", "config", "mcp", "ls"}
+    known_commands = {"say", "config", "mcp", "ls", "auth"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "--profile")
@@ -440,6 +446,10 @@ def main():
     # === ls subcommand ===
     ls_parser = subparsers.add_parser("ls", help="List profiles")
     ls_parser.set_defaults(func=lambda args: cmd_list_profiles(args))
+
+    # === auth subcommand ===
+    auth_parser = subparsers.add_parser("auth", help="Manage provider credentials")
+    auth_parser.set_defaults(func=cmd_auth)
 
     # === Main bot arguments (default command) ===
     parser.add_argument("profile", nargs="?", help="Talky profile name")
