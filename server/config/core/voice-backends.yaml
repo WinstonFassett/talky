@@ -63,7 +63,25 @@ voice_backends:
         zm_yunjian: "Male voice"
         zm_yunxi: "Male voice"
         zm_yunxia: "Male voice"
-        zm_yunyang: "Male voice"
+        zm_yunyang: "Chinese male voice - Yunyang"
+
+    cartesia:
+      description: "Cartesia TTS (HTTP)"
+      requires_credentials: true
+      service_class: "pipecat.services.cartesia.tts.CartesiaHttpTTSService"
+      credential_type: "cartesia"
+      default_voice: "e07c00bc-4134-4eae-9ea4-1a55fb45746b"
+      available_voices:
+        # English voices - using real Cartesia voice IDs
+        e07c00bc-4134-4eae-9ea4-1a55fb45746b: "Brooke - Big Sister (female)"
+        f786b574-daa5-4673-aa0c-cbe3e8534c02: "Katie - Friendly Fixer (female)"
+        9626c31c-bec5-4cca-baa8-f8ba9e84c8bc: "Jacqueline - Reassuring Agent (female)"
+        f9836c6e-a0bd-460e-9d3c-f7299fa60f94: "Caroline - Southern Guide (female)"
+        5ee9feff-1265-424a-9d7f-8e4d431a12c7: "Ronald - Thinker (male)"
+        a167e0f3-df7e-4d52-a9c3-f949145efdab: "Blake - Helpful Agent (male)"
+        e8e5fffb-252c-436d-b842-8879b84445b6: "Cathy - Coworker (female)"
+        79f8b5fb-2cc8-479a-80df-29f7a7cf1a3e: "Theo - Modern Narrator (male)"
+        9fa83ce3-c3a8-4523-accc-173904582ced: "Keith - Dude voice"
 
     google:
       description: "Google Cloud TTS"
