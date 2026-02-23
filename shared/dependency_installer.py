@@ -20,6 +20,34 @@ from loguru import logger
 
 _root = Path(__file__).parent.parent
 
+# Check Python version compatibility
+def _check_python_version() -> bool:
+    """Return True if Python version is compatible with pipecat-ai dependencies."""
+    # Handle both tuple and named tuple versions of sys.version_info
+    if isinstance(sys.version_info, tuple):
+        major, minor = sys.version_info[:2]
+    else:
+        major, minor = sys.version_info.major, sys.version_info.minor
+    
+    if (major, minor) >= (3, 14):
+        logger.error(
+            f"Python {major}.{minor} is not supported. "
+            "onnxruntime and other dependencies require Python < 3.14. "
+            "Please use Python 3.10, 3.11, 3.12, or 3.13."
+        )
+        return False
+    elif (major, minor) < (3, 10):
+        logger.error(
+            f"Python {major}.{minor} is too old. "
+            "Please use Python 3.10 or newer."
+        )
+        return False
+    return True
+
+# Check Python version early
+if not _check_python_version():
+    sys.exit(1)
+
 # Keep HuggingFace cache in home dir even inside isolated tool envs
 os.environ.setdefault("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
 os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(Path.home() / ".cache" / "huggingface" / "hub"))
@@ -172,10 +200,17 @@ def install_dependencies(providers: Set[str]) -> bool:
     print(f"Installing {', '.join(packages)}...")
 
     if _is_tool_env():
+        # Try installing just the extras first without --reinstall
         result = subprocess.run(
-            [uv, "tool", "install", "--editable", str(_root), "--reinstall"]
+            [uv, "tool", "install", "--editable", str(_root)]
             + [f"--with={pkg}" for pkg in packages]
         )
+        if result.returncode != 0:
+            # If that fails, fall back to full reinstall
+            result = subprocess.run(
+                [uv, "tool", "install", "--editable", str(_root), "--reinstall"]
+                + [f"--with={pkg}" for pkg in packages]
+            )
         if result.returncode != 0:
             print("❌ Install failed")
             return False
