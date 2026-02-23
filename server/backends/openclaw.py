@@ -89,7 +89,7 @@ def load_device_identity(openclaw_dir: str = None):
 
 
 def build_device_auth(
-    identity: dict, client_id: str, client_mode: str, role: str, scopes: list, token: str = ""
+    identity: dict, client_id: str, client_mode: str, role: str, scopes: list, token: str = "", nonce: str = ""
 ) -> dict:
     """Build device auth object with proper Ed25519 signature"""
     from cryptography.hazmat.primitives import serialization
