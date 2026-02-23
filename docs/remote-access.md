@@ -31,10 +31,23 @@ Use Talky from other devices on your network.
 - `localhost` - Local access only
 - `0.0.0.0` - External access (other devices)
 
-### Environment Variables
+### Configuration Options
+
+#### Network Settings (`~/.talky/settings.yaml`)
+```yaml
+network:
+  host: "0.0.0.0"                    # Host binding
+  external_host: ""                  # External hostname for browser URLs (configure this!)
+  frontend_port: 5173               # Client port
+  backend_port: 7860                # Server port
+```
+
+#### Environment Variables
 ```bash
-# Client allowed hosts
-export VITE_ALLOWED_HOSTS="localhost,127.0.0.1,YOUR_IP"
+# Client configuration
+export VITE_HOST="0.0.0.0"              # Host binding (default: localhost)
+export VITE_ALLOWED_HOSTS="localhost,127.0.0.1,YOUR_IP"  # Allowed hosts
+export VITE_BACKEND_PORT="7860"          # Backend port (default: 7860)
 ```
 
 ## Troubleshooting

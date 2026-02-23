@@ -6,5 +6,6 @@ defaults:
 # Network settings
 network:
   host: "localhost"  # Change to "0.0.0.0" for external access
+  external_host: ""  # External hostname for browser URLs (configure for your setup)
   frontend_port: 5173
   backend_port: 7860
