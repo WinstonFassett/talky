@@ -4,8 +4,11 @@ Voice interface for AI. Talk to OpenClaw, Moltis or Pi. Or use MCP to talk to Cl
 
 ## Quick Start
 
+**Requirements**: Python 3.13 (required for dependency compatibility)
+
 ```bash
-uv tool install talky -e .
+uv sync --python 3.13                 # create project .venv (required by server)
+uv tool install --editable . --python 3.13
 talky openclaw                    # Talk to OpenClaw
 talky moltis                      # Talk to Moltis  
 talky pi                          # Talk to Pi
