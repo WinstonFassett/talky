@@ -4,12 +4,12 @@ Voice interface for AI. Talk to OpenClaw, Moltis or Pi. Or use MCP to talk to Cl
 
 ## Quick Start
 
-**Requirements**: Python 3.13, [uv](https://docs.astral.sh/uv/), Homebrew
+**Requirements**: Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/), Homebrew
 
 ```bash
 brew install portaudio                # required for local audio (talky say)
-uv sync --python 3.13                 # create project .venv (required by server)
-uv tool install --editable . --python 3.13
+uv sync                               # create project .venv (required by server)
+uv tool install --editable .
 talky openclaw                    # Talk to OpenClaw
 talky moltis                      # Talk to Moltis  
 talky pi                          # Talk to Pi
