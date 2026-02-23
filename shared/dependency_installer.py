@@ -194,65 +194,6 @@ def install_dependencies(providers: Set[str]) -> bool:
     return True
 
 
-def _missing_extras_in_venv(providers: Set[str], python_path: Path) -> list[str]:
-    """Return pipecat extras not installed in the given venv's Python."""
-    missing = []
-    for provider in providers:
-        extra = PROVIDER_EXTRA.get(provider)
-        if not extra:
-            continue
-        dists = _extra_dist_names(extra)
-        if not dists:
-            continue  # no external packages needed
-        for dist_name in dists:
-            result = subprocess.run(
-                [str(python_path), "-c",
-                 f"import importlib.metadata; importlib.metadata.distribution('{dist_name}')"],
-                capture_output=True,
-            )
-            if result.returncode != 0:
-                missing.append(extra)
-                break
-    return missing
-
-
-def ensure_dependencies_for_server(server_dir: Path) -> bool:
-    """Install missing provider dependencies into the server's .venv."""
-    try:
-        providers = get_configured_providers()
-
-        python_path = server_dir.parent / ".venv" / "bin" / "python"
-        if not python_path.exists():
-            logger.error(f"No .venv at {python_path}; run `uv sync`")
-            return False
-
-        missing = _missing_extras_in_venv(providers, python_path)
-        if not missing:
-            return True
-
-        uv = _uv_cmd()
-        if not uv:
-            logger.error("uv not found")
-            return False
-
-        packages = [f"pipecat-ai[{e}]" for e in missing]
-        logger.info(f"Installing into server venv: {', '.join(packages)}")
-
-        result = subprocess.run(
-            [uv, "pip", "install", "--python", str(python_path)] + packages,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            logger.error(f"Install failed: {result.stderr}")
-            return False
-        return True
-
-    except Exception as e:
-        logger.error(f"Failed to ensure server dependencies: {e}")
-        return False
-
-
 def ensure_dependencies() -> bool:
     """Ensure dependencies for the configured providers (current env)."""
     try:

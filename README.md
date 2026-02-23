@@ -8,7 +8,6 @@ Voice interface for AI. Talk to OpenClaw, Moltis or Pi. Or use MCP to talk to Cl
 
 ```bash
 brew install portaudio                # required for local audio (talky say)
-uv sync                               # create project .venv (required by server)
 uv tool install --editable .
 talky openclaw                    # Talk to OpenClaw
 talky moltis                      # Talk to Moltis  

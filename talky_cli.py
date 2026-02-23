@@ -115,15 +115,7 @@ def cmd_say(args):
 
     # Daemon management sub-actions
     if args.start_daemon or args.stop_daemon or args.daemon_status:
-        python_path = server_dir.parent / ".venv" / "bin" / "python"
-        if not python_path.exists():
-            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
-        
-        if not python_path.exists():
-            print("Virtual environment not found. Run 'uv sync' first.")
-            sys.exit(1)
-            
-        cmd = [str(python_path), str(server_dir / "tts_daemon.py")]
+        cmd = [sys.executable, str(server_dir / "tts_daemon.py")]
         if args.start_daemon:
             cmd.append("--start")
         elif args.stop_daemon:
@@ -134,15 +126,7 @@ def cmd_say(args):
         sys.exit(result.returncode)
 
     if args.list_profiles:
-        python_path = server_dir.parent / ".venv" / "bin" / "python"
-        if not python_path.exists():
-            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
-        
-        if not python_path.exists():
-            print("Virtual environment not found. Run 'uv sync' first.")
-            sys.exit(1)
-            
-        cmd = [str(python_path), str(server_dir / "tts_daemon.py"), "--list-profiles"]
+        cmd = [sys.executable, str(server_dir / "tts_daemon.py"), "--list-profiles"]
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
@@ -168,31 +152,16 @@ def cmd_say(args):
         sys.exit(0 if success else 1)
 
     if daemon_is_running():
-        # Use lightweight client with venv python
-        python_path = server_dir.parent / ".venv" / "bin" / "python"
-        if not python_path.exists():
-            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
-        if not python_path.exists():
-            print("Virtual environment not found. Run 'uv sync' first.")
-            sys.exit(1)
-        cmd = [str(python_path), str(server_dir / "tts_client.py"), args.text]
+        cmd = [sys.executable, str(server_dir / "tts_client.py"), args.text]
     else:
         # Auto-start daemon, use client with wait
-        python_path = server_dir.parent / ".venv" / "bin" / "python"
-        if not python_path.exists():
-            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
-        
-        if not python_path.exists():
-            print("Virtual environment not found. Run 'uv sync' first.")
-            sys.exit(1)
-            
         subprocess.Popen(
-            [str(python_path), str(server_dir / "tts_daemon.py"), "--start"],
+            [sys.executable, str(server_dir / "tts_daemon.py"), "--start"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=server_dir
         )
-        cmd = [str(python_path), str(server_dir / "tts_client.py"), "--wait", "15", args.text]
+        cmd = [sys.executable, str(server_dir / "tts_client.py"), "--wait", "15", args.text]
 
     if args.voice_profile:
         cmd.extend(["-p", args.voice_profile])
@@ -229,9 +198,9 @@ def cmd_run(args):
     kill_port_7860()
     
     # Ensure server dependencies are installed
-    from shared.dependency_installer import ensure_dependencies_for_server
-    
-    if not ensure_dependencies_for_server(server_dir):
+    from shared.dependency_installer import ensure_dependencies
+
+    if not ensure_dependencies():
         print("❌ Failed to install required dependencies")
         sys.exit(1)
 
@@ -247,12 +216,8 @@ def cmd_run(args):
         sys.exit(1)
 
     cmd = [
-        "uv",
-        "run",
-        "--directory",
-        str(server_dir),
-        "python",
-        "main.py",
+        sys.executable,
+        str(server_dir / "main.py"),
         "--profile",
         talky_profile,
     ]
@@ -274,7 +239,7 @@ def cmd_run(args):
     if getattr(args, "session", None):
         cmd.extend(["--session", args.session])
 
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, cwd=str(server_dir))
     sys.exit(result.returncode)
 
 
