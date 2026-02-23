@@ -69,7 +69,7 @@ def validate_certificates(client_dir: Path, external_binding: bool) -> bool:
     return True
 
 
-def start_client_dev_server(external_binding=False):
+def start_client_dev_server(external_binding=False, host="localhost"):
     """Start the client dev server if not already running."""
     try:
         # Check if port 5173 is already in use
@@ -100,10 +100,23 @@ def start_client_dev_server(external_binding=False):
         # Choose config based on external binding
         config_file = "vite.config.https.ts" if external_binding else "vite.config.ts"
         npm_args = ["npm", "run", "dev:https" if external_binding else "dev"]
+        
+        # Set up environment variables for Vite
+        env = os.environ.copy()
+        env['VITE_HOST'] = host
+        
+        # Get backend port from config
+        try:
+            network_config = getattr(pm, 'settings', {}).get("network", {})
+            backend_port = network_config.get("backend_port", "7860")
+            env['VITE_BACKEND_PORT'] = backend_port
+        except:
+            env['VITE_BACKEND_PORT'] = "7860"
             
         subprocess.Popen(
             npm_args,
             cwd=str(client_dir),
+            env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -264,7 +277,7 @@ def cmd_run(args):
             host = "localhost"
     
     external_binding = (host == "0.0.0.0")
-    start_client_dev_server(external_binding)
+    start_client_dev_server(external_binding, host)
     
     # Kill any existing process on port 7860 (after Vite is ready)
     kill_port_7860()
