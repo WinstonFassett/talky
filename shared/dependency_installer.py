@@ -165,12 +165,21 @@ def get_configured_providers() -> Set[str]:
     return providers
 
 
+def _all_extras(providers: Set[str]) -> list[str]:
+    """Return all pipecat extra names needed by the given providers."""
+    return [
+        extra
+        for provider in providers
+        if (extra := PROVIDER_EXTRA.get(provider))
+    ]
+
+
 def _missing_extras(providers: Set[str]) -> list[str]:
     """Return pipecat extra names that are not yet installed."""
     return [
         extra
-        for provider in providers
-        if (extra := PROVIDER_EXTRA.get(provider)) and not _check_extra_installed(extra)
+        for extra in _all_extras(providers)
+        if not _check_extra_installed(extra)
     ]
 
 
@@ -196,23 +205,26 @@ def install_dependencies(providers: Set[str]) -> bool:
         logger.error("uv not found — cannot install dependencies")
         return False
 
-    packages = [f"pipecat-ai[{e}]" for e in missing]
-    print(f"Installing {', '.join(packages)}...")
+    missing_packages = [f"pipecat-ai[{e}]" for e in missing]
+    print(f"Installing {', '.join(missing_packages)}...")
 
     if _is_tool_env():
+        # uv tool install --with replaces ALL previous --with packages,
+        # so we must pass every needed extra, not just the missing ones.
+        all_packages = [f"pipecat-ai[{e}]" for e in _all_extras(providers)]
         # Pin to the same Python the tool env was created with,
         # otherwise uv defaults to the system Python which may be incompatible.
         python = sys.executable
         # Try installing just the extras first without --reinstall
         result = subprocess.run(
             [uv, "tool", "install", "--editable", str(_root), "--python", python]
-            + [f"--with={pkg}" for pkg in packages]
+            + [f"--with={pkg}" for pkg in all_packages]
         )
         if result.returncode != 0:
             # If that fails, fall back to full reinstall
             result = subprocess.run(
                 [uv, "tool", "install", "--editable", str(_root), "--reinstall", "--python", python]
-                + [f"--with={pkg}" for pkg in packages]
+                + [f"--with={pkg}" for pkg in all_packages]
             )
         if result.returncode != 0:
             print("❌ Install failed")
