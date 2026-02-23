@@ -59,7 +59,7 @@ def load_paired_tokens(openclaw_dir: str = None):
     # Get the operator token for this device
     operator_token = paired_config[device_id]["tokens"]["operator"]["token"]
 
-    return {"operator": operator_token, "node": gateway_token}
+    return {"operator": operator_token, "gateway": gateway_token}
 
 
 def load_device_identity(openclaw_dir: str = None):
@@ -121,6 +121,7 @@ def build_device_auth(
         "publicKey": identity["publicKeyPem"],
         "signature": signature_b64,
         "signedAt": signed_at_ms,
+        "nonce": nonce,  # Use the server-provided nonce
     }
 
 
@@ -198,41 +199,67 @@ class OpenClawLLMService(LLMService):
 
             self._ws = await websockets.connect(self.gateway_url, **connect_kwargs)
 
-            # Authenticate with OpenClaw
-            device_auth = build_device_auth(
-                self.device_identity, self.CLIENT_ID, self.CLIENT_MODE, self.ROLE, self.SCOPES, self.tokens["operator"]
-            )
-
-            await self._ws.send(
-                json.dumps(
-                    {
-                        "type": "req",
-                        "id": str(self._next_id()),
-                        "method": "connect",
-                        "params": {
-                            "minProtocol": 3,
-                            "maxProtocol": 3,
-                            "client": {
-                                "id": self.CLIENT_ID,
-                                "version": "1.0.0",
-                                "platform": "macos",
-                                "mode": self.CLIENT_MODE,
-                            },
-                            "role": self.ROLE,
-                            "scopes": self.SCOPES,
-                            "auth": {"token": self.tokens["operator"]},
-                            "device": device_auth,
-                        },
-                    }
-                )
-            )
-
+            # First, send connect request without device auth to get challenge
+            connect_request = {
+                "type": "req",
+                "id": str(self._next_id()),
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "client": {
+                        "id": self.CLIENT_ID,
+                        "version": "1.0.0",
+                        "platform": "macos",
+                        "mode": self.CLIENT_MODE,
+                    },
+                    "role": self.ROLE,
+                    "scopes": self.SCOPES,
+                    "auth": {"token": self.tokens["gateway"]},
+                },
+            }
+            
+            await self._ws.send(json.dumps(connect_request))
+            
             # Handle auth response
             response = await self._ws.recv()
             data = json.loads(response)
 
             # Handle connect challenge
             if data.get("type") == "event" and data.get("event") == "connect.challenge":
+                # Extract nonce from challenge
+                challenge_nonce = data.get("payload", {}).get("nonce", "")
+                if not challenge_nonce:
+                    raise ConnectionError("No nonce in connect challenge")
+                
+                # Rebuild device auth with the server-provided nonce
+                device_auth = build_device_auth(
+                    self.device_identity, self.CLIENT_ID, self.CLIENT_MODE, self.ROLE, self.SCOPES, 
+                    self.tokens["gateway"], challenge_nonce
+                )
+                
+                # Send second connect request with device auth
+                connect_request_with_auth = {
+                    "type": "req",
+                    "id": str(self._next_id()),
+                    "method": "connect", 
+                    "params": {
+                        "minProtocol": 3,
+                        "maxProtocol": 3,
+                        "client": {
+                            "id": self.CLIENT_ID,
+                            "version": "1.0.0",
+                            "platform": "macos",
+                            "mode": self.CLIENT_MODE,
+                        },
+                        "role": self.ROLE,
+                        "scopes": self.SCOPES,
+                        "auth": {"token": self.tokens["gateway"]},
+                        "device": device_auth,
+                    },
+                }
+                
+                await self._ws.send(json.dumps(connect_request_with_auth))
                 response = await self._ws.recv()
                 data = json.loads(response)
 
