@@ -8,7 +8,10 @@ import importlib
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+# Global session management for HTTP-based services
+_http_sessions: Dict[str, Any] = {}
 
 
 def _split_dotted_path(dotted: str) -> tuple[str, str]:
@@ -17,6 +20,33 @@ def _split_dotted_path(dotted: str) -> tuple[str, str]:
     if len(parts) != 2:
         raise ValueError(f"Invalid dotted path (need module.ClassName): {dotted}")
     return parts[0], parts[1]
+
+
+def get_http_session(session_type: str) -> Any:
+    """Get or create a reusable HTTP session for the given type."""
+    if session_type not in _http_sessions:
+        import aiohttp
+        _http_sessions[session_type] = aiohttp.ClientSession()
+    return _http_sessions[session_type]
+
+
+def close_http_sessions():
+    """Close all HTTP sessions. Call this during application shutdown."""
+    import asyncio
+    
+    async def _close_sessions():
+        for session in _http_sessions.values():
+            if hasattr(session, 'close'):
+                await session.close()
+        _http_sessions.clear()
+    
+    # Try to run in existing event loop, otherwise create new one
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_close_sessions())
+    except RuntimeError:
+        # No event loop running
+        asyncio.run(_close_sessions())
 
 
 def load_credentials(provider_name: str) -> Dict[str, str]:
@@ -72,10 +102,9 @@ def _create_service_from_backend_config(
 
     cls = _import_service_class(service_class_path)
     
-    # Special handling for ElevenLabs HTTP service
-    if provider == "elevenlabs" and "ElevenLabsHttpTTSService" in service_class_path:
-        import aiohttp
-        kwargs["aiohttp_session"] = aiohttp.ClientSession()
+    # Handle HTTP session requirements for various providers
+    if provider in ("elevenlabs", "cartesia"):
+        kwargs["aiohttp_session"] = get_http_session(provider)
     
     return cls(**kwargs)
 

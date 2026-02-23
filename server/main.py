@@ -203,7 +203,15 @@ def main():
     # Call Pipecat's main which will call bot() with proper transport
     from pipecat.runner.run import main
 
-    main()
+    try:
+        main()
+    finally:
+        # Clean up HTTP sessions
+        try:
+            from shared.service_factory import close_http_sessions
+            close_http_sessions()
+        except Exception:
+            pass  # Silently fail during shutdown
 
 
 def run_bot_main(transport, llm_profile_name: str = None, voice_profile_name: str = None, session_key: str = None):
