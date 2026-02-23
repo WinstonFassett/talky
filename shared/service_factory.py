@@ -71,6 +71,12 @@ def _create_service_from_backend_config(
             kwargs.update(creds)
 
     cls = _import_service_class(service_class_path)
+    
+    # Special handling for ElevenLabs HTTP service
+    if provider == "elevenlabs" and "ElevenLabsHttpTTSService" in service_class_path:
+        import aiohttp
+        kwargs["aiohttp_session"] = aiohttp.ClientSession()
+    
     return cls(**kwargs)
 
 

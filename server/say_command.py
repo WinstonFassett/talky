@@ -11,7 +11,7 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from loguru import logger
-from pipecat.frames.frames import StartFrame, TTSAudioRawFrame
+from pipecat.frames.frames import StartFrame, TTSAudioRawFrame, TTSTextFrame
 from server.config.profile_manager import get_profile_manager
 from shared.voice_config import create_tts_for_profile
 
@@ -28,14 +28,46 @@ async def say_text(
         logger.info(f"Speaking: {text[:50]}{'...' if len(text) > 50 else ''}")
 
         tts_service = create_tts_for_profile(voice_profile, provider, voice_id)
+        
+        # Minimal setup for ElevenLabs HTTP service
+        if provider == "elevenlabs":
+            import asyncio
+            from pipecat.utils.asyncio.task_manager import TaskManager, TaskManagerParams
+            from pipecat.clocks.system_clock import SystemClock
+            
+            task_manager = TaskManager()
+            task_manager.setup(TaskManagerParams(loop=asyncio.get_running_loop()))
+            
+            class Setup:
+                def __init__(self, task_manager, clock):
+                    self.task_manager = task_manager
+                    self.clock = clock
+                    self.observer = None
+            
+            setup = Setup(task_manager, SystemClock())
+            await tts_service.setup(setup)
+        
         context_id = tts_service.create_context_id()
         await tts_service.start(StartFrame())
 
         audio_data = []
+        frame_count = 0
         async for frame in tts_service.run_tts(text, context_id):
+            frame_count += 1
+            logger.info(f"Frame {frame_count}: {type(frame).__name__}")
+            
+            if hasattr(frame, 'error'):
+                logger.error(f"ErrorFrame: {frame.error}")
+            
             if isinstance(frame, TTSAudioRawFrame):
                 if hasattr(frame, "audio") and frame.audio:
                     audio_data.append(frame.audio)
+                    logger.info(f"Audio frame: {len(frame.audio)} bytes")
+            elif hasattr(frame, "audio") and frame.audio:
+                audio_data.append(frame.audio)
+                logger.info(f"Other audio frame: {len(frame.audio)} bytes")
+        
+        logger.info(f"Total frames: {frame_count}, Audio frames: {len(audio_data)}")
 
         if not audio_data:
             logger.error("No audio data generated")
