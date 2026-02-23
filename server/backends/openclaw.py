@@ -5,13 +5,14 @@ Matches the API pattern used by moltis.py for consistency.
 """
 
 import asyncio
+import base64
 import json
 import os
 import ssl
 import time
-from typing import Optional
-
 import websockets
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 from loguru import logger
 from pipecat.frames.frames import (
     Frame,
@@ -19,6 +20,7 @@ from pipecat.frames.frames import (
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
+    LLMRunFrame,
     TextFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -45,7 +47,10 @@ def load_paired_tokens(openclaw_dir: str = None):
     with open(openclaw_config_path, "r") as f:
         openclaw_config = json.load(f)
 
-    gateway_token = openclaw_config["gateway"]["auth"]["token"]
+    # Use remote token if available, fallback to auth token
+    gateway_config = openclaw_config.get("gateway", {})
+    gateway_token = (gateway_config.get("remote", {}).get("token") or
+                     gateway_config.get("auth", {}).get("token"))
 
     # Load device-specific tokens from paired.json
     paired_path = os.path.join(openclaw_dir, "devices/paired.json")
@@ -94,7 +99,7 @@ def build_device_auth(
     # Build payload string (matching OpenClaw's buildDeviceAuthPayload)
     payload = "|".join(
         [
-            "v1",
+            "v2",
             identity["deviceId"],
             client_id,
             client_mode,
@@ -102,6 +107,7 @@ def build_device_auth(
             ",".join(scopes),
             str(signed_at_ms),
             token,
+            nonce,
         ]
     )
 
@@ -114,11 +120,31 @@ def build_device_auth(
         raise Exception("Expected Ed25519 private key")
 
     signature = private_key.sign(payload.encode())
-    signature_b64 = base64url_encode(signature)
+    # Convert to base64url encoding (not regular base64)
+    signature_b64 = base64.urlsafe_b64encode(signature).decode().rstrip('=')
+
+    # Convert PEM public key to raw 32-byte Ed25519 key (like OpenClaw expects)
+    public_key = serialization.load_pem_public_key(identity["publicKeyPem"].encode())
+    # Get raw 32 bytes (skip SPKI header for Ed25519 keys)
+    public_key_der = public_key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    # Ed25519 SPKI has prefix 0x302a300506032b6570032100 + 32 bytes raw key
+    # Extract just the raw 32 bytes
+    if len(public_key_der) == 44:  # 44 bytes = 12 bytes prefix + 32 bytes raw
+        public_key_raw = public_key_der[12:]  # Skip SPKI prefix
+    else:
+        # Fallback to Raw format (should be 32 bytes)
+        public_key_raw = public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+    public_key_b64url = base64.urlsafe_b64encode(public_key_raw).decode().rstrip('=')
 
     return {
         "id": identity["deviceId"],
-        "publicKey": identity["publicKeyPem"],
+        "publicKey": public_key_b64url,
         "signature": signature_b64,
         "signedAt": signed_at_ms,
         "nonce": nonce,  # Use the server-provided nonce
@@ -138,7 +164,11 @@ class OpenClawLLMService(LLMService):
     def __init__(self, *, gateway_url: str = None, agent_id: str = "main", session_key: str = None, **kwargs):
         super().__init__(**kwargs)
 
-        self.gateway_url = gateway_url or os.getenv("OPENCLAW_GATEWAY_URL", "ws://localhost:18789")
+        # OpenClaw WebSocket should always use localhost for backend connections
+        # even when frontend is accessed externally
+        default_gateway = "ws://localhost:18789"
+        
+        self.gateway_url = gateway_url or os.getenv("OPENCLAW_GATEWAY_URL", default_gateway)
         self.agent_id = agent_id
         
         # Use provided session key or fall back to default
