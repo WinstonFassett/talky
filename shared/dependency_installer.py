@@ -106,21 +106,13 @@ def _check_extra_installed(extra: str) -> bool:
 
 
 def get_configured_providers() -> Set[str]:
-    """Read ~/.talky config to find which providers the default profile needs."""
+    """Read ~/.talky config to find all providers across all voice profiles.
+
+    Scans every profile so ensure_dependencies_for_server installs everything
+    the voice switcher will try to bootstrap at startup.
+    """
     config_dir = Path.home() / ".talky"
     providers: Set[str] = set()
-
-    settings_file = config_dir / "settings.yaml"
-    default_voice_profile = "cloud"
-    if settings_file.exists():
-        try:
-            with open(settings_file) as f:
-                settings = yaml.safe_load(f) or {}
-                default_voice_profile = (
-                    settings.get("defaults", {}).get("voice_profile", default_voice_profile)
-                )
-        except Exception as e:
-            logger.warning(f"Failed to load settings: {e}")
 
     bundled_defaults = _root / "server" / "config" / "defaults"
     voice_profiles_file = config_dir / "voice-profiles.yaml"
@@ -137,10 +129,10 @@ def get_configured_providers() -> Set[str]:
         logger.error(f"Failed to load voice profiles: {e}")
         return providers
 
-    profile = profiles.get("voice_profiles", {}).get(default_voice_profile, {})
-    for key in ("tts_provider", "stt_provider"):
-        if val := profile.get(key):
-            providers.add(val)
+    for profile in profiles.get("voice_profiles", {}).values():
+        for key in ("tts_provider", "stt_provider"):
+            if val := profile.get(key):
+                providers.add(val)
 
     return providers
 
