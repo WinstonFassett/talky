@@ -200,15 +200,18 @@ def install_dependencies(providers: Set[str]) -> bool:
     print(f"Installing {', '.join(packages)}...")
 
     if _is_tool_env():
+        # Pin to the same Python the tool env was created with,
+        # otherwise uv defaults to the system Python which may be incompatible.
+        python = sys.executable
         # Try installing just the extras first without --reinstall
         result = subprocess.run(
-            [uv, "tool", "install", "--editable", str(_root)]
+            [uv, "tool", "install", "--editable", str(_root), "--python", python]
             + [f"--with={pkg}" for pkg in packages]
         )
         if result.returncode != 0:
             # If that fails, fall back to full reinstall
             result = subprocess.run(
-                [uv, "tool", "install", "--editable", str(_root), "--reinstall"]
+                [uv, "tool", "install", "--editable", str(_root), "--reinstall", "--python", python]
                 + [f"--with={pkg}" for pkg in packages]
             )
         if result.returncode != 0:
