@@ -2,7 +2,7 @@
 name = "talky"
 version = "0.1.0"
 description = "Voice AI bot built with Pipecat"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 dependencies = [
     "pipecat-ai[runner,silero,webrtc]",
     "pyyaml",
