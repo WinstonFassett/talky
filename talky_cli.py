@@ -66,7 +66,14 @@ def start_client_dev_server():
         if not client_dir.exists():
             print("⚠️ Client directory not found")
             return False
-            
+
+        if not (client_dir / "node_modules").exists():
+            print("📦 Installing client dependencies...")
+            result = subprocess.run(["npm", "install"], cwd=str(client_dir), capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"⚠️ npm install failed: {result.stderr.strip()}")
+                return False
+
         print("📱 Starting client dev server...")
         subprocess.Popen(
             ["npm", "run", "dev"],
