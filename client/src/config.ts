@@ -20,12 +20,13 @@ export const TRANSPORT_LABELS: Record<TransportType, string> = {
 export const DEFAULT_TRANSPORT: TransportType = 'smallwebrtc';
 
 const botStartUrl =
-  import.meta.env.VITE_BOT_START_URL || `${window.location.protocol}//${window.location.hostname}:7860/start`;
+  import.meta.env.VITE_BOT_START_URL || `${window.location.protocol}//${window.location.hostname}:${import.meta.env.VITE_BACKEND_PORT || '7860'}/start`;
 const botStartPublicApiKey = import.meta.env.VITE_BOT_START_PUBLIC_API_KEY;
 
 if (!import.meta.env.VITE_BOT_START_URL) {
+  const defaultPort = import.meta.env.VITE_BACKEND_PORT || '7860';
   console.warn(
-    `VITE_BOT_START_URL not configured, using default: ${window.location.protocol}//${window.location.hostname}:7860/start`
+    `VITE_BOT_START_URL not configured, using default: ${window.location.protocol}//${window.location.hostname}:${defaultPort}/start`
   );
 }
 

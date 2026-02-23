@@ -11,11 +11,16 @@ const getAllowedHosts = (): string[] => {
   return ['localhost', '127.0.0.1'];
 };
 
+// Get host from environment or use default
+const getHost = (): string => {
+  return process.env.VITE_HOST || 'localhost';
+};
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '0.0.0.0',
+    host: getHost(),
     port: 5173,
     allowedHosts: getAllowedHosts(),
   },
