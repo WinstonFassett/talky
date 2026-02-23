@@ -28,15 +28,15 @@ async def say_text(
         logger.info(f"Speaking: {text[:50]}{'...' if len(text) > 50 else ''}")
 
         tts_service = create_tts_for_profile(voice_profile, provider, voice_id)
+        
         context_id = tts_service.create_context_id()
         await tts_service.start(StartFrame())
 
         audio_data = []
         async for frame in tts_service.run_tts(text, context_id):
-            if isinstance(frame, TTSAudioRawFrame):
-                if hasattr(frame, "audio") and frame.audio:
-                    audio_data.append(frame.audio)
-
+            if isinstance(frame, TTSAudioRawFrame) and hasattr(frame, "audio") and frame.audio:
+                audio_data.append(frame.audio)
+        
         if not audio_data:
             logger.error("No audio data generated")
             return False
@@ -74,6 +74,13 @@ async def say_text(
     except Exception as e:
         logger.error(f"Error generating speech: {e}")
         return False
+    finally:
+        # Clean up HTTP sessions
+        try:
+            from shared.service_factory import close_http_sessions
+            close_http_sessions()
+        except Exception as cleanup_error:
+            logger.warning(f"Failed to cleanup sessions: {cleanup_error}")
 
 
 def main():
