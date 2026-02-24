@@ -3,7 +3,8 @@
 ## Commands
 
 ```bash
-uv sync && uv tool install talky -e .
+uv tool install --editable .          # install/update tool
+uv sync                               # dev only (ruff/pyright)
 talky --profile moltis [--debug]
 talky mcp
 uv run ruff check . && uv run pyright

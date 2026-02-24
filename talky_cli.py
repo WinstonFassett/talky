@@ -93,6 +93,14 @@ def start_client_dev_server(external_binding=False, host="localhost"):
         if not validate_certificates(client_dir, external_binding):
             return False
             
+
+        if not (client_dir / "node_modules").exists():
+            print("📦 Installing client dependencies...")
+            result = subprocess.run(["npm", "install"], cwd=str(client_dir), capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"⚠️ npm install failed: {result.stderr.strip()}")
+                return False
+
         print("📱 Starting client dev server...")
         if external_binding:
             print("🌐 External binding enabled (HTTPS for WebRTC)")
@@ -156,15 +164,7 @@ def cmd_say(args):
 
     # Daemon management sub-actions
     if args.start_daemon or args.stop_daemon or args.daemon_status:
-        python_path = server_dir.parent / ".venv" / "bin" / "python"
-        if not python_path.exists():
-            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
-        
-        if not python_path.exists():
-            print("Virtual environment not found. Run 'uv sync' first.")
-            sys.exit(1)
-            
-        cmd = [str(python_path), str(server_dir / "tts_daemon.py")]
+        cmd = [sys.executable, str(server_dir / "tts_daemon.py")]
         if args.start_daemon:
             cmd.append("--start")
         elif args.stop_daemon:
@@ -175,15 +175,7 @@ def cmd_say(args):
         sys.exit(result.returncode)
 
     if args.list_profiles:
-        python_path = server_dir.parent / ".venv" / "bin" / "python"
-        if not python_path.exists():
-            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
-        
-        if not python_path.exists():
-            print("Virtual environment not found. Run 'uv sync' first.")
-            sys.exit(1)
-            
-        cmd = [str(python_path), str(server_dir / "tts_daemon.py"), "--list-profiles"]
+        cmd = [sys.executable, str(server_dir / "tts_daemon.py"), "--list-profiles"]
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
@@ -209,31 +201,16 @@ def cmd_say(args):
         sys.exit(0 if success else 1)
 
     if daemon_is_running():
-        # Use lightweight client with venv python
-        python_path = server_dir.parent / ".venv" / "bin" / "python"
-        if not python_path.exists():
-            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
-        if not python_path.exists():
-            print("Virtual environment not found. Run 'uv sync' first.")
-            sys.exit(1)
-        cmd = [str(python_path), str(server_dir / "tts_client.py"), args.text]
+        cmd = [sys.executable, str(server_dir / "tts_client.py"), args.text]
     else:
         # Auto-start daemon, use client with wait
-        python_path = server_dir.parent / ".venv" / "bin" / "python"
-        if not python_path.exists():
-            python_path = server_dir.parent / ".venv" / "Scripts" / "python.exe"  # Windows
-        
-        if not python_path.exists():
-            print("Virtual environment not found. Run 'uv sync' first.")
-            sys.exit(1)
-            
         subprocess.Popen(
-            [str(python_path), str(server_dir / "tts_daemon.py"), "--start"],
+            [sys.executable, str(server_dir / "tts_daemon.py"), "--start"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=server_dir
         )
-        cmd = [str(python_path), str(server_dir / "tts_client.py"), "--wait", "15", args.text]
+        cmd = [sys.executable, str(server_dir / "tts_client.py"), "--wait", "15", args.text]
 
     if args.voice_profile:
         cmd.extend(["-p", args.voice_profile])
@@ -283,9 +260,9 @@ def cmd_run(args):
     kill_port_7860()
     
     # Ensure server dependencies are installed
-    from shared.dependency_installer import ensure_dependencies_for_server
-    
-    if not ensure_dependencies_for_server(server_dir):
+    from shared.dependency_installer import ensure_dependencies
+
+    if not ensure_dependencies():
         print("❌ Failed to install required dependencies")
         sys.exit(1)
 
@@ -301,12 +278,8 @@ def cmd_run(args):
         sys.exit(1)
 
     cmd = [
-        "uv",
-        "run",
-        "--directory",
-        str(server_dir),
-        "python",
-        "main.py",
+        sys.executable,
+        str(server_dir / "main.py"),
         "--profile",
         talky_profile,
     ]
@@ -336,8 +309,14 @@ def cmd_run(args):
     if getattr(args, "session", None):
         cmd.extend(["--session", args.session])
 
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, cwd=str(server_dir))
     sys.exit(result.returncode)
+
+
+def cmd_auth(args):
+    """Manage provider credentials."""
+    from talky_auth import run_auth_tui
+    run_auth_tui()
 
 
 def cmd_config(args):
@@ -486,7 +465,7 @@ def cmd_mcp(args):
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as profile name
-    known_commands = {"say", "config", "mcp", "ls"}
+    known_commands = {"say", "config", "mcp", "ls", "auth"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "--profile")
@@ -524,6 +503,10 @@ def main():
     # === ls subcommand ===
     ls_parser = subparsers.add_parser("ls", help="List profiles")
     ls_parser.set_defaults(func=lambda args: cmd_list_profiles(args))
+
+    # === auth subcommand ===
+    auth_parser = subparsers.add_parser("auth", help="Manage provider credentials")
+    auth_parser.set_defaults(func=cmd_auth)
 
     # === Main bot arguments (default command) ===
     parser.add_argument("profile", nargs="?", help="Talky profile name")

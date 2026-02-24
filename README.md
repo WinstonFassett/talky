@@ -4,8 +4,11 @@ Voice interface for AI. Talk to OpenClaw, Moltis or Pi. Or use MCP to talk to Cl
 
 ## Quick Start
 
+**Requirements**: Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/), Homebrew
+
 ```bash
-uv tool install talky -e .
+brew install portaudio                # required for local audio (talky say)
+uv tool install --editable .
 talky openclaw                    # Talk to OpenClaw
 talky moltis                      # Talk to Moltis  
 talky pi                          # Talk to Pi
@@ -41,6 +44,10 @@ talky say "Hello world"           # Test voice output
 **Setup**
 - `talky config` - Create config files
 - Add API keys to `~/.talky/credentials/` (one JSON file per provider)
+
+> **Note:** The default voice profile uses local providers (kokoro TTS + whisper STT).
+> These require `brew install portaudio` and will download ML models on first use.
+> To avoid this, set a cloud voice profile in `~/.talky/settings.yaml` before running.
 
 **Debug Logging**
 ```bash
