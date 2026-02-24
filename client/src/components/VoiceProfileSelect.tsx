@@ -14,6 +14,7 @@ interface VoiceProfileSelectProps {
 export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSelectProps) => {
   const [voiceProfiles, setVoiceProfiles] = useState<VoiceProfile[]>([]);
   const [currentProfile, setCurrentProfile] = useState<string>('');
+  const [botReady, setBotReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState<string>('');
@@ -111,6 +112,7 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
     };
 
     const handleBotReady = () => {
+      setBotReady(true);
       requestVoiceProfiles();
       requestCurrentProfile();
     };
@@ -177,6 +179,10 @@ export const VoiceProfileSelect = ({ client, disabled = false }: VoiceProfileSel
       setSwitching(false);
     }
   };
+
+  if (!botReady) {
+    return null;
+  }
 
   if (loading) {
     return (
