@@ -246,8 +246,10 @@ def main():
             print(f"❌ SSL certificate not found: {cert_file}")
             sys.exit(1)
         
-        remaining.extend(['--ssl-keyfile', 'server-key.pem'])
-        remaining.extend(['--ssl-certfile', 'server-cert.pem'])
+        # Set environment variables for monkey patch
+        os.environ["SSL_ENABLED"] = "1"
+        os.environ["SSL_KEYFILE"] = "server-key.pem"
+        os.environ["SSL_CERTFILE"] = "server-cert.pem"
     
     sys.argv = [sys.argv[0]] + remaining
 
@@ -260,6 +262,21 @@ def main():
         os.environ["SESSION_KEY"] = args.session
 
     # Call Pipecat's main which will call bot() with proper transport
+    # Monkey patch uvicorn to support SSL from environment variables
+    import uvicorn
+    original_run = uvicorn.run
+    
+    def patched_run(*args, **kwargs):
+        # Add SSL from environment if SSL is enabled
+        if os.getenv('SSL_ENABLED'):
+            if 'ssl_keyfile' not in kwargs and os.getenv('SSL_KEYFILE'):
+                kwargs['ssl_keyfile'] = os.getenv('SSL_KEYFILE')
+            if 'ssl_certfile' not in kwargs and os.getenv('SSL_CERTFILE'):
+                kwargs['ssl_certfile'] = os.getenv('SSL_CERTFILE')
+        return original_run(*args, **kwargs)
+    
+    uvicorn.run = patched_run
+    
     from pipecat.runner.run import main
 
     try:
