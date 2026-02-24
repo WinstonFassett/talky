@@ -123,7 +123,7 @@ def create_stt_service_from_config(provider: str, **kwargs):
     if not config:
         raise ValueError(f"STT provider '{provider}' not found in voice-backends.yaml")
 
-    if "default_model" in config and "model" not in kwargs:
+    if "default_model" in config and not kwargs.get("model"):
         kwargs["model"] = config["default_model"]
 
     return _create_service_from_backend_config(config, provider, **kwargs)
