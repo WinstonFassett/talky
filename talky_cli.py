@@ -10,6 +10,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # Determine project root from this script's location
@@ -58,12 +59,12 @@ def validate_certificates(client_dir: Path, external_binding: bool) -> bool:
     
     if not cert_file.exists():
         print(f"❌ SSL certificate not found: {cert_file}")
-        print("   Generate certificates with: openssl req -x509 -newkey rsa:2048 -keyout localhost-key.pem -out localhost-cert.pem -days 365 -nodes")
+        print("   Generate certificates with: ./scripts/generate-certs.sh")
         return False
     
     if not key_file.exists():
         print(f"❌ SSL private key not found: {key_file}")
-        print("   Generate certificates with: openssl req -x509 -newkey rsa:2048 -keyout localhost-key.pem -out localhost-cert.pem -days 365 -nodes")
+        print("   Generate certificates with: ./scripts/generate-certs.sh")
         return False
     
     return True
@@ -72,15 +73,29 @@ def validate_certificates(client_dir: Path, external_binding: bool) -> bool:
 def start_client_dev_server(external_binding=False, host="localhost"):
     """Start the client dev server if not already running."""
     try:
-        # Check if port 5173 is already in use
-        result = subprocess.run(
-            ["lsof", "-ti", ":5173"],
-            capture_output=True,
-            text=True,
-        )
-        if result.stdout.strip():
+        # Check if port 5173 is already in use with retry logic
+        # Get configured frontend port
+        try:
+            network_config = getattr(pm, 'settings', {}).get("network", {})
+            frontend_port = network_config.get("frontend_port", 5173)
+        except:
+            frontend_port = 5173
+            
+        port_in_use = False
+        for attempt in range(3):  # Try 3 times to handle race conditions
+            result = subprocess.run(
+                ["lsof", "-ti", f":{frontend_port}"],
+                capture_output=True,
+                text=True,
+            )
+            if result.stdout.strip():
+                port_in_use = True
+                break
+            time.sleep(0.1)  # Brief delay between attempts
+        
+        if port_in_use:
             host_msg = "externally" if external_binding else "locally"
-            print(f"📱 Client dev server already running {host_msg} on port 5173")
+            print(f"📱 Client dev server already running {host_msg} on port {frontend_port}")
             return True
         
         # Start the client dev server
@@ -121,20 +136,36 @@ def start_client_dev_server(external_binding=False, host="localhost"):
         except:
             env['VITE_BACKEND_PORT'] = "7860"
             
-        subprocess.Popen(
+        # Start server with better error handling
+        process = subprocess.Popen(
             npm_args,
             cwd=str(client_dir),
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
         
+        # Wait a moment and check if server started successfully
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+            if process.returncode != 0:
+                print(f"❌ Failed to start client dev server:")
+                if stderr:
+                    print(f"   Error: {stderr.strip()}")
+                if stdout:
+                    print(f"   Output: {stdout.strip()}")
+                return False
+        except subprocess.TimeoutExpired:
+            # Server is still running (which is good for dev server)
+            pass
+        
         host_desc = "externally (HTTPS)" if external_binding else "locally (HTTP)"
-        print(f"📱 Client dev server starting {host_desc} on port 5173")
+        print(f"📱 Client dev server starting {host_desc} on port {frontend_port}")
         
         # Wait a bit for the server to start
-        import time
-        time.sleep(3)
+        time.sleep(2)
+        
         return True
         
     except subprocess.SubprocessError:
