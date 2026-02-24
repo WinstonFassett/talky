@@ -4,6 +4,7 @@
 import argparse
 import os
 import sys
+from pathlib import Path
 
 # CRITICAL: Configure logging BEFORE any other imports to beat pipecat's loguru setup
 from logging_config import setup_logging
@@ -167,33 +168,48 @@ def main():
             # Wait for server to be ready
             time.sleep(3)
 
-            # Determine host and protocol
+            # Determine host and protocol using shared network utility
             host = getattr(args, 'host', 'localhost')
-            if host == '0.0.0.0':
-                # For external binding, try to get external hostname from config
-                try:
-                    from config.profile_manager import get_profile_manager
-                    pm = get_profile_manager()
-                    network_config = getattr(pm, 'settings', {}).get("network", {})
-                    external_host = network_config.get("external_host")
-                    if external_host:
-                        host = external_host
-                    else:
-                        # Try to detect hostname, but warn user to configure it
-                        import socket
-                        host = socket.gethostname()
-                        print(f"⚠️  No external_host configured in settings.yaml, using detected hostname: {host}")
+            try:
+                from config.profile_manager import get_profile_manager
+                pm = get_profile_manager()
+                network_config = getattr(pm, 'settings', {}).get("network", {})
+                config_host = network_config.get("host", "localhost")
+                external_host = network_config.get("external_host")
+                
+                # Import shared network utility
+                import sys
+                sys.path.append(str(Path(__file__).parent.parent))
+                from shared.network_utils import detect_external_hostname, get_browser_url
+                
+                # Get port configuration
+                frontend_port = network_config.get("frontend_port", 5173)
+                backend_port = network_config.get("backend_port", 7860)
+                
+                if host == '0.0.0.0':
+                    # For external binding, detect actual hostname
+                    detected_host = detect_external_hostname(config_host, external_host)
+                    if detected_host != config_host:
+                        print(f"⚠️  No external_host configured in settings.yaml, using detected hostname: {detected_host}")
                         print("   Set external_host in ~/.talky/settings.yaml for reliable external access")
-                except:
-                    print("⚠️  Could not detect external hostname - configure external_host in settings.yaml")
-                    host = 'localhost'
-            
-            protocol = 'https' if getattr(args, 'ssl', False) else 'http'
-            frontend_port = 5173
-            backend_port = 7860
+                    host = detected_host
+                
+                protocol = 'https' if getattr(args, 'ssl', False) else 'http'
+                vite_url = get_browser_url(host, frontend_port, getattr(args, 'ssl', False))
+                debug_url = get_browser_url(host, backend_port, getattr(args, 'ssl', False))
+                
+            except Exception as e:
+                print(f"⚠️  Could not detect external hostname: {e}")
+                print("   Configure external_host in settings.yaml for reliable external access")
+                host = 'localhost'
+                protocol = 'https' if getattr(args, 'ssl', False) else 'http'
+                # Use default ports for fallback
+                frontend_port = 5173
+                backend_port = 7860
+                vite_url = f"{protocol}://{host}:{frontend_port}?autoconnect=true"
+                debug_url = f"{protocol}://{host}:{backend_port}/client?autoconnect=true"
 
             # Try to open custom Vite client first
-            vite_url = f"{protocol}://{host}:{frontend_port}?autoconnect=true"
             try:
                 webbrowser.open(vite_url)
                 print(f"🌐 Opened browser to custom UI: {vite_url}")
@@ -202,13 +218,12 @@ def main():
                 print(f"🔗 Connect manually to: {vite_url}")
                 
                 # Fallback to debug UI
-                url = f"{protocol}://{host}:{backend_port}/client?autoconnect=true"
                 try:
-                    webbrowser.open(url)
-                    print(f"🌐 Opened browser to debug UI (fallback): {url}")
+                    webbrowser.open(debug_url)
+                    print(f"🌐 Opened browser to debug UI (fallback): {debug_url}")
                 except Exception as e2:
                     print(f"⚠️  Could not open debug UI either")
-                    print(f"🔗 Debug UI fallback: {url}")
+                    print(f"🔗 Debug UI fallback: {debug_url}")
 
         # Start delayed browser open in background thread
         threading.Thread(target=delayed_open, daemon=True).start()

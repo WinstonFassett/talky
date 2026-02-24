@@ -10,6 +10,7 @@ import json
 import os
 import ssl
 import time
+from pathlib import Path
 from typing import Optional
 import websockets
 from cryptography.hazmat.primitives import serialization
@@ -233,32 +234,23 @@ class OpenClawLLMService(LLMService):
     def __init__(self, *, gateway_url: str = None, agent_id: str = "main", session_key: str = None, **kwargs):
         super().__init__(**kwargs)
 
-        # Determine gateway URL based on config file settings
-        default_gateway = "ws://localhost:18789"
+        # Determine gateway URL using shared network utility
         try:
             from server.config.profile_manager import get_profile_manager
             pm = get_profile_manager()
             network_config = getattr(pm, 'settings', {}).get("network", {})
             config_host = network_config.get("host", "localhost")
+            external_host = network_config.get("external_host")
             
-            if config_host and config_host != "localhost":
-                # Use external hostname when not localhost
-                if config_host == "0.0.0.0":
-                    # For 0.0.0.0 binding, detect actual hostname for WebSocket connections
-                    import socket
-                    try:
-                        # Try to get the actual hostname that would be used externally
-                        hostname = socket.gethostname()
-                        # Fallback to localhost if hostname resolution fails
-                        default_gateway = f"ws://{hostname}:18789"
-                    except Exception:
-                        default_gateway = "ws://localhost:18789"
-                else:
-                    hostname = config_host
-                    default_gateway = f"ws://{hostname}:18789"
+            # Import shared network utility
+            import sys
+            sys.path.append(str(Path(__file__).parent.parent.parent))
+            from shared.network_utils import get_default_gateway_url
+            
+            default_gateway = get_default_gateway_url(config_host, external_host, 18789)
         except Exception:
             # Fallback to localhost if config reading fails
-            pass
+            default_gateway = "ws://localhost:18789"
         
         self.gateway_url = gateway_url or os.getenv("OPENCLAW_GATEWAY_URL", default_gateway)
         self.agent_id = agent_id
