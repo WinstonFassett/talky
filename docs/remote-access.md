@@ -48,6 +48,10 @@ network:
 export VITE_HOST="0.0.0.0"              # Host binding (default: localhost)
 export VITE_ALLOWED_HOSTS="localhost,127.0.0.1,YOUR_IP"  # Allowed hosts
 export VITE_BACKEND_PORT="7860"          # Backend port (default: 7860)
+
+# MCP Server configuration
+export MCP_HOST="localhost"              # MCP server host binding (default: localhost)
+export MCP_PORT="9090"                   # MCP server port (default: 9090)
 ```
 
 ## Troubleshooting
