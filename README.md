@@ -2,6 +2,10 @@
 
 Voice interface for AI. Talk to OpenClaw, Moltis or Pi. Or use MCP to talk to Claude.
 
+<a href="screenshots/main.png" target="_blank">
+  <img src="screenshots/main.png" alt="Talky Demo" width="450">
+</a>
+
 ## Quick Start
 
 **Requirements**: Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/), Homebrew
