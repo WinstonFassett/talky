@@ -183,11 +183,17 @@ def cmd_say(args):
         os.environ["TALKY_LOG_LEVEL"] = args.log_level
     
     # Ensure dependencies are installed before importing
-    from shared.dependency_installer import ensure_dependencies
+    from shared.dependency_installer import ensure_dependencies, ensure_pyaudio
     
     if not ensure_dependencies():
         print("❌ Failed to install required dependencies")
         sys.exit(1)
+    
+    # Check for pyaudio if not using --no-daemon and not outputting to file
+    if not getattr(args, "no_daemon", False) and not getattr(args, "output", None):
+        if not ensure_pyaudio():
+            print("⚠️  Could not install pyaudio")
+            print("   Audio will be generated but not played. Use --output <file> to save.")
     
     from shared.daemon_protocol import daemon_is_running
 
