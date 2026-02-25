@@ -9,6 +9,7 @@ dependencies = [
     "loguru>=0.7.3",
     "pipecat-ai[runner,silero,webrtc]>=0.0.102",
     "InquirerPy>=0.3.4",
+    "tomli>=2.0.0; python_version < '3.11'",
 ]
 
 [tool.uv.workspace]
@@ -22,6 +23,55 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pexpect>=4.9.0",
 ]
+
+[project.optional-dependencies]
+# Audio extras
+audio = ["pyaudio"]
+
+# TTS provider extras
+tts-openai = ["pipecat-ai[openai]"]
+tts-elevenlabs = ["pipecat-ai[elevenlabs]"]
+tts-cartesia = ["pipecat-ai[cartesia]"]
+tts-fish = ["pipecat-ai[fish]"]
+tts-gradium = ["pipecat-ai[gradium]"]
+tts-hume = ["pipecat-ai[hume]"]
+tts-lmnt = ["pipecat-ai[lmnt]"]
+tts-neuphonic = ["pipecat-ai[neuphonic]"]
+tts-nvidia = ["pipecat-ai[nvidia]"]
+tts-playht = ["pipecat-ai[playht]"]
+tts-resembleai = ["pipecat-ai[resembleai]"]
+tts-rime = ["pipecat-ai[rime]"]
+tts-sambanova = ["pipecat-ai[sambanova]"]
+tts-sarvam = ["pipecat-ai[sarvam]"]
+tts-kokoro = ["pipecat-ai[kokoro]"]
+
+# STT provider extras
+stt-assemblyai = ["pipecat-ai[assemblyai]"]
+stt-asyncai = ["pipecat-ai[asyncai]"]
+stt-deepgram = ["pipecat-ai[deepgram]"]
+stt-fish = ["pipecat-ai[fish]"]
+stt-gladia = ["pipecat-ai[gladia]"]
+stt-google = ["pipecat-ai[google]"]
+stt-hume = ["pipecat-ai[hume]"]
+stt-inworld = ["pipecat-ai[inworld]"]
+stt-nvidia = ["pipecat-ai[nvidia]"]
+stt-openai = ["pipecat-ai[openai]"]
+stt-resembleai = ["pipecat-ai[resembleai]"]
+stt-sarvam = ["pipecat-ai[sarvam]"]
+stt-soniox = ["pipecat-ai[soniox]"]
+stt-speechmatics = ["pipecat-ai[speechmatics]"]
+stt-whisper-local = ["pipecat-ai[mlx-whisper]"]
+
+# Cloud provider extras (combined TTS/STT)
+aws = ["pipecat-ai[aws]"]
+azure = ["pipecat-ai[azure]"]
+fal = ["pipecat-ai[fal]"]
+groq = ["pipecat-ai[groq]"]
+
+# Convenience groups
+tts = ["pipecat-ai[openai,elevenlabs,cartesia,fish,gradium,hume,lmnt,neuphonic,nvidia,playht,resembleai,rime,sambanova,sarvam,kokoro]"]
+stt = ["pipecat-ai[assemblyai,asyncai,deepgram,fish,gladia,google,hume,inworld,nvidia,openai,resembleai,sarvam,soniox,speechmatics,mlx-whisper]"]
+all = ["pyaudio", "pipecat-ai[openai,elevenlabs,cartesia,fish,gradium,hume,lmnt,neuphonic,nvidia,playht,resembleai,rime,sambanova,sarvam,kokoro,assemblyai,asyncai,deepgram,gladia,google,inworld,soniox,speechmatics,mlx-whisper,aws,azure,fal,groq]"]
 
 [tool.ruff]
 line-length = 100
