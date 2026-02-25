@@ -52,38 +52,42 @@ if not _check_python_version():
 os.environ.setdefault("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
 os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(Path.home() / ".cache" / "huggingface" / "hub"))
 
-# Maps talky provider name → pipecat-ai extra name.
+# Maps talky provider name → pyproject.toml extra name.
 # Covers every provider in pipecat/services/ that requires credentials.
-PROVIDER_EXTRA: dict[str, str] = {
-    "assemblyai":    "assemblyai",
-    "asyncai":       "asyncai",
+PROVIDER_TO_EXTRA: dict[str, str] = {
+    # TTS providers
+    "assemblyai":    "tts-openai",
+    "asyncai":       "tts-openai", 
     "aws":           "aws",
     "azure":         "azure",
-    "camb":          "camb",
-    "cartesia":      "cartesia",
-    "deepgram":      "deepgram",
-    "elevenlabs":    "elevenlabs",
+    "camb":          "tts-openai",
+    "cartesia":      "tts-cartesia",
+    "deepgram":      "stt-deepgram",
+    "elevenlabs":    "tts-elevenlabs",
     "fal":           "fal",
-    "fish":          "fish",
-    "gladia":        "gladia",
-    "google":        "google",
-    "gradium":       "gradium",
+    "fish":          "tts-fish",
+    "gladia":        "stt-gladia",
+    "google":        "stt-google",
+    "gradium":       "tts-gradium",
     "groq":          "groq",
-    "hume":          "hume",
-    "inworld":       "inworld",
-    "kokoro":        "kokoro",
-    "lmnt":          "lmnt",
-    "neuphonic":     "neuphonic",
-    "nvidia":        "nvidia",
-    "openai":        "openai",
-    "playht":        "playht",
-    "resembleai":    "resembleai",
-    "rime":          "rime",
-    "sambanova":     "sambanova",
-    "sarvam":        "sarvam",
-    "soniox":        "soniox",
-    "speechmatics":  "speechmatics",
-    "whisper_local": "mlx-whisper",
+    "hume":          "tts-hume",
+    "inworld":       "stt-inworld",
+    "kokoro":        "tts-kokoro",
+    "lmnt":          "tts-lmnt",
+    "neuphonic":     "tts-neuphonic",
+    "nvidia":        "tts-nvidia",
+    "openai":        "tts-openai",
+    "playht":        "tts-playht",
+    "resembleai":    "tts-resembleai",
+    "rime":          "tts-rime",
+    "sambanova":     "tts-sambanova",
+    "sarvam":        "tts-sarvam",
+    "soniox":        "stt-soniox",
+    "speechmatics":  "stt-speechmatics",
+    "whisper_local": "stt-whisper-local",
+    
+    # Local audio (not a pipecat provider)
+    "local_audio":   "audio",
 }
 
 
@@ -91,43 +95,44 @@ def _is_tool_env() -> bool:
     return ".local/share/uv/tools/" in sys.executable
 
 
-@functools.lru_cache(maxsize=None)
-def _extra_dist_names(extra: str) -> list[str]:
-    """Return distribution names pulled in by a pipecat-ai extra.
-
-    Reads pipecat-ai's own package metadata so we never hard-code
-    which SDK each extra installs.
-    """
+def _read_project_extras() -> dict[str, list[str]]:
+    """Read optional dependencies from pyproject.toml."""
     try:
-        dist = importlib.metadata.distribution("pipecat-ai")
-        names: list[str] = []
-        for req in dist.requires or []:
-            if f'extra == "{extra}"' not in req and f"extra == '{extra}'" not in req:
-                continue
-            # Take everything before the environment marker
-            pkg_part = req.split(";")[0].strip()
-            # Extract bare dist name: stop at any version specifier or extras bracket
-            name = re.split(r"[><=!~\[,\s]", pkg_part)[0].strip()
-            # Skip self-references
-            if name and name.lower() not in ("pipecat-ai", "pipecat_ai"):
-                names.append(name)
-        return names
-    except Exception:
-        return []
+        import tomllib
+    except ImportError:
+        # Python < 3.11 fallback
+        try:
+            import tomli as tomllib
+        except ImportError:
+            logger.error("Neither tomllib nor tomli available for reading pyproject.toml")
+            return {}
+    
+    try:
+        with open(_root / "pyproject.toml", "rb") as f:
+            data = tomllib.load(f)
+        return data.get("project", {}).get("optional-dependencies", {})
+    except Exception as e:
+        logger.error(f"Failed to read pyproject.toml: {e}")
+        return {}
 
 
 def _check_extra_installed(extra: str) -> bool:
-    """Return True if every package required by a pipecat-ai extra is present.
-
-    An empty dist list means the extra has no external SDK deps (it relies only
-    on pipecat-ai's own packages which are already installed), so we return True.
+    """Return True if every package required by an extra is present.
+    
+    Reads from pyproject.toml static definitions instead of pipecat metadata.
     """
-    dists = _extra_dist_names(extra)
-    if not dists:
-        return True  # no external packages needed
-    for name in dists:
+    extras = _read_project_extras()
+    if extra not in extras:
+        return True  # Extra doesn't exist or has no dependencies
+    
+    for package in extras[extra]:
+        # Extract package name from complex specs like "pipecat-ai[openai]"
+        pkg_name = re.split(r"[><=!~\[,\s]", package)[0].strip()
+        if not pkg_name:
+            continue
+            
         try:
-            importlib.metadata.distribution(name)
+            importlib.metadata.distribution(pkg_name)
         except importlib.metadata.PackageNotFoundError:
             return False
     return True
@@ -161,24 +166,37 @@ def get_configured_providers() -> Set[str]:
         for key in ("tts_provider", "stt_provider"):
             if val := profile.get(key):
                 providers.add(val)
+        
+        # Check if local audio playback is needed for server/daemon
+        output_device = profile.get("output_device", "")
+        if output_device and output_device != "none":
+            providers.add("local_audio")
 
     return providers
 
 
-def _all_extras(providers: Set[str]) -> list[str]:
-    """Return all pipecat extra names needed by the given providers."""
-    return [
-        extra
-        for provider in providers
-        if (extra := PROVIDER_EXTRA.get(provider))
-    ]
+def get_cli_providers() -> Set[str]:
+    """Get providers needed for CLI commands (always includes audio)."""
+    providers = get_configured_providers()
+    # CLI commands like 'say' always need audio playback
+    providers.add("local_audio")
+    return providers
+
+
+def _providers_to_extras(providers: Set[str]) -> list[str]:
+    """Return all extra names needed by the given providers."""
+    extras = []
+    for provider in providers:
+        if extra := PROVIDER_TO_EXTRA.get(provider):
+            extras.append(extra)
+    return extras
 
 
 def _missing_extras(providers: Set[str]) -> list[str]:
-    """Return pipecat extra names that are not yet installed."""
+    """Return extra names that are not yet installed."""
     return [
         extra
-        for extra in _all_extras(providers)
+        for extra in _providers_to_extras(providers)
         if not _check_extra_installed(extra)
     ]
 
@@ -189,15 +207,18 @@ def _uv_cmd() -> str | None:
 
 
 def install_dependencies(providers: Set[str]) -> bool:
-    """Install missing pipecat extras for the given providers.
+    """Install missing extras for the given providers.
+
+    Uses static definitions from pyproject.toml to determine which packages
+    to install for each extra.
 
     In a uv tool environment: runs `uv tool install --reinstall --with`
     then re-execs the process so the new packages are loaded.
 
     In a regular venv: runs `uv pip install`.
     """
-    missing = _missing_extras(providers)
-    if not missing:
+    missing_extras = _missing_extras(providers)
+    if not missing_extras:
         return True
 
     uv = _uv_cmd()
@@ -205,13 +226,27 @@ def install_dependencies(providers: Set[str]) -> bool:
         logger.error("uv not found — cannot install dependencies")
         return False
 
-    missing_packages = [f"pipecat-ai[{e}]" for e in missing]
-    print(f"Installing {', '.join(missing_packages)}...")
+    # Get all packages needed for missing extras
+    extras = _read_project_extras()
+    missing_packages = []
+    for extra in missing_extras:
+        if extra in extras:
+            missing_packages.extend(extras[extra])
+    
+    if not missing_packages:
+        return True
+
+    print(f"Installing {', '.join(missing_extras)} dependencies...")
 
     if _is_tool_env():
         # uv tool install --with replaces ALL previous --with packages,
         # so we must pass every needed extra, not just the missing ones.
-        all_packages = [f"pipecat-ai[{e}]" for e in _all_extras(providers)]
+        all_extras = _providers_to_extras(providers)
+        all_packages = []
+        for extra in all_extras:
+            if extra in extras:
+                all_packages.extend(extras[extra])
+        
         # Pin to the same Python the tool env was created with,
         # otherwise uv defaults to the system Python which may be incompatible.
         python = sys.executable
@@ -244,70 +279,22 @@ def install_dependencies(providers: Set[str]) -> bool:
     return True
 
 
-def install_pyaudio() -> bool:
-    """Install pyaudio for audio playback."""
-    uv = _uv_cmd()
-    if not uv:
-        logger.error("uv not found — cannot install pyaudio")
-        return False
-
-    print("Installing pyaudio for audio playback...")
-
-    if _is_tool_env():
-        # In tool environment, we need to use uv tool install with --with
-        # BUT we don't restart the process to avoid infinite loops
-        python = sys.executable
-        result = subprocess.run(
-            [uv, "tool", "install", "--editable", str(_root), "--python", python, "--with", "pyaudio"],
-            capture_output=True
-        )
-        if result.returncode != 0:
-            # Try with reinstall
-            result = subprocess.run(
-                [uv, "tool", "install", "--editable", str(_root), "--reinstall", "--python", python, "--with", "pyaudio"],
-                capture_output=True
-            )
-        if result.returncode != 0:
-            print("❌ Failed to install pyaudio")
-            return False
-        print("✅ pyaudio installed successfully")
-        return True
-    else:
-        # Non-tool env
-        result = subprocess.run([uv, "pip", "install", "pyaudio"], capture_output=True, text=True)
-        if result.returncode != 0 and "No virtual environment" in result.stderr:
-            result = subprocess.run(
-                [uv, "pip", "install", "--user", "pyaudio"], capture_output=True, text=True
-            )
-        if result.returncode != 0:
-            logger.error(f"Failed to install pyaudio: {result.stderr}")
-            return False
-        return True
 
 
-def ensure_dependencies() -> bool:
-    """Ensure dependencies for the configured providers (current env)."""
+def ensure_dependencies(for_cli: bool = False) -> bool:
+    """Ensure dependencies for the configured providers (current env).
+    
+    Args:
+        for_cli: If True, include audio dependencies needed for CLI commands
+    """
     try:
-        return install_dependencies(get_configured_providers())
+        if for_cli:
+            providers = get_cli_providers()
+        else:
+            providers = get_configured_providers()
+        return install_dependencies(providers)
     except Exception as e:
         logger.error(f"Failed to ensure dependencies: {e}")
-        return False
-
-
-def ensure_pyaudio() -> bool:
-    """Ensure pyaudio is installed for audio playback."""
-    try:
-        # Check if pyaudio is already available
-        try:
-            import pyaudio
-            return True
-        except ImportError:
-            pass
-        
-        # Install pyaudio using the dedicated installer
-        return install_pyaudio()
-    except Exception as e:
-        logger.error(f"Failed to ensure pyaudio: {e}")
         return False
 
 

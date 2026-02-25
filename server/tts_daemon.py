@@ -50,18 +50,11 @@ class TTSDaemon:
             # Ensure dependencies are available before initializing TTS
             import sys
             sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            from shared.dependency_installer import ensure_dependencies, ensure_pyaudio
+            from shared.dependency_installer import ensure_dependencies
             
             if not ensure_dependencies():
                 logger.error("Failed to install required dependencies")
                 return False
-            
-            # Check for pyaudio if we'll be doing direct audio playback
-            try:
-                import pyaudio
-            except ImportError:
-                if not ensure_pyaudio():
-                    logger.warning("Could not install pyaudio - audio playback unavailable")
             
             self.default_tts_service = create_tts_for_profile()
             await self.default_tts_service.start(StartFrame())
