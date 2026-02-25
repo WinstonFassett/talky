@@ -182,19 +182,6 @@ def cmd_say(args):
     if getattr(args, "log_level", None):
         os.environ["TALKY_LOG_LEVEL"] = args.log_level
     
-    # Ensure dependencies are installed before importing
-    from shared.dependency_installer import ensure_dependencies, ensure_pyaudio
-    
-    if not ensure_dependencies():
-        print("❌ Failed to install required dependencies")
-        sys.exit(1)
-    
-    # Check for pyaudio if not using --no-daemon and not outputting to file
-    if not getattr(args, "no_daemon", False) and not getattr(args, "output", None):
-        if not ensure_pyaudio():
-            print("⚠️  Could not install pyaudio")
-            print("   Audio will be generated but not played. Use --output <file> to save.")
-    
     from shared.daemon_protocol import daemon_is_running
 
     # server_dir is already defined globally from script location
@@ -221,8 +208,17 @@ def cmd_say(args):
         sys.exit(1)
 
     if args.no_daemon:
-        # Direct mode — no daemon
+        # Direct mode — no daemon, handle dependencies here
         import asyncio
+        from shared.dependency_installer import ensure_dependencies, ensure_pyaudio
+        
+        if not ensure_dependencies():
+            print("❌ Failed to install required dependencies")
+            sys.exit(1)
+        
+        if not ensure_pyaudio():
+            print("⚠️  Could not install pyaudio")
+            print("   Audio will be generated but not played. Use --output <file> to save.")
 
         from server.say_command import say_text
 
@@ -237,6 +233,7 @@ def cmd_say(args):
         )
         sys.exit(0 if success else 1)
 
+    # Daemon mode - let daemon handle its own dependencies
     if daemon_is_running():
         cmd = [sys.executable, str(server_dir / "tts_client.py"), args.text]
     else:
