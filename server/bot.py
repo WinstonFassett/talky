@@ -144,6 +144,14 @@ async def run_bot(
     @task.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
         logger.info("Client ready event fired")
+        # Add greeting message for all backends (including OpenClaw)
+        context.messages.append(
+            {
+                "role": "user",
+                "content": "Hello! Please greet me and let me know you're ready to help.",
+            }
+        )
+        await task.queue_frames([LLMRunFrame()])
 
     @task.rtvi.event_handler("on_client_message")
     async def on_client_message(rtvi, msg):
@@ -156,13 +164,6 @@ async def run_bot(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Client connected")
-        context.messages.append(
-            {
-                "role": "user",
-                "content": "Hello! Please greet me and let me know you're ready to help.",
-            }
-        )
-        await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):

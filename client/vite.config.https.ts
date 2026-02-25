@@ -16,12 +16,16 @@ const getHost = (): string => {
   return process.env.VITE_HOST || 'localhost';
 };
 
-// https://vite.dev/config/
+// HTTPS config for external access
 export default defineConfig({
   plugins: [react()],
   server: {
     host: getHost(),
     port: 5173,
     allowedHosts: getAllowedHosts(),
+    https: {
+      key: './localhost-key.pem',
+      cert: './localhost-cert.pem',
+    },
   },
 });

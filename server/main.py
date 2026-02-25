@@ -4,6 +4,7 @@
 import argparse
 import os
 import sys
+from pathlib import Path
 
 # CRITICAL: Configure logging BEFORE any other imports to beat pipecat's loguru setup
 from logging_config import setup_logging
@@ -75,6 +76,10 @@ def main():
     parser.add_argument("--config-dir", "-c", help="Config directory (default: ~/.talky)")
 
     parser.add_argument("--session", "-s", help="Override session key for LLM backend")
+
+    parser.add_argument("--host", help="Host address for Pipecat server (default: localhost)")
+    
+    parser.add_argument("--ssl", action="store_true", help="Enable HTTPS with self-signed certificates")
 
     args, remaining = parser.parse_known_args()
 
@@ -163,16 +168,62 @@ def main():
             # Wait for server to be ready
             time.sleep(3)
 
+            # Determine host and protocol using shared network utility
+            host = getattr(args, 'host', 'localhost')
+            try:
+                from config.profile_manager import get_profile_manager
+                pm = get_profile_manager()
+                network_config = getattr(pm, 'settings', {}).get("network", {})
+                config_host = network_config.get("host", "localhost")
+                external_host = network_config.get("external_host")
+                
+                # Import shared network utility
+                import sys
+                sys.path.append(str(Path(__file__).parent.parent))
+                from shared.network_utils import detect_external_hostname, get_browser_url
+                
+                # Get port configuration
+                frontend_port = network_config.get("frontend_port", 5173)
+                backend_port = network_config.get("backend_port", 7860)
+                
+                if host == '0.0.0.0':
+                    # For external binding, detect actual hostname
+                    detected_host = detect_external_hostname(config_host, external_host)
+                    if detected_host != config_host:
+                        print(f"⚠️  No external_host configured in settings.yaml, using detected hostname: {detected_host}")
+                        print("   Set external_host in ~/.talky/settings.yaml for reliable external access")
+                    host = detected_host
+                
+                protocol = 'https' if getattr(args, 'ssl', False) else 'http'
+                vite_url = get_browser_url(host, frontend_port, getattr(args, 'ssl', False))
+                debug_url = get_browser_url(host, backend_port, getattr(args, 'ssl', False))
+                
+            except Exception as e:
+                print(f"⚠️  Could not detect external hostname: {e}")
+                print("   Configure external_host in settings.yaml for reliable external access")
+                host = 'localhost'
+                protocol = 'https' if getattr(args, 'ssl', False) else 'http'
+                # Use default ports for fallback
+                frontend_port = 5173
+                backend_port = 7860
+                vite_url = f"{protocol}://{host}:{frontend_port}?autoconnect=true"
+                debug_url = f"{protocol}://{host}:{backend_port}/client?autoconnect=true"
+
             # Try to open custom Vite client first
-            vite_url = "http://localhost:5173?autoconnect=true"
             try:
                 webbrowser.open(vite_url)
                 print(f"🌐 Opened browser to custom UI: {vite_url}")
             except Exception as e:
+                print(f"⚠️  Could not auto-open browser: {e}")
+                print(f"🔗 Connect manually to: {vite_url}")
+                
                 # Fallback to debug UI
-                url = "http://localhost:7860/client?autoconnect=true"
-                webbrowser.open(url)
-                print(f"🌐 Opened browser to debug UI (fallback): {url}")
+                try:
+                    webbrowser.open(debug_url)
+                    print(f"🌐 Opened browser to debug UI (fallback): {debug_url}")
+                except Exception as e2:
+                    print(f"⚠️  Could not open debug UI either")
+                    print(f"🔗 Debug UI fallback: {debug_url}")
 
         # Start delayed browser open in background thread
         threading.Thread(target=delayed_open, daemon=True).start()
@@ -190,6 +241,31 @@ def main():
         # Add verbose flag for more verbose levels
         remaining.append('--verbose')
     
+    # Add host argument if provided
+    if args.host:
+        remaining.extend(['--host', args.host])
+    
+    # Add SSL arguments if requested
+    if args.ssl:
+        # Validate certificate files exist
+        from pathlib import Path
+        server_dir = Path(__file__).parent
+        key_file = server_dir / "server-key.pem"
+        cert_file = server_dir / "server-cert.pem"
+        
+        if not key_file.exists():
+            print(f"❌ SSL private key not found: {key_file}")
+            sys.exit(1)
+        
+        if not cert_file.exists():
+            print(f"❌ SSL certificate not found: {cert_file}")
+            sys.exit(1)
+        
+        # Set environment variables for monkey patch
+        os.environ["SSL_ENABLED"] = "1"
+        os.environ["SSL_KEYFILE"] = "server-key.pem"
+        os.environ["SSL_CERTFILE"] = "server-cert.pem"
+    
     sys.argv = [sys.argv[0]] + remaining
 
     # Set environment variables for bot() function (Pipecat calls bot(), not run_bot)
@@ -201,6 +277,21 @@ def main():
         os.environ["SESSION_KEY"] = args.session
 
     # Call Pipecat's main which will call bot() with proper transport
+    # Monkey patch uvicorn to support SSL from environment variables
+    import uvicorn
+    original_run = uvicorn.run
+    
+    def patched_run(*args, **kwargs):
+        # Add SSL from environment if SSL is enabled
+        if os.getenv('SSL_ENABLED'):
+            if 'ssl_keyfile' not in kwargs and os.getenv('SSL_KEYFILE'):
+                kwargs['ssl_keyfile'] = os.getenv('SSL_KEYFILE')
+            if 'ssl_certfile' not in kwargs and os.getenv('SSL_CERTFILE'):
+                kwargs['ssl_certfile'] = os.getenv('SSL_CERTFILE')
+        return original_run(*args, **kwargs)
+    
+    uvicorn.run = patched_run
+    
     from pipecat.runner.run import main
 
     try:

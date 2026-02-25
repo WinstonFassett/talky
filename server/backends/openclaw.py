@@ -10,6 +10,7 @@ import json
 import os
 import ssl
 import time
+from pathlib import Path
 from typing import Optional
 import websockets
 from cryptography.hazmat.primitives import serialization
@@ -50,7 +51,7 @@ def load_paired_tokens(openclaw_dir: str = None):
 
     # Use remote token if available, fallback to auth token
     gateway_config = openclaw_config.get("gateway", {})
-    gateway_token = (gateway_config.get("remote", {}).get("token") or
+    gateway_token = (gateway_config.get("remote", {}).get("token") or 
                      gateway_config.get("auth", {}).get("token"))
 
     # Load device-specific tokens from paired.json
@@ -65,7 +66,7 @@ def load_paired_tokens(openclaw_dir: str = None):
     # Get the operator token for this device
     operator_token = paired_config[device_id]["tokens"]["operator"]["token"]
 
-    return {"operator": operator_token, "gateway": gateway_token}
+    return {"operator": operator_token, "node": gateway_token, "gateway": gateway_token}
 
 
 def load_device_identity(openclaw_dir: str = None):
@@ -97,7 +98,10 @@ def build_device_auth(
 
     signed_at_ms = int(time.time() * 1000)
 
-    # Build payload string (matching OpenClaw's buildDeviceAuthPayload)
+    # Build payload string (matching OpenClaw's buildDeviceAuthPayload v2)
+    # Generate a random nonce (not timestamp) to avoid nonce mismatch
+    import secrets
+    nonce = secrets.token_hex(16)  # 32-character hex string
     payload = "|".join(
         [
             "v2",
@@ -109,6 +113,71 @@ def build_device_auth(
             str(signed_at_ms),
             token,
             nonce,
+        ]
+    )
+
+    # Sign with private key
+    private_key = serialization.load_pem_private_key(
+        identity["privateKeyPem"].encode(), password=None
+    )
+
+    if not isinstance(private_key, ed25519.Ed25519PrivateKey):
+        raise Exception("Expected Ed25519 private key")
+
+    signature = private_key.sign(payload.encode())
+    # Convert to base64url encoding (not regular base64)
+    signature_b64 = base64.urlsafe_b64encode(signature).decode().rstrip('=')
+
+    # Convert PEM public key to raw 32-byte Ed25519 key (like OpenClaw expects)
+    public_key = serialization.load_pem_public_key(identity["publicKeyPem"].encode())
+    # Get raw 32 bytes (skip SPKI header for Ed25519 keys)
+    public_key_der = public_key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    
+    # Ed25519 SPKI has prefix 0x302a300506032b6570032100 + 32 bytes raw key
+    # Extract just the raw 32 bytes
+    if len(public_key_der) == 44:  # 44 bytes = 12 bytes prefix + 32 bytes raw
+        public_key_raw = public_key_der[12:]  # Skip SPKI prefix
+    else:
+        # Fallback to Raw format (should be 32 bytes)
+        public_key_raw = public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+    public_key_b64url = base64.urlsafe_b64encode(public_key_raw).decode().rstrip('=')
+
+    return {
+        "id": identity["deviceId"],
+        "publicKey": public_key_b64url,
+        "signature": signature_b64,
+        "signedAt": signed_at_ms,
+        "nonce": nonce,  # Use the generated nonce
+    }
+
+
+def build_device_auth_with_nonce(
+    identity: dict, client_id: str, client_mode: str, role: str, scopes: list, token: str, nonce: str
+) -> dict:
+    """Build device auth object with server-provided nonce"""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    signed_at_ms = int(time.time() * 1000)
+
+    # Build payload string with server-provided nonce
+    payload = "|".join(
+        [
+            "v2",
+            identity["deviceId"],
+            client_id,
+            client_mode,
+            role,
+            ",".join(scopes),
+            str(signed_at_ms),
+            token,
+            nonce,  # Use server-provided nonce
         ]
     )
 
@@ -165,9 +234,23 @@ class OpenClawLLMService(LLMService):
     def __init__(self, *, gateway_url: str = None, agent_id: str = "main", session_key: str = None, **kwargs):
         super().__init__(**kwargs)
 
-        # OpenClaw WebSocket should always use localhost for backend connections
-        # even when frontend is accessed externally
-        default_gateway = "ws://localhost:18789"
+        # Determine gateway URL using shared network utility
+        try:
+            from server.config.profile_manager import get_profile_manager
+            pm = get_profile_manager()
+            network_config = getattr(pm, 'settings', {}).get("network", {})
+            config_host = network_config.get("host", "localhost")
+            external_host = network_config.get("external_host")
+            
+            # Import shared network utility
+            import sys
+            sys.path.append(str(Path(__file__).parent.parent.parent))
+            from shared.network_utils import get_default_gateway_url
+            
+            default_gateway = get_default_gateway_url(config_host, external_host, 18789)
+        except Exception:
+            # Fallback to localhost if config reading fails
+            default_gateway = "ws://localhost:18789"
         
         self.gateway_url = gateway_url or os.getenv("OPENCLAW_GATEWAY_URL", default_gateway)
         self.agent_id = agent_id
@@ -251,7 +334,7 @@ class OpenClawLLMService(LLMService):
             }
             
             await self._ws.send(json.dumps(connect_request))
-            
+
             # Handle auth response
             response = await self._ws.recv()
             data = json.loads(response)
@@ -264,7 +347,7 @@ class OpenClawLLMService(LLMService):
                     raise ConnectionError("No nonce in connect challenge")
                 
                 # Rebuild device auth with the server-provided nonce
-                device_auth = build_device_auth(
+                device_auth = build_device_auth_with_nonce(
                     self.device_identity, self.CLIENT_ID, self.CLIENT_MODE, self.ROLE, self.SCOPES, 
                     self.tokens["gateway"], challenge_nonce
                 )

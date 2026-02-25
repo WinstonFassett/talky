@@ -10,6 +10,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # Determine project root from this script's location
@@ -48,17 +49,53 @@ def kill_port_7860():
         pass
 
 
-def start_client_dev_server():
+def validate_certificates(client_dir: Path, external_binding: bool) -> bool:
+    """Validate SSL certificate files exist for HTTPS configuration."""
+    if not external_binding:
+        return True  # No validation needed for HTTP
+    
+    cert_file = client_dir / "localhost-cert.pem"
+    key_file = client_dir / "localhost-key.pem"
+    
+    if not cert_file.exists():
+        print(f"❌ SSL certificate not found: {cert_file}")
+        print("   Generate certificates with: ./scripts/generate-certs.sh")
+        return False
+    
+    if not key_file.exists():
+        print(f"❌ SSL private key not found: {key_file}")
+        print("   Generate certificates with: ./scripts/generate-certs.sh")
+        return False
+    
+    return True
+
+
+def start_client_dev_server(external_binding=False, host="localhost"):
     """Start the client dev server if not already running."""
     try:
-        # Check if port 5173 is already in use
-        result = subprocess.run(
-            ["lsof", "-ti", ":5173"],
-            capture_output=True,
-            text=True,
-        )
-        if result.stdout.strip():
-            print("📱 Client dev server already running on port 5173")
+        # Check if port 5173 is already in use with retry logic
+        # Get configured frontend port
+        try:
+            network_config = getattr(pm, 'settings', {}).get("network", {})
+            frontend_port = network_config.get("frontend_port", 5173)
+        except:
+            frontend_port = 5173
+            
+        port_in_use = False
+        for attempt in range(3):  # Try 3 times to handle race conditions
+            result = subprocess.run(
+                ["lsof", "-ti", f":{frontend_port}"],
+                capture_output=True,
+                text=True,
+            )
+            if result.stdout.strip():
+                port_in_use = True
+                break
+            time.sleep(0.1)  # Brief delay between attempts
+        
+        if port_in_use:
+            host_msg = "externally" if external_binding else "locally"
+            print(f"📱 Client dev server already running {host_msg} on port {frontend_port}")
             return True
         
         # Start the client dev server
@@ -66,6 +103,11 @@ def start_client_dev_server():
         if not client_dir.exists():
             print("⚠️ Client directory not found")
             return False
+        
+        # Validate certificates for HTTPS
+        if not validate_certificates(client_dir, external_binding):
+            return False
+            
 
         if not (client_dir / "node_modules").exists():
             print("📦 Installing client dependencies...")
@@ -75,17 +117,55 @@ def start_client_dev_server():
                 return False
 
         print("📱 Starting client dev server...")
-        subprocess.Popen(
-            ["npm", "run", "dev"],
+        if external_binding:
+            print("🌐 External binding enabled (HTTPS for WebRTC)")
+        
+        # Choose config based on external binding
+        config_file = "vite.config.https.ts" if external_binding else "vite.config.ts"
+        npm_args = ["npm", "run", "dev:https" if external_binding else "dev"]
+        
+        # Set up environment variables for Vite
+        env = os.environ.copy()
+        env['VITE_HOST'] = host
+        
+        # Get backend port from config
+        try:
+            network_config = getattr(pm, 'settings', {}).get("network", {})
+            backend_port = network_config.get("backend_port", "7860")
+            env['VITE_BACKEND_PORT'] = backend_port
+        except:
+            env['VITE_BACKEND_PORT'] = "7860"
+            
+        # Start server with better error handling
+        process = subprocess.Popen(
+            npm_args,
             cwd=str(client_dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
-        print("📱 Client dev server starting on http://localhost:5173")
+        
+        # Wait a moment and check if server started successfully
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+            if process.returncode != 0:
+                print(f"❌ Failed to start client dev server:")
+                if stderr:
+                    print(f"   Error: {stderr.strip()}")
+                if stdout:
+                    print(f"   Output: {stdout.strip()}")
+                return False
+        except subprocess.TimeoutExpired:
+            # Server is still running (which is good for dev server)
+            pass
+        
+        host_desc = "externally (HTTPS)" if external_binding else "locally (HTTP)"
+        print(f"📱 Client dev server starting {host_desc} on port {frontend_port}")
         
         # Wait a bit for the server to start
-        import time
-        time.sleep(3)
+        time.sleep(2)
+        
         return True
         
     except subprocess.SubprocessError:
@@ -192,7 +272,20 @@ def cmd_run(args):
     setup_logging(log_level)
     
     # Start client dev server FIRST if not running
-    start_client_dev_server()
+    from server.config.profile_manager import get_profile_manager
+    pm = get_profile_manager()
+    
+    # Get host from config or command line
+    host = getattr(args, "host", None)
+    if not host:
+        try:
+            network_config = getattr(pm, 'settings', {}).get("network", {})
+            host = network_config.get("host", "localhost")
+        except:
+            host = "localhost"
+    
+    external_binding = (host == "0.0.0.0")
+    start_client_dev_server(external_binding, host)
     
     # Kill any existing process on port 7860 (after Vite is ready)
     kill_port_7860()
@@ -221,6 +314,14 @@ def cmd_run(args):
         "--profile",
         talky_profile,
     ]
+
+    # Add host binding if specified
+    if host and host != "localhost":
+        cmd.extend(["--host", host])
+        print(f"🌐 Using host binding: {host}")
+        # Add SSL for external access (HTTPS required for WebRTC)
+        cmd.extend(["--ssl"])
+        print("🔒 HTTPS enabled for external access")
 
     if getattr(args, "voice_profile", None):
         cmd.extend(["--voice-profile", args.voice_profile])
@@ -337,6 +438,17 @@ def cmd_mcp(args):
 
     voice_profile = getattr(args, 'voice_profile', None)
     
+    # Get host from config or command line
+    host = getattr(args, "host", None)
+    if not host:
+        try:
+            from server.config.profile_manager import get_profile_manager
+            pm = get_profile_manager()
+            network_config = getattr(pm, 'settings', {}).get("network", {})
+            host = network_config.get("host", "localhost")
+        except:
+            host = "localhost"
+    
     # Validate voice profile if provided
     if voice_profile:
         try:
@@ -354,6 +466,9 @@ def cmd_mcp(args):
         print(f"Starting MCP server with voice profile: {voice_profile}")
     else:
         print("Starting MCP server...")
+    
+    if host and host != "localhost":
+        print(f"🌐 Using host binding: {host}")
     
     try:
         # Add mcp-server to path and import
@@ -413,6 +528,7 @@ def main():
     # === mcp subcommand ===
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP server")
     mcp_parser.add_argument("--voice-profile", "-v", help="Voice profile to use")
+    mcp_parser.add_argument("--host", help="Override host binding (default: from config)")
     mcp_parser.set_defaults(func=cmd_mcp)
 
     # === ls subcommand ===
@@ -435,7 +551,9 @@ def main():
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
     parser.add_argument("--session", "-s", help="Override session key for LLM backend")
 
-    args = parser.parse_args()
+    parser.add_argument("--host", help="Override host binding (default: from config)")
+
+    args, remaining = parser.parse_known_args()
 
     if hasattr(args, "func"):
         args.func(args)

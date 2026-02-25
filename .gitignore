@@ -241,3 +241,12 @@ archive/
 # Talky build artifacts
 talky_workspace.egg-info/
 voicebot_workspace.egg-info/
+
+# SSL certificates (generate locally)
+*.pem
+*.key
+*.cert
+client/localhost-*.pem
+client/localhost-*.key
+server/server-*.pem
+server/server-*.key

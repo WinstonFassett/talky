@@ -17,6 +17,7 @@ Tools:
 """
 
 import asyncio
+import os
 import signal
 import sys
 from contextlib import asynccontextmanager
@@ -30,7 +31,10 @@ logger.remove()
 logger.add(sys.stderr, level="INFO")
 
 # Create MCP server
-mcp = FastMCP(name="pipecat-mcp-server", host="localhost", port=9090)
+# Host is configurable via MCP_HOST environment variable, defaults to localhost for security
+mcp_host = os.getenv("MCP_HOST", "localhost")
+mcp_port = int(os.getenv("MCP_PORT", "9090"))
+mcp = FastMCP(name="pipecat-mcp-server", host=mcp_host, port=mcp_port)
 
 
 @mcp.tool()
