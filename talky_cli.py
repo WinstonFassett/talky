@@ -210,15 +210,11 @@ def cmd_say(args):
     if args.no_daemon:
         # Direct mode — no daemon, handle dependencies here
         import asyncio
-        from shared.dependency_installer import ensure_dependencies, ensure_pyaudio
+        from shared.dependency_installer import ensure_dependencies, get_configured_providers
         
-        if not ensure_dependencies():
+        if not ensure_dependencies(for_cli=True):
             print("❌ Failed to install required dependencies")
             sys.exit(1)
-        
-        if not ensure_pyaudio():
-            print("⚠️  Could not install pyaudio")
-            print("   Audio will be generated but not played. Use --output <file> to save.")
 
         from server.say_command import say_text
 
