@@ -255,6 +255,7 @@ def install_pyaudio() -> bool:
 
     if _is_tool_env():
         # In tool environment, we need to use uv tool install with --with
+        # BUT we don't restart the process to avoid infinite loops
         python = sys.executable
         result = subprocess.run(
             [uv, "tool", "install", "--editable", str(_root), "--python", python, "--with", "pyaudio"],
