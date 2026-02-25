@@ -75,7 +75,7 @@ PROVIDER_TO_EXTRA: dict[str, str] = {
     "kokoro":        "tts-kokoro",
     "lmnt":          "tts-lmnt",
     "neuphonic":     "tts-neuphonic",
-    "nvidia":        "nvidia",
+    "nvidia":        "tts-nvidia",
     "openai":        "tts-openai",
     "playht":        "tts-playht",
     "resembleai":    "tts-resembleai",
