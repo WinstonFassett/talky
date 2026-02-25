@@ -233,15 +233,55 @@ def install_dependencies(providers: Set[str]) -> bool:
         os.execv(sys.argv[0], sys.argv)  # does not return
 
     # Non-tool env (development / direct uv run)
-    result = subprocess.run([uv, "pip", "install"] + packages, capture_output=True, text=True)
+    result = subprocess.run([uv, "pip", "install"] + missing_packages, capture_output=True, text=True)
     if result.returncode != 0 and "No virtual environment" in result.stderr:
         result = subprocess.run(
-            [uv, "pip", "install", "--user"] + packages, capture_output=True, text=True
+            [uv, "pip", "install", "--user"] + missing_packages, capture_output=True, text=True
         )
     if result.returncode != 0:
         logger.error(f"Install failed: {result.stderr}")
         return False
     return True
+
+
+def install_pyaudio() -> bool:
+    """Install pyaudio for audio playback."""
+    uv = _uv_cmd()
+    if not uv:
+        logger.error("uv not found — cannot install pyaudio")
+        return False
+
+    print("Installing pyaudio for audio playback...")
+
+    if _is_tool_env():
+        # In tool environment, we need to use uv tool install with --with
+        python = sys.executable
+        result = subprocess.run(
+            [uv, "tool", "install", "--editable", str(_root), "--python", python, "--with", "pyaudio"],
+            capture_output=True
+        )
+        if result.returncode != 0:
+            # Try with reinstall
+            result = subprocess.run(
+                [uv, "tool", "install", "--editable", str(_root), "--reinstall", "--python", python, "--with", "pyaudio"],
+                capture_output=True
+            )
+        if result.returncode != 0:
+            print("❌ Failed to install pyaudio")
+            return False
+        print("✅ pyaudio installed successfully")
+        return True
+    else:
+        # Non-tool env
+        result = subprocess.run([uv, "pip", "install", "pyaudio"], capture_output=True, text=True)
+        if result.returncode != 0 and "No virtual environment" in result.stderr:
+            result = subprocess.run(
+                [uv, "pip", "install", "--user", "pyaudio"], capture_output=True, text=True
+            )
+        if result.returncode != 0:
+            logger.error(f"Failed to install pyaudio: {result.stderr}")
+            return False
+        return True
 
 
 def ensure_dependencies() -> bool:
@@ -250,6 +290,23 @@ def ensure_dependencies() -> bool:
         return install_dependencies(get_configured_providers())
     except Exception as e:
         logger.error(f"Failed to ensure dependencies: {e}")
+        return False
+
+
+def ensure_pyaudio() -> bool:
+    """Ensure pyaudio is installed for audio playback."""
+    try:
+        # Check if pyaudio is already available
+        try:
+            import pyaudio
+            return True
+        except ImportError:
+            pass
+        
+        # Install pyaudio using the dedicated installer
+        return install_pyaudio()
+    except Exception as e:
+        logger.error(f"Failed to ensure pyaudio: {e}")
         return False
 
 
