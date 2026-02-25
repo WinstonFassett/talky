@@ -28,8 +28,7 @@ talky say "Hello world"           # Test voice output
 - Opens browser at `localhost:7860/client` for voice chat
 
 **Change Voice**
-- `talky moltis -v local-uk-george` - Use different voice
-- `talky openclaw -v cloud-dude` - Cloud voice
+- `talky moltis -v kokoro-uk-george` - Use different voice
 - `talky say "test" -v google-puck` - Test specific voice
 
 **List Options**
@@ -37,7 +36,7 @@ talky say "Hello world"           # Test voice output
 
 **MCP Server** (for Claude Desktop/Claude Code)
 - `talky mcp` - Voice integration for Claude
-- `talky mcp -v cloud-dude` - Use specific voice
+- `talky mcp -v google-puck` - Use specific voice
 
 ## Documentation
 
@@ -53,14 +52,6 @@ talky say "Hello world"           # Test voice output
 > These require `brew install portaudio` and will download ML models on first use.
 > To avoid this, set a cloud voice profile in `~/.talky/settings.yaml` before running.
 
-**Debug Logging**
-```bash
-talky --log-level INFO
-
-# or use environment variable
-TALKY_LOG_LEVEL=DEBUG talky  # Levels: DEBUG, INFO, WARNING, ERROR
-```
-
 **Example API Keys**
 ```bash
 # Deepgram (speech-to-text)
@@ -70,4 +61,15 @@ echo '{"api_key":"your-key"}' > ~/.talky/credentials/deepgram.json
 echo '{"credentials":"your-credentials"}' > ~/.talky/credentials/google.json
 ```
 
-See [CLAUDE.md](CLAUDE.md) for dev details.
+**Debug Logging**
+
+Log levels: `DEBUG`, `INFO`, `WARNING`, `ERROR`
+
+Default: `ERROR`
+
+```bash
+talky --log-level INFO
+
+# or use environment variable
+TALKY_LOG_LEVEL=DEBUG talky  
+```
