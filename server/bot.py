@@ -37,6 +37,7 @@ from pipecat.runner.types import RunnerArguments, SmallWebRTCRunnerArguments
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+from server.config.voice_prompts import VOICE_PROMPT
 
 def run_bot_main(transport, llm_profile_name: str = None, voice_profile_name: str = None, session_key: str = None):
     """Run bot with given transport and profiles - for programmatic use"""
@@ -144,11 +145,18 @@ async def run_bot(
     @task.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
         logger.info("Client ready event fired")
+        # Add voice behavior system message first
+        context.messages.append(
+            {
+                "role": "system",
+                "content": VOICE_PROMPT,
+            }
+        )
         # Add greeting message for all backends (including OpenClaw)
         context.messages.append(
             {
                 "role": "user",
-                "content": "Hello! Please greet me and let me know you're ready to help.",
+                "content": "[TALKY VOICE STT]: Hello! Continue any existing conversation, otherwise greet me and let me know you're ready to help.",
             }
         )
         await task.queue_frames([LLMRunFrame()])

@@ -343,7 +343,7 @@ sequenceDiagram
   "params": {
     "sessionKey": "voice-session",
     "message": "User message here",
-    "idempotencyKey": "pipecat-12346"
+    "idempotencyKey": "talky-voice-chat-12346"
   }
 }
 ```

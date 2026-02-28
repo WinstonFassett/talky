@@ -556,7 +556,7 @@ class OpenClawLLMService(LLMService):
                 "params": {
                     "sessionKey": self.session_key,
                     "message": full_message,
-                    "idempotencyKey": f"pipecat-{request_id}",
+                    "idempotencyKey": f"talky-voice-chat-{request_id}",
                 },
             }
 
