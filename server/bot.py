@@ -37,6 +37,7 @@ from pipecat.runner.types import RunnerArguments, SmallWebRTCRunnerArguments
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+from server.config.voice_prompts import VOICE_PROMPT
 
 def run_bot_main(transport, llm_profile_name: str = None, voice_profile_name: str = None, session_key: str = None):
     """Run bot with given transport and profiles - for programmatic use"""
@@ -145,7 +146,6 @@ async def run_bot(
     async def on_client_ready(rtvi):
         logger.info("Client ready event fired")
         # Add voice behavior system message first
-        from server.config.voice_prompts import VOICE_PROMPT
         context.messages.append(
             {
                 "role": "system",

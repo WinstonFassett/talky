@@ -43,12 +43,13 @@ VOICE_PROMPT = (
 )
 
 def format_voice_message(user_message: str) -> str:
-    """Format user message with voice conversation guidance.
+    """Format user message with STT tagging.
     
     Args:
         user_message: The original user message
         
     Returns:
-        Formatted message with voice prompt
+        Message with TALKY VOICE STT tag
     """
     return f"[TALKY VOICE STT]: {user_message}"
+
