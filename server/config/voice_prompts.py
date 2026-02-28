@@ -2,10 +2,7 @@
 
 # Standard voice conversation guidance
 VOICE_PROMPT = (
-    "This is a voice conversation. Respond naturally for spoken interaction. "
-    "Keep responses concise and conversational. "
-    "Do NOT use markdown formatting, emojis, or special characters. "
-    "Use simple punctuation. Speak as if having a real conversation."
+    "[VOICE MODE] No markdown, emojis, or special characters. Natural conversation only."
 )
 
 def format_voice_message(user_message: str) -> str:
@@ -15,6 +12,6 @@ def format_voice_message(user_message: str) -> str:
         user_message: The original user message
         
     Returns:
-        Formatted message with voice prompt prepended
+        Formatted message with voice prompt
     """
-    return f"{VOICE_PROMPT}\n\nUser: {user_message}"
+    return f"{user_message}"

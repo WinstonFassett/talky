@@ -110,7 +110,7 @@ class MoltisLLMService(LLMService):
                 "minProtocol": 3,
                 "maxProtocol": 3,
                 "client": {
-                    "id": "pipecat-voice",
+                    "id": "talky-voice-chat",
                     "version": "1.0.0",
                     "platform": "python",
                     "mode": "voice",
@@ -270,7 +270,7 @@ class MoltisLLMService(LLMService):
                         "method": "chat.send",
                         "params": {
                             "text": full_message,
-                            "idempotencyKey": f"pipecat-{request_id}",
+                            "idempotencyKey": f"talky-voice-chat-{request_id}",
                         },
                     }
                 )

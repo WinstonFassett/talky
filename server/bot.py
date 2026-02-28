@@ -148,7 +148,7 @@ async def run_bot(
         context.messages.append(
             {
                 "role": "user",
-                "content": "Hello! Please greet me and let me know you're ready to help.",
+                "content": "Hello! I just joined via Talky voice chat. Continue any existing conversation, otherwise greet me and let me know you're ready to help.",
             }
         )
         await task.queue_frames([LLMRunFrame()])
