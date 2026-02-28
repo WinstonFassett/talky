@@ -144,11 +144,19 @@ async def run_bot(
     @task.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
         logger.info("Client ready event fired")
+        # Add voice behavior system message first
+        from server.config.voice_prompts import VOICE_PROMPT
+        context.messages.append(
+            {
+                "role": "system",
+                "content": VOICE_PROMPT,
+            }
+        )
         # Add greeting message for all backends (including OpenClaw)
         context.messages.append(
             {
                 "role": "user",
-                "content": "Hello! I just joined via Talky voice chat. Continue any existing conversation, otherwise greet me and let me know you're ready to help.",
+                "content": "[TALKY VOICE STT]: Hello! Continue any existing conversation, otherwise greet me and let me know you're ready to help.",
             }
         )
         await task.queue_frames([LLMRunFrame()])
