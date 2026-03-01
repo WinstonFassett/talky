@@ -629,7 +629,8 @@ def cmd_run_client_profile(args):
         
         if profile and hasattr(profile, 'backend') and hasattr(profile, 'app'):
             # New-style profile: backend + app
-            asyncio.run(_run_backend_client_profile(profile, args))
+            work_dir = getattr(args, 'dir', None)
+            asyncio.run(_run_backend_client_profile(profile, work_dir))
         else:
             # Legacy profile - use original bot
             cmd_run(args)
