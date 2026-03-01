@@ -21,6 +21,7 @@ class VoiceProfileSwitcher:
         self._cleanup_registered = False
         
         # Bootstrap all TTS services and create ServiceSwitcher
+        # Note: ServiceSwitcher doesn't support dynamic service addition
         self.tts_service_map = self._bootstrap_tts_services()
         
         # Get the initial service for the requested profile
@@ -214,6 +215,7 @@ class VoiceProfileSwitcher:
                 else:
                     # Cross-provider: switch using ServiceSwitcher
                     if new_profile.tts_provider in self.tts_service_map:
+                        # Service already exists, switch to it
                         try:
                             new_tts_service = self.tts_service_map[new_profile.tts_provider]
                             # Set the voice on the new service
@@ -221,6 +223,10 @@ class VoiceProfileSwitcher:
                                 new_tts_service.set_voice(new_profile.tts_voice)
                             
                             # Use ServiceSwitcher to properly switch the service
+                            if self.task is None:
+                                await rtvi.send_error_response(msg, "Voice switching not available - pipeline task not initialized")
+                                return
+                            
                             await self.task.queue_frames([ManuallySwitchServiceFrame(service=new_tts_service)])
                             
                             # Update current profile tracking
@@ -287,6 +293,10 @@ class VoiceProfileSwitcher:
                             new_tts_service.set_voice(new_profile.tts_voice)
                         
                         # Use ServiceSwitcher to properly switch the service
+                        if self.task is None:
+                            logger.error("Voice switching not available - pipeline task not initialized")
+                            return False
+                        
                         await self.task.queue_frames([ManuallySwitchServiceFrame(service=new_tts_service)])
                         
                         # Update current profile tracking

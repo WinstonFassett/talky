@@ -135,17 +135,30 @@ class PipecatMCPAgent:
         )
 
         # Create voice profile switcher (same as main server)
-        import sys
-        import os
-        # Add project root to path so we can import from server
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-        sys.path.insert(0, project_root)
-        
-        from server.features.voice_switcher import VoiceProfileSwitcher
-        from shared.profile_manager import get_profile_manager
+        # Use safe import with proper path handling
+        try:
+            import sys
+            import os
+            # Get absolute path to talky root (avoid relative path issues)
+            current_file = os.path.abspath(__file__)
+            mcp_server_src = os.path.dirname(current_file)
+            mcp_server = os.path.dirname(mcp_server_src)
+            talky_root = os.path.dirname(mcp_server)
+            
+            # Only add if not already in sys.path to avoid duplication
+            if talky_root not in sys.path:
+                sys.path.insert(0, talky_root)
+            
+            from server.features.voice_switcher import VoiceProfileSwitcher
+            from shared.profile_manager import get_profile_manager
+        except ImportError as e:
+            logger.error(f"Failed to import VoiceProfileSwitcher: {e}")
+            logger.error("Make sure TALKY_ROOT environment variable is set or run from talky directory")
+            raise RuntimeError("VoiceProfileSwitcher import failed - check environment setup")
         
         pm = get_profile_manager()
         profile_name = pm.get_default_voice_profile()
+        # Use standard VoiceProfileSwitcher (ServiceSwitcher doesn't support dynamic loading)
         self.voice_switcher = VoiceProfileSwitcher(profile_name, pm, task=None)
         tts_switcher = self.voice_switcher.get_service_switcher()
 
@@ -169,7 +182,7 @@ class PipecatMCPAgent:
         # Set task reference for voice switcher (needed for ManuallySwitchServiceFrame)
         self.voice_switcher.set_task(self._pipeline_task)
 
-        # Add RTVI event handlers for voice switching (same as main server)
+        # Add RTVI event handlers for voice switching (CRITICAL: Must be registered BEFORE runner.run)
         @self._pipeline_task.rtvi.event_handler("on_client_ready")
         async def on_client_ready(rtvi):
             logger.info("Client ready event fired")
