@@ -80,8 +80,9 @@ class AppLauncher:
         
                 
                 
-        # Just start Claude normally - no complex argument passing
-        claude_args = ["claude"]
+        # Start Claude with the voice conversation prompt
+        # Note: Don't use --allowedTools as it prevents prompt processing
+        claude_args = ["claude", "I want to have a voice conversation"]
         logger.info(f"Executing: {' '.join(claude_args)}")
         
         process = subprocess.Popen(
