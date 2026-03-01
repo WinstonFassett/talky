@@ -111,9 +111,6 @@ def start_pipecat_process():
     # Start the process in a new process group
     _pipecat_process.start()
     logger.debug(f"Started Pipecat MCP Agent process (PID {_pipecat_process.ident})")
-    
-    # Start Vite client
-    _start_vite_client()
 
 
 def _start_vite_client():

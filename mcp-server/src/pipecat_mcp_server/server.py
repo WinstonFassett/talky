@@ -48,8 +48,15 @@ async def start() -> dict:
     """
     start_pipecat_process()
     
-    # Give the WebRTC server a moment to start
+    # Wait for Pipecat to be fully ready
     import time
+    time.sleep(3)  # Give more time for Pipecat to initialize
+    
+    # Now start Vite client
+    from .agent_ipc import _start_vite_client
+    _start_vite_client()
+    
+    # Give Vite client a moment to start
     time.sleep(2)
     
     return {
