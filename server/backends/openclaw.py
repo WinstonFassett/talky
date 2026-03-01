@@ -157,19 +157,19 @@ def build_device_auth(
     }
 
 
-def build_device_auth_with_nonce(
-    identity: dict, client_id: str, client_mode: str, role: str, scopes: list, token: str, nonce: str
+def build_device_auth_v3(
+    identity: dict, client_id: str, client_mode: str, role: str, scopes: list, token: str, nonce: str, platform: str = "macos", device_family: str = "desktop"
 ) -> dict:
-    """Build device auth object with server-provided nonce"""
+    """Build device auth object with server-provided nonce using v3 protocol"""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519
 
     signed_at_ms = int(time.time() * 1000)
 
-    # Build payload string with server-provided nonce
+    # Build payload string with server-provided nonce (v3 format)
     payload = "|".join(
         [
-            "v2",
+            "v3",  # v3 protocol
             identity["deviceId"],
             client_id,
             client_mode,
@@ -178,6 +178,8 @@ def build_device_auth_with_nonce(
             str(signed_at_ms),
             token,
             nonce,  # Use server-provided nonce
+            platform.lower(),  # v3 adds platform
+            device_family.lower(),  # v3 adds deviceFamily
         ]
     )
 
@@ -313,47 +315,27 @@ class OpenClawLLMService(LLMService):
 
             self._ws = await websockets.connect(self.gateway_url, **connect_kwargs)
 
-            # First, send connect request without device auth to get challenge
-            connect_request = {
-                "type": "req",
-                "id": str(self._next_id()),
-                "method": "connect",
-                "params": {
-                    "minProtocol": 3,
-                    "maxProtocol": 3,
-                    "client": {
-                        "id": self.CLIENT_ID,
-                        "version": "1.0.0",
-                        "platform": "macos",
-                        "mode": self.CLIENT_MODE,
-                    },
-                    "role": self.ROLE,
-                    "scopes": self.SCOPES,
-                    "auth": {"token": self.tokens["gateway"]},
-                },
-            }
-            
-            await self._ws.send(json.dumps(connect_request))
-
-            # Handle auth response
+            # Wait for connect challenge event
             response = await self._ws.recv()
             data = json.loads(response)
 
-            # Handle connect challenge
+            # Handle connect challenge response
             if data.get("type") == "event" and data.get("event") == "connect.challenge":
                 # Extract nonce from challenge
                 challenge_nonce = data.get("payload", {}).get("nonce", "")
                 if not challenge_nonce:
                     raise ConnectionError("No nonce in connect challenge")
                 
-                # Rebuild device auth with the server-provided nonce
-                device_auth = build_device_auth_with_nonce(
+                logger.info(f"🔐 Got connect challenge, nonce: {challenge_nonce[:8]}...")
+                
+                # Build device auth with the server-provided nonce using v3
+                device_auth = build_device_auth_v3(
                     self.device_identity, self.CLIENT_ID, self.CLIENT_MODE, self.ROLE, self.SCOPES, 
-                    self.tokens["gateway"], challenge_nonce
+                    self.tokens["gateway"], challenge_nonce, "macos", "desktop"
                 )
                 
-                # Send second connect request with device auth
-                connect_request_with_auth = {
+                # Send connect request with device auth (v3) - ONLY ONE CONNECT REQUEST
+                connect_request = {
                     "type": "req",
                     "id": str(self._next_id()),
                     "method": "connect", 
@@ -365,6 +347,7 @@ class OpenClawLLMService(LLMService):
                             "version": "1.0.0",
                             "platform": "macos",
                             "mode": self.CLIENT_MODE,
+                            "deviceFamily": "desktop",  # v3 requires deviceFamily
                         },
                         "role": self.ROLE,
                         "scopes": self.SCOPES,
@@ -373,10 +356,11 @@ class OpenClawLLMService(LLMService):
                     },
                 }
                 
-                await self._ws.send(json.dumps(connect_request_with_auth))
+                await self._ws.send(json.dumps(connect_request))
                 response = await self._ws.recv()
                 data = json.loads(response)
 
+            # Check final connection result
             if not data.get("ok"):
                 raise ConnectionError(f"OpenClaw connection failed: {data}")
 
@@ -401,19 +385,9 @@ class OpenClawLLMService(LLMService):
             async for message in self._ws:
                 data = json.loads(message)
 
-                # Log important responses for debugging (reduced frequency)
-                if data.get("type") in ["res", "event"] and data.get("event") != "health":
-                    logger.debug(f"📨 Received message: {json.dumps(data)}")
-
-                # Log ALL message types for debugging
-                msg_type = data.get("type")
-                if msg_type == "event":
-                    event_type = data.get("event")
-                    logger.info(f"📨 Event message: {event_type}")
-                elif msg_type == "res":
-                    logger.info(f"📨 Response message: {json.dumps(data.get('result', {}))}")
-                else:
-                    logger.info(f"📨 Other message type: {msg_type}")
+                # Log important responses for debugging
+                if data.get("type") in ["res", "event"] and data.get("event") not in ["tick", "health"]:
+                    logger.debug(f"📨 Received: {message[:200]}")
 
                 # Handle streaming agent responses
                 if data.get("type") == "event" and data.get("event") == "agent":
