@@ -64,8 +64,6 @@ COMMON_TRANSPORT_PARAMS = {
     "audio_out_enabled": True,
 }
 
-from pipecat_mcp_server.processors.screen_capture import ScreenCaptureProcessor
-from pipecat_mcp_server.processors.vision import VisionProcessor
 
 
 class PipecatMCPAgent:
@@ -151,7 +149,7 @@ class PipecatMCPAgent:
         self.voice_switcher = VoiceProfileSwitcher(profile_name, pm, task=None)
         tts_switcher = self.voice_switcher.get_service_switcher()
 
-        # Create simplified pipeline (no vision bullshit)
+        # Create simplified pipeline
         pipeline = Pipeline(
             [
                 self._transport.input(),
@@ -285,32 +283,16 @@ class PipecatMCPAgent:
         )
 
     async def list_windows(self) -> list[dict]:
-        """List all open windows via the screen capture backend.
-
-        Returns:
-            A list of dicts with title, app_name, and window_id fields.
-
-        """
-        windows = await self._screen_capture._backend.list_windows()
-        return [
-            {"title": w.title, "app_name": w.app_name, "window_id": w.window_id} for w in windows
-        ]
+        """List windows - not implemented."""
+        return []
 
     async def screen_capture(self, window_id: Optional[int] = None) -> Optional[int]:
-        """Switch screen capture to a different window or full screen.
-
-        Args:
-            window_id: Window ID to capture (from list_windows()), or None for full screen.
-
-        Returns:
-            The window ID if found, or None if the window was not found or capturing full screen.
-
-        """
-        return await self._screen_capture.screen_capture(window_id)
+        """Screen capture - not implemented."""
+        return None
 
     async def capture_screenshot(self) -> str:
-        """Screenshot functionality removed - not needed for voice bot."""
-        return "Screenshot functionality removed"
+        """Screenshot - not implemented."""
+        return "Not implemented"
 
     def _create_stt_service(self) -> STTService:
         """Create STT service from default voice profile."""

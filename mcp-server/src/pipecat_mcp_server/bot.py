@@ -67,16 +67,13 @@ async def bot(runner_args: RunnerArguments):
                 await send_response({"ok": True})
                 logger.debug(f"Command '{cmd}' finished")
             elif cmd == "list_windows":
-                # Vision functionality removed
                 await send_response({"windows": []})
                 logger.debug(f"Command '{cmd}' finished")
             elif cmd == "screen_capture":
-                # Vision functionality removed
-                await send_response({"ok": False, "error": "Vision functionality removed"})
+                await send_response({"ok": False, "error": "Not implemented"})
                 logger.debug(f"Command '{cmd}' finished")
             elif cmd == "capture_screenshot":
-                # Vision functionality removed
-                await send_response({"path": "Vision functionality removed"})
+                await send_response({"path": "Not implemented"})
                 logger.debug(f"Command '{cmd}' finished")
             elif cmd == "stop":
                 await agent.stop()
