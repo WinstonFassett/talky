@@ -344,8 +344,7 @@ def cmd_run(args):
         sys.exit(1)
 
     cmd = [
-        sys.executable,
-        str(server_dir / "main.py"),
+        "uv", "run", "python", str(server_dir / "main.py"),
         "--profile",
         talky_profile,
     ]
