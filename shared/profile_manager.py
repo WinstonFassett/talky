@@ -108,8 +108,9 @@ class ProfileManager:
 
     def _load_llm_backends(self):
         """Load LLM backends by merging core + defaults + user extensions."""
-        # Start with core backends from core/ folder
-        core_path = Path(__file__).parent / "core" / "llm-backends.yaml"
+        # Start with core backends from server/config/core/ folder
+        server_dir = Path(__file__).parent.parent / "server"
+        core_path = server_dir / "config" / "core" / "llm-backends.yaml"
         core_backends = {}
         if core_path.exists():
             with open(core_path) as f:
@@ -187,8 +188,9 @@ class ProfileManager:
 
     def _load_voice_backends(self):
         """Load voice backends by merging core + defaults + user extensions."""
-        # Start with core backends from core/ folder
-        core_path = Path(__file__).parent / "core" / "voice-backends.yaml"
+        # Start with core backends from server/config/core/ folder
+        server_dir = Path(__file__).parent.parent / "server"
+        core_path = server_dir / "config" / "core" / "voice-backends.yaml"
         if core_path.exists():
             with open(core_path) as f:
                 core_data = yaml.safe_load(f) or {}
@@ -267,8 +269,9 @@ class ProfileManager:
 
     def _load_talky_profiles(self):
         """Load talky profiles by merging core + defaults + user extensions."""
-        # Start with core profiles from core/ folder
-        core_path = Path(__file__).parent / "core" / "talky-profiles.yaml"
+        # Start with core profiles from server/config/core/ folder
+        server_dir = Path(__file__).parent.parent / "server"
+        core_path = server_dir / "config" / "core" / "talky-profiles.yaml"
         core_profiles = {}
         if core_path.exists():
             with open(core_path) as f:

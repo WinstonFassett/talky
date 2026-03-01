@@ -171,7 +171,9 @@ def main():
             time.sleep(3)
 
             # Determine host and protocol using shared network utility
-            host = getattr(args, 'host', 'localhost')
+            host = getattr(args, 'host', 'localhost') or 'localhost'
+            if not isinstance(host, str) or not host.strip():
+                host = 'localhost'
             try:
                 from shared.profile_manager import get_profile_manager
                 pm = get_profile_manager()

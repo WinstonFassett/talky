@@ -7,7 +7,7 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.0.0",
     "loguru>=0.7.3",
-    "pipecat-ai[runner,silero,webrtc]>=0.0.102",
+    "pipecat-ai[kokoro,runner,silero,webrtc]>=0.0.102",
     "InquirerPy>=0.3.4",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
