@@ -271,7 +271,7 @@ def cmd_run(args):
     setup_logging(log_level)
     
     # Start client dev server FIRST if not running
-    from server.config.profile_manager import get_profile_manager
+    from shared.profile_manager import get_profile_manager
     pm = get_profile_manager()
     
     # Get host from config or command line
@@ -395,7 +395,7 @@ def cmd_config(args):
     if args.list_examples:
         print(f"\n📋 Available voice profiles:")
         try:
-            from server.config.profile_manager import get_profile_manager
+            from shared.profile_manager import get_profile_manager
             pm = get_profile_manager()
             for name, desc in pm.list_voice_profiles().items():
                 print(f"  {name}: {desc}")
@@ -405,7 +405,7 @@ def cmd_config(args):
 
 def cmd_list_profiles(args):
     """List all available profiles."""
-    from server.config.profile_manager import get_profile_manager
+    from shared.profile_manager import get_profile_manager
     
     try:
         pm = get_profile_manager()
@@ -441,7 +441,7 @@ def cmd_mcp(args):
     host = getattr(args, "host", None)
     if not host:
         try:
-            from server.config.profile_manager import get_profile_manager
+            from shared.profile_manager import get_profile_manager
             pm = get_profile_manager()
             network_config = getattr(pm, 'settings', {}).get("network", {})
             host = network_config.get("host", "localhost")
@@ -451,7 +451,7 @@ def cmd_mcp(args):
     # Validate voice profile if provided
     if voice_profile:
         try:
-            from server.config.profile_manager import get_profile_manager
+            from shared.profile_manager import get_profile_manager
             pm = get_profile_manager()
             available_profiles = pm.list_voice_profiles()
             if voice_profile not in available_profiles:
@@ -561,7 +561,7 @@ def main():
         if not args.profile and not args.profile_flag:
             # Use default from settings.yaml
             try:
-                from server.config.profile_manager import get_profile_manager
+                from shared.profile_manager import get_profile_manager
                 pm = get_profile_manager()
                 default_backend = pm.defaults.get("llm_backend")
                 if default_backend and default_backend in pm.list_talky_profiles():
