@@ -47,6 +47,7 @@ class TalkyProfile:
     voice_profile: Optional[str] = None
     backend: Optional[str] = None  # New: "mcp" for voice backends
     app: Optional[str] = None  # New: "pi", "claude", etc.
+    client: Optional[str] = None  # Client preference: "vite" or "debug"
     session_key: Optional[str] = None  # Override session for LLM backend
     system_message: Optional[str] = None  # Optional system message
 
@@ -302,6 +303,7 @@ class ProfileManager:
                         voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
                         backend=config.get("backend"),
                         app=config.get("app"),
+                        client=config.get("client"),
                         session_key=config.get("session_key"),
                         system_message=config.get("system_message"),
                     )
@@ -324,6 +326,7 @@ class ProfileManager:
                             voice_profile=merged_config.get("voice_profile") or self.defaults.get("voice_profile"),
                             backend=merged_config.get("backend"),
                             app=merged_config.get("app"),
+                            client=merged_config.get("client"),
                             session_key=merged_config.get("session_key"),
                             system_message=merged_config.get("system_message"),
                         )
@@ -339,6 +342,7 @@ class ProfileManager:
                             description=user_config.get("description", ""),
                             llm_backend=user_config.get("llm_backend") or self.defaults.get("llm_backend") or "",
                             voice_profile=user_config.get("voice_profile") or self.defaults.get("voice_profile") or "",
+                            client=user_config.get("client"),
                             session_key=user_config.get("session_key"),
                             system_message=user_config.get("system_message"),
                         )
@@ -355,6 +359,7 @@ class ProfileManager:
                         voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
                         backend=config.get("backend"),
                         app=config.get("app"),
+                        client=config.get("client"),
                         session_key=config.get("session_key"),
                         system_message=config.get("system_message"),
                     )
@@ -371,6 +376,7 @@ class ProfileManager:
                         voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
                         backend=config.get("backend"),
                         app=config.get("app"),
+                        client=config.get("client"),
                         session_key=config.get("session_key"),
                         system_message=config.get("system_message"),
                     )

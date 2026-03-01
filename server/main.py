@@ -69,6 +69,8 @@ def main():
 
     parser.add_argument("--no-open", action="store_true", help="Don't auto-open browser")
 
+    parser.add_argument("--debug-client", action="store_true", help="Use Pipecat debug client instead of Vite client")
+
     parser.add_argument(
         "--profile", help="Talky profile to use (combines LLM backend and voice profile)"
     )
@@ -209,19 +211,29 @@ def main():
                 vite_url = f"{protocol}://{host}:{frontend_port}?autoconnect=true"
                 debug_url = f"{protocol}://{host}:{backend_port}/client?autoconnect=true"
 
-            # Try to open custom Vite client first
-            try:
-                webbrowser.open(vite_url)
-                print(f"🌐 Opened browser to custom UI: {vite_url}")
-            except Exception as e:
-                print(f"⚠️  Could not auto-open browser: {e}")
-                print(f"🔗 Connect manually to: {vite_url}")
-                
-                # Fallback to debug UI
+            # Choose client based on debug-client flag
+            if args.debug_client:
+                # Use debug client
                 try:
                     webbrowser.open(debug_url)
-                    print(f"🌐 Opened browser to debug UI (fallback): {debug_url}")
-                except Exception as e2:
+                    print(f"🌐 Opened browser to debug UI: {debug_url}")
+                except Exception as e:
+                    print(f"⚠️  Could not auto-open browser: {e}")
+                    print(f"🔗 Connect manually to: {debug_url}")
+            else:
+                # Use Vite client (default)
+                try:
+                    webbrowser.open(vite_url)
+                    print(f"🌐 Opened browser to Vite UI: {vite_url}")
+                except Exception as e:
+                    print(f"⚠️  Could not auto-open browser: {e}")
+                    print(f"🔗 Connect manually to: {vite_url}")
+                    
+                    # Fallback to debug client
+                    try:
+                        webbrowser.open(debug_url)
+                        print(f"🌐 Opened browser to debug UI (fallback): {debug_url}")
+                    except Exception as e2:
                     print(f"⚠️  Could not open debug UI either")
                     print(f"🔗 Debug UI fallback: {debug_url}")
 

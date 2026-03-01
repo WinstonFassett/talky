@@ -260,6 +260,19 @@ def cmd_run(args):
     """Handle the 'run' subcommand (bot)."""
     # server_dir is already defined globally from script location
     
+    # Check if profile has client preference
+    profile_name = getattr(args, 'profile', None)
+    if profile_name:
+        from shared.profile_manager import get_profile_manager
+        pm = get_profile_manager()
+        profile = pm.get_talky_profile(profile_name)
+        
+        # Override debug-client flag based on profile preference
+        if profile and hasattr(profile, 'client') and profile.client == "debug":
+            args.debug_client = True
+        elif profile and hasattr(profile, 'client') and profile.client == "vite":
+            args.debug_client = False
+    
     # CRITICAL: Setup logging early to catch dependency installer logs
     log_level = getattr(args, "log_level", None)
     if log_level:
@@ -606,31 +619,23 @@ def cmd_run_client_profile(args):
     """Run an app profile (e.g., 'talky pi', 'talky claude')."""
     import asyncio
     from shared.client_launcher import AppLauncher, MCPServerManager
-    from shared.profile_manager import get_profile_manager
     
-    profile_name = args.profile
-    work_dir = getattr(args, 'dir', None)
-    
-    try:
+    # Check if this is a new-style backend + app profile
+    profile_name = getattr(args, 'profile', None)
+    if profile_name:
+        from shared.profile_manager import get_profile_manager
         pm = get_profile_manager()
         profile = pm.get_talky_profile(profile_name)
-        if not profile:
-            print(f"❌ Unknown profile: {profile_name}")
-            print("Available profiles:")
-            for name, desc in pm.list_talky_profiles().items():
-                print(f"  {name:<20} - {desc}")
-            return
         
-        # Check if this is a new-style profile with backend/app
-        if profile.backend and profile.app:
-            asyncio.run(_run_backend_client_profile(profile, work_dir))
+        if profile and hasattr(profile, 'backend') and hasattr(profile, 'app'):
+            # New-style profile: backend + app
+            asyncio.run(_run_backend_client_profile(profile, args))
         else:
             # Legacy profile - use original bot
             cmd_run(args)
-            
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        return
+    else:
+        # No profile specified - use original bot
+        cmd_run(args)
 
 
 async def _run_backend_client_profile(profile, work_dir):
