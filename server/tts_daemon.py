@@ -351,7 +351,7 @@ def main():
     args = parser.parse_args()
 
     if args.list_profiles:
-        from server.config.profile_manager import get_profile_manager
+        from shared.profile_manager import get_profile_manager
 
         pm = get_profile_manager()
         profiles = pm.list_voice_profiles()

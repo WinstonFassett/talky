@@ -51,6 +51,17 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
     TurnAnalyzerUserTurnStopStrategy,
 )
+
+# Common transport parameters for all transports
+COMMON_TRANSPORT_PARAMS = {
+    "audio_in_enabled": True,
+    "audio_out_enabled": True,
+    "vad_enabled": True,
+    "vad_analyzer": SileroVADAnalyzer(),
+    "vad_params": VADParams(),
+    "turn_analyzer": LocalSmartTurnAnalyzerV3(),
+    "user_stop_analyzer": TurnAnalyzerUserTurnStopStrategy(),
+}
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from shared.service_factory import create_stt_service_from_config, create_tts_service_from_config
 

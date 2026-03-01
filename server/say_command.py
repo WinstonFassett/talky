@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from loguru import logger
 from pipecat.frames.frames import StartFrame, TTSAudioRawFrame
-from server.config.profile_manager import get_profile_manager
+from shared.profile_manager import get_profile_manager
 from shared.voice_config import create_tts_for_profile
 
 

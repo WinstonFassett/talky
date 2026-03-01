@@ -18,7 +18,7 @@ def create_tts_for_profile(voice_profile_name=None, provider=None, voice_id=None
 
     Used by say_command and tts_daemon to avoid duplicating this logic.
     """
-    from server.config.profile_manager import get_profile_manager
+    from .profile_manager import get_profile_manager
 
     pm = get_profile_manager()
 

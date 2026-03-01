@@ -57,7 +57,7 @@ async def run_bot(
 ):
     """Main bot logic using clean backend/voice separation."""
 
-    from server.config.profile_manager import get_profile_manager
+    from shared.profile_manager import get_profile_manager
     import os
 
     # Use CONFIG_DIR from environment if set

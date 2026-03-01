@@ -2,261 +2,172 @@
 
 ## Overview
 
-Pi is a unified multi-provider LLM agent system with tool calling capabilities. This integration uses Pi's RPC mode to spawn a subprocess that handles AI processing while maintaining real-time voice interaction through the Pipecat pipeline.
+Pi is a coding agent with an extension system. This integration adds voice conversation capabilities to Pi via a **Pi extension** that connects to the **Talky MCP server**. Pi is the main application; Talky provides voice I/O as a service.
+
+This is the reverse of most Talky integrations: instead of Talky starting an LLM subprocess, Pi starts Talky and uses it for voice.
 
 ## Architecture
 
-### System Architecture
-
-```mermaid
-graph TB
-    subgraph "Voice Bot Pipeline"
-        STT[Speech-to-Text]
-        LLM[Pi LLM Service]
-        TTS[Text-to-Speech]
-    end
-    
-    subgraph "Pi Subprocess"
-        RPC[RPC Mode]
-        Agent[Agent Loop]
-        Tools[Tool Execution]
-        Providers[LLM Providers]
-    end
-    
-    subgraph "Pi Features"
-        MultiProvider[OpenAI, Anthropic, Google, etc.]
-        ToolCalling[Function Calling]
-        Context[Context Persistence]
-        Handoff[Cross-Provider Handoff]
-    end
-    
-    User[User Voice] --> STT
-    STT --> LLM
-    LLM -->|RPC| RPC
-    RPC --> Agent
-    Agent --> Tools
-    Tools --> Providers
-    Providers -->|Response| RPC
-    RPC --> LLM
-    LLM --> TTS
-    TTS --> User
-    
-    MultiProvider --> Agent
-    ToolCalling --> Agent
-    Context --> Agent
-    Handoff --> Agent
+```
+┌──────────────────┐   MCP over HTTP   ┌──────────────────┐   IPC   ┌────────────────┐
+│  Pi Coding Agent │ ◄────────────────► │  Talky MCP Server│ ◄─────► │ Voice Pipeline │
+│  + Talky ext.    │                    │  (port 9090)     │         │ (WebRTC 7860)  │
+└──────────────────┘                    └──────────────────┘         └────────────────┘
+                                                                           ▲
+                                                                     WebRTC audio
+                                                                     ┌─────┘
+                                                                     │ Browser
+                                                                     └───────┘
 ```
 
-### Protocol Flow
-Pi uses a subprocess RPC communication pattern:
-1. **Subprocess spawning** - Pi runs in `--mode rpc` as separate process
-2. **JSON-RPC communication** - stdin/stdout JSON message exchange
-3. **Tool execution events** - Real-time tool call notifications
-4. **Direct responses** - No complex acknowledgment patterns
+**Components:**
+- **Pi extension** (`pi-extension/index.ts`) — Registers voice tools, manages MCP client
+- **Talky MCP server** (`talky mcp`) — Runs voice pipeline, exposes `start/speak/listen/stop` tools
+- **Browser** — Connects to WebRTC endpoint for audio I/O
 
-## Configuration
+**Protocol:** The extension speaks MCP streamable-HTTP (JSON-RPC 2.0 over HTTP POST) to the Talky MCP server on port 9090. Responses can be JSON or SSE. The `listen()` call is long-polling — it blocks until the user speaks.
 
-### Profile Configuration
-```yaml
-llm_backends:
-  pi:
-    description: "Pi LLM"
-    service_class: "backends.pi.PiLLMService"
-    config:
-      pi_binary: "pi"
-      working_dir: "."
-    system_message: "You are a helpful voice assistant."
+## Installation
+
+### Quick test
+```bash
+pi -e /path/to/talky/pi-extension/index.ts
 ```
 
-### Environment Variables
-- `PI_WORKING_DIR`: Override default working directory
-- `PI_BINARY_PATH`: Override pi binary location
-
-### Pi Setup Requirements
-1. **Pi installation**: Must have `pi` binary available in PATH
-2. **Provider configuration**: At least one LLM provider configured
-3. **Working directory**: Directory with pi configuration files
-4. **API keys**: Environment variables for chosen providers
-
-## Implementation Details
-
-### Request Flow
-
-```mermaid
-sequenceDiagram
-    participant User as User
-    participant Pipeline as Voice Pipeline
-    participant LLM as Pi Service
-    participant Pi as Pi Subprocess
-    
-    User->>Pipeline: "What's the weather?"
-    Pipeline->>LLM: LLMContextFrame
-    LLM->>Pi: JSON-RPC request (stdin)
-    Pi-->>LLM: Tool execution events
-    Note over Pi: speak("It's sunny today...")
-    Pi-->>LLM: Final response (stdout)
-    LLM->>Pipeline: TextFrame response
-    Pipeline->>User: Speaks response
+### Permanent (auto-discovered)
+```bash
+# Symlink into Pi's extension directory
+ln -s /path/to/talky/pi-extension ~/.pi/agent/extensions/talky
 ```
 
-### Key Methods
-
-#### Process Management
-- `_start_pi()`: Spawns pi subprocess in RPC mode
-- `_handle_stdout()`: Parses JSON lines from subprocess stdout
-- `_handle_pi_event()`: Processes different event types from pi
-
-#### Message Handling
-- `process_frame()`: Routes frames including interruption support
-- `_process_context()`: Handles LLM context frames and sends to pi
-- `push_frame()`: Sends frames to Pipecat pipeline
-
-#### Response Processing
-- **Tool execution events**: Real-time notifications of tool calls
-- **Speak tool integration**: Direct TTS integration points
-- **Error handling**: Subprocess crash recovery
-
-## RPC Protocol
-
-### Request Format (stdin)
+Or add to `~/.pi/agent/settings.json`:
 ```json
 {
-  "type": "request",
-  "id": "12345",
-  "method": "chat",
-  "params": {
-    "context": {
-      "systemPrompt": "You are a helpful assistant.",
-      "messages": [
-        {"role": "user", "content": "User message here"}
-      ]
-    }
-  }
+  "extensions": ["/path/to/talky/pi-extension/index.ts"]
 }
 ```
 
-### Tool Execution Event (stdout)
-```json
-{
-  "type": "tool_execution_start",
-  "toolName": "speak",
-  "args": {
-    "text": "Response text here"
-  }
-}
+### Prerequisites
+- `talky` CLI installed and in PATH (runs the MCP server)
+- A browser (for WebRTC audio connection)
+
+## Usage
+
+### Start a voice conversation
+
+**Option 1 — Command:**
+```
+/voice
 ```
 
-### Response Format (stdout)
-```json
-{
-  "type": "response",
-  "id": "12345",
-  "result": {
-    "content": "Final response content"
-  }
-}
+**Option 2 — Natural language (auto-detected):**
+```
+I want a voice conversation
+let's talk
+start voice
 ```
 
-## Performance Considerations
+### What happens
+1. Extension checks if Talky MCP server is running, starts it if not (`talky mcp`)
+2. Calls MCP `start()` to initialize the voice pipeline
+3. Opens your browser to `http://localhost:7860` for WebRTC audio
+4. Injects voice system prompt so Pi uses speak/listen tools
+5. Pi greets you and starts the conversation loop
 
-### Process Management
-- **Subprocess overhead**: One-time startup cost per session
-- **Memory usage**: Separate process memory space
-- **Communication latency**: JSON-RPC over stdin/stdout
+### Conversation loop
+Pi uses three tools in a loop:
+- `voice_speak(text)` — Speak to you via TTS
+- `voice_listen()` — Wait for your speech, returns transcription
+- `voice_stop()` — End the session
 
-### Response Characteristics
-- **Tool execution visibility**: Real-time tool call notifications
-- **Provider flexibility**: Can switch between LLM providers
-- **Context persistence**: Maintains conversation state
+The flow matches the Pipecat MCP skill behavior:
+- Speak → Listen → (do work) → Speak → Listen → …
+- Pi gives voice progress updates during tasks
+- Say "goodbye" to end the conversation
 
-### Resource Usage
-- **CPU**: Separate process for AI processing
-- **Memory**: Isolated from main voice bot process
-- **Network**: Direct provider connections from subprocess
+### Stop
+Say "goodbye" or "stop" during the conversation. Pi will confirm, then call `voice_stop()`.
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TALKY_MCP_PORT` | `9090` | Port for Talky MCP server |
+| `TALKY_WEBRTC_PORT` | `7860` | Port for WebRTC audio endpoint |
+
+## Extension Details
+
+### Registered Tools
+
+| Tool | Description |
+|------|-------------|
+| `voice_speak(text)` | Speak text via TTS (1-2 sentences) |
+| `voice_listen()` | Block until user speaks, return transcription |
+| `voice_stop()` | End voice session |
+
+### Registered Command
+
+| Command | Description |
+|---------|-------------|
+| `/voice` | Start a voice conversation |
+
+### Events Handled
+
+| Event | Behavior |
+|-------|----------|
+| `input` | Detects natural language voice triggers |
+| `before_agent_start` | Injects voice system prompt when voice is active |
+| `session_shutdown` | Cleans up voice resources |
+
+### Footer Status
+When voice is active, the footer shows:
+- 🎤 Voice active
+- 👂 Listening…
+- 🔊 Speaking…
+- ❌ Voice error
+
+## MCP Client Protocol
+
+The extension implements a minimal MCP streamable-HTTP client:
+
+1. **Health check**: `GET /mcp` — any response means server is up
+2. **Initialize**: `POST /mcp` with `{"method": "initialize", ...}` → extracts `mcp-session-id` from response header
+3. **Initialized notification**: `POST /mcp` with `{"method": "notifications/initialized"}`
+4. **Tool calls**: `POST /mcp` with `{"method": "tools/call", "params": {"name": "speak", "arguments": {"text": "..."}}}`
+
+Responses can be `application/json` (simple) or `text/event-stream` (SSE for long-blocking calls like `listen()`). The client handles both.
+
+## Testing
+
+```bash
+# Run integration tests (mock MCP server, no audio needed)
+npx tsx pi-extension/test.ts
+```
+
+Tests verify:
+- MCP initialize handshake
+- Tool calls (start, speak, listen, stop) with JSON responses
+- Tool calls with SSE responses
+- Error handling for unknown tools
+- Full conversation flow
+- Reconnection after disconnect
 
 ## Troubleshooting
 
-### Common Issues
+### Voice never connects
+**Symptom:** Browser opens but no audio
+**Fix:** Check that `talky mcp` started correctly. Look for errors in the terminal where Pi is running.
 
-#### Pi Binary Not Found
-**Symptom**: "Failed to start pi subprocess" errors
-**Cause**: Pi binary not in PATH or not installed
-**Fix**: Install pi and ensure it's available in PATH
+### Extension not loading
+**Symptom:** No `/voice` command available
+**Fix:** Ensure the extension path is correct. Try `pi -e /path/to/talky/pi-extension/index.ts` to test.
 
-#### Subprocess Crashes
-**Symptom**: Sudden disconnection or no response
-**Cause**: Pi process crashed or configuration errors
-**Fix**: Check pi logs and configuration files
-
-#### Provider Authentication
-**Symptom**: API key errors from pi subprocess
-**Cause**: Missing or invalid provider credentials
-**Fix**: Set required environment variables for LLM providers
-
-#### Working Directory Issues
-**Symptom**: Config file not found errors
-**Cause**: Incorrect working directory or missing config
-**Fix**: Set correct working_dir in profile configuration
-
-### Debug Logging
-Enable debug logging to trace subprocess communication:
-```python
-logger.info(f"🚀 Starting pi subprocess: {self.pi_binary} --mode rpc")
-logger.debug(f"📤 Sending to pi: {json.dumps(request_data)}")
-logger.debug(f"📨 Received from pi: {json.dumps(data)}")
-```
-
-## Pi Features Integration
-
-### Multi-Provider Support
-Pi supports numerous LLM providers:
-- **OpenAI** - GPT models with tool calling
-- **Anthropic** - Claude models
-- **Google** - Gemini models
-- **Azure OpenAI** - Enterprise OpenAI
-- **Groq, Cerebras, xAI** - High-performance providers
-- **Custom OpenAI-compatible** - Ollama, vLLM, etc.
-
-### Tool Calling
-- **Function calling** - Type-safe tool definitions
-- **Real-time events** - Tool execution notifications
-- **Speak tool** - Direct TTS integration
-- **Custom tools** - Extensible tool system
-
-### Context Management
-- **Conversation history** - Automatic context persistence
-- **Cross-provider handoff** - Switch models mid-conversation
-- **Context serialization** - Transfer between sessions
-
-## Comparison with Other Integrations
-
-| Feature | Pi | Moltis | OpenClaw |
-|---------|----|--------|----------|
-| Architecture | Subprocess RPC | WebSocket | WebSocket |
-| Language | TypeScript/Node.js | Rust | Node.js |
-| Provider Support | Multi-provider | Single (configurable) | Single (OpenClaw) |
-| Tool Calling | Built-in | Built-in | Limited |
-| Response Pattern | Direct with events | Streaming | Two-phase |
-| Setup Complexity | Medium | Low | High |
-| Resource Usage | High (separate process) | Low (Rust) | Medium (Node.js) |
-
-## Development Notes
-
-### Testing Strategy
-- Test with pi binary available in PATH
-- Verify provider authentication works
-- Test tool execution events
-- Monitor subprocess resource usage
-
-### Future Enhancements
-- **Process pooling**: Reuse subprocess instances
-- **Event filtering**: Selective tool event handling
-- **Provider switching**: Dynamic provider changes
-- **Context optimization**: Better memory management
+### listen() times out
+**Symptom:** Voice stops working after a long silence
+**Fix:** The `listen()` call has a 10-minute timeout. If the user doesn't speak for 10 minutes, the call will fail. Just restart with `/voice`.
 
 ## References
 
-- [Pi Documentation](https://shittycodingagent.ai)
-- [Pi GitHub](https://github.com/badlogic/pi-mono)
-- [Pi AI Package](https://www.npmjs.com/package/@mariozechner/pi-ai)
-- [Pipecat LLM Service Base Class](https://github.com/pipecat-ai/pipecat)
+- [Pi Extension Docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
+- [MCP Streamable HTTP Spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http)
+- [Talky MCP Server](../mcp-server/)

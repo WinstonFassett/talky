@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 import yaml
 from loguru import logger
 
-BUNDLED_DEFAULTS = Path(__file__).parent / "defaults"
+BUNDLED_DEFAULTS = Path(__file__).parent.parent / "server" / "config" / "defaults"
 
 CONFIG_FILES = [
     "llm-backends.yaml",

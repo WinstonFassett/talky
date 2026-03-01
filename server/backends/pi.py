@@ -21,6 +21,7 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
 from server.config.voice_prompts import format_voice_message
+from shared.profile_manager import get_profile_manager
 
 
 class PiLLMService(LLMService):

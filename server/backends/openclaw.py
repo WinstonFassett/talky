@@ -238,7 +238,7 @@ class OpenClawLLMService(LLMService):
 
         # Determine gateway URL using shared network utility
         try:
-            from server.config.profile_manager import get_profile_manager
+            from shared.profile_manager import get_profile_manager
             pm = get_profile_manager()
             network_config = getattr(pm, 'settings', {}).get("network", {})
             config_host = network_config.get("host", "localhost")
