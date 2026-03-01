@@ -366,18 +366,27 @@ class OpenClawLLMService(LLMService):
 
             logger.info(f"✅ Connected to OpenClaw")
 
-            # Start message handler
+            # Start message handler BEFORE marking as connected
             self._message_handler_task = asyncio.create_task(self._handle_messages())
 
-            # Give it a moment to start
-            await asyncio.sleep(0.1)
+            # Give message handler time to start
+            await asyncio.sleep(0.5)  # Increased from 0.1
 
             self._connected = True
             self._connected_event.set()
+            
+            logger.info(f"✅ Connected to OpenClaw and message handler running")
 
         except Exception as e:
             logger.error(f"OpenClaw connection error: {e}")
             raise
+
+    async def initialize(self):
+        """Initialize connection early to avoid greeting timing issues"""
+        try:
+            await self._connect()
+        except Exception as e:
+            logger.warning(f"Failed to pre-connect OpenClaw: {e}, will connect on first message")
 
     async def _handle_messages(self):
         """Handle incoming WebSocket messages"""
@@ -539,12 +548,14 @@ class OpenClawLLMService(LLMService):
 
             # Wait for response (OpenClaw may choose not to respond - that's valid)
             try:
+                logger.info(f"⏳ Waiting for response from queue (queue size: {self._response_queue.qsize()})")
                 response = await self._response_queue.get()
-                logger.info(f"🤖 Response: {response[:100]}...")
+                logger.info(f"🤖 Got response: {response[:100]}...")
 
                 # Push to pipeline
                 await self.push_frame(TextFrame(response))
                 await self.push_frame(LLMFullResponseEndFrame())
+                logger.info(f"✅ Pushed response frames to pipeline")
 
             except Exception as e:
                 logger.error(f"Error waiting for OpenClaw response: {e}")
