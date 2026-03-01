@@ -78,45 +78,17 @@ class AppLauncher:
         # Launch Claude with pre-approved tools and initial prompt
         logger.info(f"Starting Claude in: {self.work_dir}")
         
-        # List of Talky MCP tools to pre-approve
-        allowed_tools = [
-            "mcp__pipecat-mcp-server__start",
-            "mcp__pipecat-mcp-server__speak", 
-            "mcp__pipecat-mcp-server__listen",
-            "mcp__pipecat-mcp-server__stop",
-            "mcp__pipecat-mcp-server__list_windows",
-            "mcp__pipecat-mcp-server__screen_capture",
-            "mcp__pipecat-mcp-server__capture_screenshot"
-        ]
-        
                 
-        # Start Claude without prompt, then send message via stdin
-        claude_args_no_prompt = ["claude", "--allowedTools", ",".join(allowed_tools)]
-        logger.info(f"Executing: {' '.join(claude_args_no_prompt)}")
+                
+        # Just start Claude normally - no complex argument passing
+        claude_args = ["claude"]
+        logger.info(f"Executing: {' '.join(claude_args)}")
         
         process = subprocess.Popen(
-            claude_args_no_prompt,
+            claude_args,
             cwd=self.work_dir,
-            text=True,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT
+            text=True
         )
-        
-        # Send the initial message after Claude starts
-        import threading
-        import time
-        
-        def send_initial_message():
-            time.sleep(3)  # Wait for Claude to fully start
-            try:
-                process.stdin.write("I want to have a voice conversation\n")
-                process.stdin.flush()
-                logger.info("Sent initial message to Claude via stdin")
-            except Exception as e:
-                logger.error(f"Failed to send message to Claude: {e}")
-        
-        threading.Thread(target=send_initial_message, daemon=True).start()
         
         self.processes["claude"] = process
         return process
