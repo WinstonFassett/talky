@@ -200,6 +200,14 @@ def main():
                         print(f"⚠️  No external_host configured in settings.yaml, using detected hostname: {detected_host}")
                         print("   Set external_host in ~/.talky/settings.yaml for reliable external access")
                     host = detected_host
+                elif host != "localhost":
+                    # Custom hostname provided via --host, use it directly
+                    print(f"🌐 Using custom host: {host}")
+                    # Import network utility for browser URL generation
+                    import sys
+                    from pathlib import Path
+                    sys.path.append(str(Path(__file__).parent.parent))
+                    from shared.network_utils import get_browser_url
                 else:
                     # For localhost binding, just import get_browser_url
                     import sys
