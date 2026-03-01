@@ -143,16 +143,25 @@ class PipecatMCPAgent:
             current_file = os.path.abspath(__file__)
             mcp_server_src = os.path.dirname(current_file)
             mcp_server = os.path.dirname(mcp_server_src)
-            talky_root = os.path.dirname(mcp_server)
+            talky_root = os.path.dirname(os.path.dirname(mcp_server))
             
             # Only add if not already in sys.path to avoid duplication
             if talky_root not in sys.path:
                 sys.path.insert(0, talky_root)
             
+            # Debug the path calculation
+            logger.debug(f"Current file: {current_file}")
+            logger.debug(f"MCP server src: {mcp_server_src}")
+            logger.debug(f"MCP server: {mcp_server}")
+            logger.debug(f"Talky root: {talky_root}")
+            logger.debug(f"sys.path includes talky_root: {talky_root in sys.path}")
+            
             from server.features.voice_switcher import VoiceProfileSwitcher
             from shared.profile_manager import get_profile_manager
         except ImportError as e:
             logger.error(f"Failed to import VoiceProfileSwitcher: {e}")
+            logger.error(f"Current working directory: {os.getcwd()}")
+            logger.error(f"sys.path: {sys.path}")
             logger.error("Make sure TALKY_ROOT environment variable is set or run from talky directory")
             raise RuntimeError("VoiceProfileSwitcher import failed - check environment setup")
         
