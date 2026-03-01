@@ -57,6 +57,13 @@ async def run_bot(
 ):
     """Main bot logic using clean backend/voice separation."""
 
+    # Ensure dependencies are available before initializing services
+    from shared.dependency_installer import ensure_dependencies
+    
+    if not ensure_dependencies():
+        logger.error("Failed to install required dependencies")
+        raise RuntimeError("Failed to install required dependencies")
+
     from shared.profile_manager import get_profile_manager
     import os
 
