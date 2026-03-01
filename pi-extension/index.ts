@@ -236,18 +236,43 @@ export default function (pi: ExtensionAPI) {
 	async function ensureTalkyRunning(): Promise<void> {
 		if (await client.isServerUp()) return;
 
+		// Clean up any existing process
+		if (talkyProcess) {
+			try {
+				talkyProcess.kill();
+				talkyProcess = null;
+			} catch {
+				// Process already dead
+				talkyProcess = null;
+			}
+		}
+
 		// Start talky mcp server
 		const { spawn } = await import("node:child_process");
 		talkyProcess = spawn("talky", ["mcp"], {
 			detached: true,
 			stdio: "ignore",
 		});
-		talkyProcess.unref();
+
+		// Track process exit to clean up
+		talkyProcess.on("exit", () => {
+			talkyProcess = null;
+		});
+		talkyProcess.on("error", (err) => {
+			console.error("Failed to start talky mcp server:", err);
+			talkyProcess = null;
+		});
 
 		// Wait up to 30s for server to come up
 		for (let i = 0; i < 30; i++) {
 			await new Promise((r) => setTimeout(r, 1000));
 			if (await client.isServerUp()) return;
+			// Check if process died
+			if (!talkyProcess) {
+				throw new Error(
+					"Talky MCP server process died during startup. Check logs for errors.",
+				);
+			}
 		}
 
 		throw new Error(
@@ -257,11 +282,24 @@ export default function (pi: ExtensionAPI) {
 
 	function openBrowser(url: string): void {
 		const { exec } = require("node:child_process") as typeof import("node:child_process");
+		
+		let command: string;
 		if (process.platform === "darwin") {
-			exec(`open "${url}"`);
+			command = `open "${url}"`;
 		} else if (process.platform === "linux") {
-			exec(`xdg-open "${url}"`);
+			command = `xdg-open "${url}"`;
+		} else if (process.platform === "win32") {
+			command = `start "" "${url}"`;
+		} else {
+			console.warn(`Unsupported platform: ${process.platform}`);
+			return;
 		}
+
+		exec(command, (error: any) => {
+			if (error) {
+				console.error(`Failed to open browser: ${error.message}`);
+			}
+		});
 	}
 
 	async function startVoiceSession(ctx: { ui: any; hasUI?: boolean }): Promise<boolean> {

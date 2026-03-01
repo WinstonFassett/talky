@@ -329,9 +329,13 @@ class OpenClawLLMService(LLMService):
                 logger.info(f"🔐 Got connect challenge, nonce: {challenge_nonce[:8]}...")
                 
                 # Build device auth with the server-provided nonce using v3
+                import platform
+                platform_name = platform.system().lower()
+                device_family = "desktop"  # Default to desktop for now
+                
                 device_auth = build_device_auth_v3(
                     self.device_identity, self.CLIENT_ID, self.CLIENT_MODE, self.ROLE, self.SCOPES, 
-                    self.tokens["gateway"], challenge_nonce, "macos", "desktop"
+                    self.tokens["gateway"], challenge_nonce, platform_name, device_family
                 )
                 
                 # Send connect request with device auth (v3) - ONLY ONE CONNECT REQUEST
@@ -345,9 +349,9 @@ class OpenClawLLMService(LLMService):
                         "client": {
                             "id": self.CLIENT_ID,
                             "version": "1.0.0",
-                            "platform": "macos",
+                            "platform": platform_name,
                             "mode": self.CLIENT_MODE,
-                            "deviceFamily": "desktop",  # v3 requires deviceFamily
+                            "deviceFamily": device_family,  # v3 requires deviceFamily
                         },
                         "role": self.ROLE,
                         "scopes": self.SCOPES,
@@ -368,10 +372,10 @@ class OpenClawLLMService(LLMService):
 
             # Start message handler BEFORE marking as connected
             self._message_handler_task = asyncio.create_task(self._handle_messages())
-
-            # Give message handler time to start
-            await asyncio.sleep(0.5)  # Increased from 0.1
-
+            
+            # Wait for message handler to be ready (no race condition)
+            await asyncio.sleep(0.1)  # Brief wait for task to start
+            
             self._connected = True
             self._connected_event.set()
             
