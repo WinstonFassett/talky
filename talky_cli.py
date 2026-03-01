@@ -531,7 +531,7 @@ def cmd_mcp(args):
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as profile name
-    known_commands = {"say", "config", "mcp", "ls", "auth", "pi", "claude"}
+    known_commands = {"config", "say", "mcp", "ls", "auth", "pi", "claude"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "--profile")
@@ -616,6 +616,7 @@ def main():
     auth_parser.set_defaults(func=cmd_auth)
 
     # === Main bot arguments (default command) ===
+    parser.add_argument("--profile", "-p", help="Talky profile to run")
     parser.add_argument("--dir", "-d", help="Working directory for app (default: current)")
     parser.add_argument("--voice-profile", "-v", help="Voice profile override")
     parser.add_argument("--config-dir", "-c", help="Config directory (default: ~/.talky)")
@@ -632,6 +633,9 @@ def main():
     
     if hasattr(args, "func"):
         args.func(args)
+    elif hasattr(args, 'profile') or getattr(args, 'profile_flag', None):
+        # We have a profile but no subcommand - use cmd_run
+        cmd_run(args)
     else:
         # No subcommand - show help
         parser.print_help()
