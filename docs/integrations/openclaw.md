@@ -68,9 +68,55 @@ llm_backends:
 - `OPENCLAW_GATEWAY_URL`: Override default WebSocket URL
 
 ### OpenClaw Setup Requirements
-1. **Device Pairing**: Device must be paired with OpenClaw gateway
-2. **Tokens**: Requires operator and node tokens from `~/.openclaw/`
-3. **Identity**: Device identity file must exist
+1. **Device Pairing**: Device must be paired with OpenClaw gateway (see below)
+2. **Tokens**: Requires gateway token from `~/.openclaw/devices/paired.json`
+3. **Identity**: Device identity file must exist at `~/.openclaw/identity/device.json`
+
+### Device Pairing
+
+Talky uses Ed25519 device authentication with OpenClaw. On first connection (or after OpenClaw updates), you'll need to approve the device pairing.
+
+#### Initial Pairing
+
+1. **Start the OpenClaw gateway** (if not already running):
+   ```bash
+   openclaw gateway
+   ```
+
+2. **Start Talky** - it will attempt to connect and request pairing:
+   ```bash
+   talky --profile openclaw
+   ```
+
+3. **Check for pending pairing requests**:
+   ```bash
+   openclaw devices list
+   ```
+   You should see a pending request with your device ID.
+
+4. **Approve the pairing request**:
+   ```bash
+   openclaw devices approve <request-id>
+   ```
+
+5. **Restart Talky** - it should now connect successfully.
+
+#### Re-pairing After Updates
+
+If OpenClaw is updated significantly, you may see a `PAIRING_REQUIRED` error with reason `metadata-upgrade`. This happens when device metadata (platform, deviceFamily) changes between versions.
+
+To fix:
+1. Run `openclaw devices list` to see the pending request
+2. Run `openclaw devices approve <request-id>` to approve
+3. Restart Talky
+
+#### Troubleshooting Pairing
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `PAIRING_REQUIRED` | Device not paired or needs re-pairing | Run `openclaw devices approve` |
+| `device nonce mismatch` | Protocol version mismatch | Update Talky to latest |
+| `connect is only valid as first request` | Old protocol flow | Update Talky to latest |
 
 ## Implementation Details
 
@@ -306,32 +352,47 @@ sequenceDiagram
 
 ## WebSocket API
 
-### Connection Request
-```json
-{
-  "type": "req",
-  "id": "12345",
-  "method": "connect", 
-  "params": {
-    "minProtocol": 3,
-    "maxProtocol": 3,
-    "client": {
-      "id": "cli",
-      "version": "1.0.0",
-      "platform": "macos",
-      "mode": "cli"
-    },
-    "role": "operator",
-    "scopes": ["operator.admin", "operator.approvals", "operator.pairing"],
-    "auth": {"token": "operator-token"},
-    "device": {
-      "id": "device-id",
-      "publicKey": "public-key-pem",
-      "signature": "base64-signature",
-      "signedAt": 1234567890
-    }
-  }
-}
+### Connection Flow
+
+OpenClaw uses a challenge-response authentication flow:
+
+1. **Client connects** to WebSocket
+2. **Server sends challenge** with a nonce:
+   ```json
+   {
+     "type": "event",
+     "event": "connect.challenge",
+     "payload": { "nonce": "...", "ts": 1234567890 }
+   }
+   ```
+3. **Client sends connect request** with device auth signed using the server nonce:
+   ```json
+   {
+     "type": "req",
+     "id": "12345",
+     "method": "connect", 
+     "params": {
+       "minProtocol": 3,
+       "maxProtocol": 3,
+       "client": {
+         "id": "cli",
+         "version": "1.0.0",
+         "platform": "macos",
+         "mode": "cli",
+         "deviceFamily": "desktop"
+       },
+       "role": "operator",
+       "scopes": ["operator.admin", "operator.approvals", "operator.pairing"],
+       "auth": {"token": "gateway-token"},
+       "device": {
+         "id": "device-id",
+         "publicKey": "base64url-public-key",
+         "signature": "base64url-signature",
+         "signedAt": 1234567890,
+         "nonce": "server-provided-nonce"
+       }
+     }
+   }
 ```
 
 ### Chat Send Request
@@ -444,6 +505,11 @@ sequenceDiagram
 **Symptom**: "OpenClaw connection failed" errors
 **Cause**: Missing device pairing, expired tokens, or wrong gateway URL
 **Fix**: Check OpenClaw setup, verify `~/.openclaw/` configuration
+
+#### Pairing Required Errors
+**Symptom**: `PAIRING_REQUIRED` or `metadata-upgrade` errors
+**Cause**: Device needs initial pairing or re-pairing after OpenClaw update
+**Fix**: Run `openclaw devices list` then `openclaw devices approve <request-id>`
 
 ### Performance Notes
 
