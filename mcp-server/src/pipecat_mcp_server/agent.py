@@ -51,25 +51,18 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
     TurnAnalyzerUserTurnStopStrategy,
 )
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from shared.service_factory import create_stt_service_from_config, create_tts_service_from_config
+from shared.voice_config import (
+    configure_quiet_logging,
+    create_vad_analyzer,
+)
 
 # Common transport parameters for all transports
 COMMON_TRANSPORT_PARAMS = {
     "audio_in_enabled": True,
     "audio_out_enabled": True,
-    "vad_enabled": True,
-    "vad_analyzer": SileroVADAnalyzer(),
-    "vad_params": VADParams(),
-    "turn_analyzer": LocalSmartTurnAnalyzerV3(),
-    "user_stop_analyzer": TurnAnalyzerUserTurnStopStrategy(),
 }
-from pipecat.turns.user_turn_strategies import UserTurnStrategies
-from shared.service_factory import create_stt_service_from_config, create_tts_service_from_config
-
-# Import shared voice configuration for parity with bot
-from shared.voice_config import (
-    configure_quiet_logging,
-    create_vad_analyzer,
-)
 
 from pipecat_mcp_server.processors.screen_capture import ScreenCaptureProcessor
 from pipecat_mcp_server.processors.vision import VisionProcessor
@@ -311,7 +304,7 @@ class PipecatMCPAgent:
 
     def _create_voice_services(self) -> tuple[STTService, TTSService]:
         """Create STT and TTS services from default voice profile."""
-        from server.config.profile_manager import get_profile_manager
+        from shared.profile_manager import get_profile_manager
 
         pm = get_profile_manager()
         profile_name = pm.get_default_voice_profile()
