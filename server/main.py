@@ -294,10 +294,10 @@ def main():
             print(f"❌ SSL certificate not found: {cert_file}")
             sys.exit(1)
         
-        # Set environment variables for monkey patch
+        # Set environment variables for monkey patch with full paths
         os.environ["SSL_ENABLED"] = "1"
-        os.environ["SSL_KEYFILE"] = "server-key.pem"
-        os.environ["SSL_CERTFILE"] = "server-cert.pem"
+        os.environ["SSL_KEYFILE"] = str(key_file)
+        os.environ["SSL_CERTFILE"] = str(cert_file)
     
     sys.argv = [sys.argv[0]] + remaining
 
