@@ -138,7 +138,7 @@ def _start_vite_client():
         # Find Talky root directory and client directory
         import os
         from pathlib import Path
-        current_dir = Path(__file__).parent.parent.parent
+        current_dir = Path(__file__).parent.parent.parent.parent
         client_dir = current_dir / "client"
         
         if not client_dir.exists():
