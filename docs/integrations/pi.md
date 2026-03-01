@@ -11,19 +11,19 @@ This is the reverse of most Talky integrations: instead of Talky starting an LLM
 ```mermaid
 graph TB
     subgraph "Pi Coding Agent"
-        Pi[Pi Agent<br/>+ Talky Extension]
+        Pi["Pi Agent<br/>+ Talky Extension"]
     end
     
     subgraph "Talky MCP Server"
-        MCP[MCP Server<br/>port 9090]
+        MCP["MCP Server<br/>port 9090"]
     end
     
     subgraph "Voice Pipeline"
-        Pipeline[Voice Pipeline<br/>WebRTC port 7860]
+        Pipeline["Voice Pipeline<br/>WebRTC port 7860"]
     end
     
     subgraph "Browser"
-        Browser[WebRTC Audio<br/>Client]
+        Browser["WebRTC Audio<br/>Client"]
     end
     
     Pi -.->|MCP over HTTP| MCP
