@@ -78,6 +78,8 @@ Then in Claude, say:
 I want to have a voice conversation
 ```
 
+**Pre-approved Tools**: The `talky claude` command automatically pre-approves all Talky voice tools, eliminating permission prompts during voice sessions.
+
 ### Manual Steps
 
 If you prefer manual setup:

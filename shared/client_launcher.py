@@ -77,10 +77,26 @@ class AppLauncher:
         logger.info("Make sure Claude is connected to Talky MCP server:")
         logger.info("  claude mcp add --transport http talky http://localhost:9090/mcp")
         
-        # Launch Claude interactively 
+        # Launch Claude with pre-approved Talky voice tools
         logger.info(f"Starting Claude in: {self.work_dir}")
+        
+        # List of Talky MCP tools to pre-approve
+        # Tool names follow pattern: mcp__<server-name>__<tool-name>
+        # Server name is "pipecat-mcp-server" from our MCP server registration
+        allowed_tools = [
+            "mcp__pipecat-mcp-server__start",
+            "mcp__pipecat-mcp-server__speak", 
+            "mcp__pipecat-mcp-server__listen",
+            "mcp__pipecat-mcp-server__stop",
+            "mcp__pipecat-mcp-server__list_windows",
+            "mcp__pipecat-mcp-server__screen_capture",
+            "mcp__pipecat-mcp-server__capture_screenshot"
+        ]
+        
+        claude_args = ["claude", "--allowedTools", ",".join(allowed_tools)]
+        
         process = subprocess.Popen(
-            ["claude"],
+            claude_args,
             cwd=self.work_dir,
             text=True
         )
