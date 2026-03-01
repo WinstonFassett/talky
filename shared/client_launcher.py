@@ -75,23 +75,10 @@ class AppLauncher:
         # Ensure Claude is connected to Talky MCP server
         self._ensure_claude_mcp_connected()
         
-        # Launch Claude with pre-approved Talky voice tools
+        # Launch Claude with initial voice conversation prompt
         logger.info(f"Starting Claude in: {self.work_dir}")
         
-        # List of Talky MCP tools to pre-approve
-        # Tool names follow pattern: mcp__<server-name>__<tool-name>
-        # Server name is "pipecat-mcp-server" from our MCP server registration
-        allowed_tools = [
-            "mcp__pipecat-mcp-server__start",
-            "mcp__pipecat-mcp-server__speak", 
-            "mcp__pipecat-mcp-server__listen",
-            "mcp__pipecat-mcp-server__stop",
-            "mcp__pipecat-mcp-server__list_windows",
-            "mcp__pipecat-mcp-server__screen_capture",
-            "mcp__pipecat-mcp-server__capture_screenshot"
-        ]
-        
-        claude_args = ["claude", "--allowedTools", ",".join(allowed_tools)]
+        claude_args = ["claude", "I want to have a voice conversation"]
         
         process = subprocess.Popen(
             claude_args,
@@ -173,6 +160,7 @@ class AppLauncher:
             logger.info("Manual connection required:")
             logger.info("  claude mcp add --transport http talky http://localhost:9090/mcp")
     
+        
     async def trigger_voice_command(self, app_name: str):
         """Trigger voice command in the running app."""
         if app_name == "pi" and app_name in self.processes:
