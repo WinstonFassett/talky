@@ -72,10 +72,8 @@ class AppLauncher:
         if not mcp_available:
             logger.warning("Failed to start MCP server - voice features may not work")
         
-        # Note: Claude MCP connection should be set up manually by user
-        # See docs/integrations/claude-code.md for setup instructions
-        logger.info("Make sure Claude is connected to Talky MCP server:")
-        logger.info("  claude mcp add --transport http talky http://localhost:9090/mcp")
+        # Ensure Claude is connected to Talky MCP server
+        self._ensure_claude_mcp_connected()
         
         # Launch Claude with pre-approved Talky voice tools
         logger.info(f"Starting Claude in: {self.work_dir}")
@@ -146,6 +144,34 @@ class AppLauncher:
             logger.info(f"Talky skill installed: {talky_skill_file}")
         else:
             logger.debug("Talky skill already installed")
+    
+    def _ensure_claude_mcp_connected(self):
+        """Ensure Claude is connected to Talky MCP server."""
+        try:
+            # Check if talky MCP server is in Claude's configuration
+            result = subprocess.run(
+                ["claude", "mcp", "list"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if "talky" in result.stdout or "pipecat-mcp-server" in result.stdout:
+                logger.debug("Claude already connected to Talky MCP server")
+                return
+            
+            # Try to connect automatically
+            logger.info("Connecting Claude to Talky MCP server...")
+            subprocess.run([
+                "claude", "mcp", "add", "--transport", "http",
+                "talky", "http://localhost:9090/mcp"
+            ], capture_output=True, timeout=30)
+            logger.info("Connected Claude to Talky MCP server")
+            
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            logger.warning(f"Failed to connect Claude to MCP server: {e}")
+            logger.info("Manual connection required:")
+            logger.info("  claude mcp add --transport http talky http://localhost:9090/mcp")
     
     async def trigger_voice_command(self, app_name: str):
         """Trigger voice command in the running app."""
