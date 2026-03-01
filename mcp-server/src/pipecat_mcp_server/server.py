@@ -48,16 +48,15 @@ async def start() -> dict:
     """
     start_pipecat_process()
     
-    # Wait for Pipecat to be fully ready
-    import time
-    time.sleep(3)  # Give more time for Pipecat to initialize
+    # Wait for Pipecat to be fully ready with proper async checking
+    await _wait_for_pipecat_ready()
     
-    # Now start Vite client
+    # Start Vite client asynchronously
     from .agent_ipc import _start_vite_client
-    _start_vite_client()
+    await _start_vite_client()
     
-    # Give Vite client a moment to start
-    time.sleep(2)
+    # Wait for Vite client to be ready
+    await _wait_for_vite_ready()
     
     return {
         "success": True,
@@ -65,6 +64,54 @@ async def start() -> dict:
         "webrtc_url": "http://localhost:7860",
         "message": "Voice agent started. Connect via Vite client at localhost:5173."
     }
+
+
+async def _wait_for_pipecat_ready(timeout: int = 30) -> bool:
+    """Wait for Pipecat server to be ready with proper timeout."""
+    import asyncio
+    import socket
+    
+    start_time = asyncio.get_event_loop().time()
+    while (asyncio.get_event_loop().time() - start_time) < timeout:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex(('localhost', 7860))
+            sock.close()
+            
+            if result == 0:
+                logger.info("Pipecat server is ready on port 7860")
+                return True
+        except Exception:
+            pass
+        
+        await asyncio.sleep(0.5)  # Check every 500ms
+    
+    logger.warning("Pipecat server did not become ready within timeout")
+    return False
+
+
+async def _wait_for_vite_ready(timeout: int = 15) -> bool:
+    """Wait for Vite client to be ready with proper timeout."""
+    import asyncio
+    import socket
+    
+    start_time = asyncio.get_event_loop().time()
+    while (asyncio.get_event_loop().time() - start_time) < timeout:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex(('localhost', 5173))
+            sock.close()
+            
+            if result == 0:
+                logger.info("Vite client is ready on port 5173")
+                return True
+        except Exception:
+            pass
+        
+        await asyncio.sleep(0.5)  # Check every 500ms
+    
+    logger.warning("Vite client did not become ready within timeout")
+    return False
 
 
 @mcp.tool()
@@ -84,50 +131,6 @@ async def speak(text: str) -> bool:
     return True
 
 
-@mcp.tool()
-async def list_windows() -> list[dict]:
-    """List all open windows visible to the screen capture backend.
-
-    Returns a list of objects with title, app_name, and window_id fields.
-
-    Note: Multiple windows may appear for the same app (e.g., tabs, child
-    frames). When in doubt about which window the user wants, ask for
-    clarification before capturing.
-    """
-    result = await send_command("list_windows")
-    return result.get("windows", [])
-
-
-@mcp.tool()
-async def screen_capture(window_id: int | None = None) -> int | None:
-    """Start or switch screen capture to a window or full screen.
-
-    Captures are streamed through the Pipecat pipeline. Use list_windows()
-    to find available window IDs.
-
-    Args:
-        window_id: Window ID to capture (from list_windows()). If not provided,
-            captures the full screen.
-
-    Returns the window ID if the window was found, or None if it was not found
-    or capturing full screen.
-
-    """
-    result = await send_command("screen_capture", window_id=window_id)
-    return result.get("window_id")
-
-
-@mcp.tool()
-async def capture_screenshot() -> str:
-    """Take a look at what's on screen.
-
-    Use this when the user asks what you can see. Screen capture must
-    already be started via screen_capture().
-
-    Returns the absolute path to the saved image file.
-    """
-    result = await send_command("capture_screenshot")
-    return result.get("path", "No screen capture available.")
 
 
 @mcp.tool()

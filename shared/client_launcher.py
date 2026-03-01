@@ -209,11 +209,22 @@ class AppLauncher:
         """Trigger voice command in the running app."""
         if app_name == "pi" and app_name in self.processes:
             logger.info("Pi app running with /voice command already executed.")
-            return True
+            # Open browser to Vite client instead of letting Pi open debug client
+            import webbrowser
+            import time
+            try:
+                # Wait a moment for Vite client to be ready
+                time.sleep(2)
+                vite_url = "http://localhost:5173"
+                webbrowser.open(vite_url)
+                logger.info(f"Opened browser to Vite client: {vite_url}")
+            except Exception as e:
+                logger.warning(f"Could not auto-open browser to Vite client: {e}")
         elif app_name == "claude" and app_name in self.processes:
             logger.info("Claude app running with MCP server connection.")
             logger.info("Use voice tools: voice_speak, voice_listen, voice_stop")
-            return True
+        else:
+            logger.warning(f"App {app_name} not running or no voice command available")
         return False
     
     async def stop_all(self):

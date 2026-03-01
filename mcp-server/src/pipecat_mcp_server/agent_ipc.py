@@ -15,6 +15,8 @@ import asyncio
 import multiprocessing
 import queue as queue_module
 import subprocess
+import signal
+import time
 from typing import Optional
 
 from loguru import logger
@@ -27,7 +29,8 @@ multiprocessing.set_start_method("spawn", force=True)
 _cmd_queue: Optional[multiprocessing.Queue] = None
 _response_queue: Optional[multiprocessing.Queue] = None
 _pipecat_process: Optional[multiprocessing.Process] = None
-_vite_process: Optional[multiprocessing.Process] = None
+_vite_process: Optional[subprocess.Popen] = None
+_vite_lock = asyncio.Lock()  # Prevent race conditions in Vite process management
 
 
 def _cleanup():
@@ -51,16 +54,35 @@ def _cleanup():
         logger.debug(f"Pipecat MCP Agent process stopped")
         _pipecat_process = None
     
-    # Clean up Vite process
+    # Clean up Vite process with proper error handling
     try:
         if _vite_process:
-            if _vite_process.poll() is None:  # Process is still running
+            # Check if process is still running
+            if _vite_process.poll() is None:
                 logger.debug(f"Terminating Vite process (PID {_vite_process.pid})")
                 _vite_process.terminate()
-                _vite_process.wait(timeout=5.0)
-
-            logger.debug(f"Vite process stopped")
+                
+                # Wait for graceful termination
+                try:
+                    _vite_process.wait(timeout=5.0)
+                    logger.debug(f"Vite process terminated gracefully")
+                except subprocess.TimeoutExpired:
+                    logger.debug(f"Vite process did not terminate, killing (PID {_vite_process.pid})")
+                    _vite_process.kill()
+                    _vite_process.wait(timeout=2.0)
+                    logger.debug(f"Vite process killed")
+            else:
+                logger.debug(f"Vite process already stopped")
+            
             _vite_process = None
+            logger.debug(f"Vite process cleanup completed")
+    except Exception as e:
+        logger.error(f"Error during Vite process cleanup: {e}")
+        _vite_process = None  # Ensure reference is cleared even on error
+    
+    # Kill any stray processes on ports 7860 and 9090
+    try:
+        # Kill processes on port 7860 (bot) and their children
         port_7860_pids = subprocess.run(
             ["lsof", "-ti:7860"], capture_output=True, text=True
         ).stdout.strip()
@@ -115,48 +137,68 @@ def start_pipecat_process():
     logger.debug(f"Started Pipecat MCP Agent process (PID {_pipecat_process.ident})")
 
 
-def _start_vite_client():
-    """Start the Vite client for the UI."""
+async def _start_vite_client():
+    """Start the Vite client for the UI with proper race condition protection."""
     global _vite_process
     
-    # Check if Vite client is already running on port 5173
-    try:
-        import socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        result = sock.connect_ex(('localhost', 5173))
-        sock.close()
-        
-        if result == 0:
-            logger.debug("Vite client already running on port 5173")
-            return
-    except Exception:
-        pass
-    
-    # Start Vite client
-    logger.info("Starting Vite client for WebRTC connection...")
-    try:
-        # Find Talky root directory and client directory
-        import os
-        from pathlib import Path
-        current_dir = Path(__file__).parent.parent.parent.parent
-        client_dir = current_dir / "client"
-        
-        if not client_dir.exists():
-            logger.error(f"Client directory not found: {client_dir}")
+    async with _vite_lock:
+        # Check if Vite process is already running
+        if _vite_process and _vite_process.poll() is None:
+            logger.debug("Vite process already running")
             return
         
-        # Start Vite dev server
-        _vite_process = subprocess.Popen(
-            ["npm", "run", "dev"],
-            cwd=client_dir,
-            text=True
-        )
+        # Check if port 5173 is already in use by another process
+        try:
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex(('localhost', 5173))
+            sock.close()
+            
+            if result == 0:
+                logger.debug("Port 5173 already in use by another process")
+                return
+        except Exception as e:
+            logger.debug(f"Port check failed: {e}")
         
-        logger.info(f"Vite client started (PID {_vite_process.pid})")
-        
-    except Exception as e:
-        logger.error(f"Failed to start Vite client: {e}")
-        logger.info("You may need to start it manually: cd client && npm run dev")
+        # Start Vite client
+        logger.info("Starting Vite client for WebRTC connection...")
+        try:
+            # Find Talky root directory and client directory
+            import os
+            from pathlib import Path
+            current_dir = Path(__file__).parent.parent.parent.parent
+            client_dir = current_dir / "client"
+            
+            if not client_dir.exists():
+                logger.error(f"Client directory not found: {client_dir}")
+                return
+            
+            # Start Vite dev server with proper process management
+            _vite_process = subprocess.Popen(
+                ["npm", "run", "dev"],
+                cwd=client_dir,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True  # Create new process group
+            )
+            
+            logger.info(f"Vite client started (PID {_vite_process.pid})")
+            
+            # Wait a moment and check if process started successfully
+            await asyncio.sleep(2)
+            if _vite_process.poll() is not None:
+                # Process already exited, get error output
+                stdout, stderr = _vite_process.communicate()
+                logger.error(f"Vite client failed to start: {stderr}")
+                _vite_process = None
+            else:
+                logger.debug("Vite client appears to be running successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to start Vite client: {e}")
+            logger.info("You may need to start it manually: cd client && npm run dev")
+            _vite_process = None
 
 
 def stop_pipecat_process():

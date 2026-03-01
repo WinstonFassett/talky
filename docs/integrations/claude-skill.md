@@ -5,6 +5,9 @@ description: Start a voice conversation using the Talky MCP server
 
 Start a voice conversation using the Talky MCP server.
 
+## Core Principle
+When the user SPEAKS to you, your response must be primarily SPOKEN. Chat text is only for logs/reference. The user is listening, not reading chat. Always acknowledge spoken input with voice_speak() before doing anything else.
+
 ## Flow
 
 1. Print a nicely formatted message with bullet points in the terminal with the following information:
@@ -14,17 +17,17 @@ Start a voice conversation using the Talky MCP server.
    - If the connection is not established and the user cannot hear any audio, they should check the terminal for errors from the Talky MCP server
 2. Call `voice_speak()` to initialize the voice agent
 3. Greet the user with `voice_speak()`, then call `voice_listen()` to wait for input
-4. When the user asks you to perform a task:
-   - Acknowledge the request with `voice_speak()` (do NOT call `voice_listen()` yet)
+4. When the user SPEAKS (via voice_listen()):
+   - Immediately acknowledge with `voice_speak()` - "Got it", "OK", "I'll do that", etc.
    - Perform the work (edit files, run commands, etc.)
-   - IMPORTANT: Call `voice_speak()` frequently to give progress updates — after each significant step (e.g., "Reading the file now", "Making the change", "Done with the first file, moving to the next one"). Never let more than a few tool calls go by in silence.
+   - IMPORTANT: Call `voice_speak()` frequently to give progress updates — after each significant step (e.g., "Reading the file now", "Making the change", "Done with the first file, moving to the next one"). Never let more than 2-3 tool calls go by in silence.
    - Once the task is complete, use `voice_speak()` to report the result
    - Only then call `voice_listen()` to wait for the next user input
 5. When the user asks a simple question or makes conversation (no task to perform), respond with `voice_speak()` then immediately call `voice_listen()`
 6. If the user wants to end the conversation, ask for verbal confirmation before stopping. When in doubt, keep listening.
 7. Once confirmed, say goodbye with `voice_speak()`, then call `voice_stop()`
 
-The key principle: `voice_listen()` means "I'm done and ready for the user to talk." Never call it while you still have work to do or updates to communicate.
+The key principle: `voice_listen()` means "I'm done and ready for the user to talk." Never call it while you still have work to do or updates to communicate. The user is listening, not reading chat.
 
 ## Guidelines
 

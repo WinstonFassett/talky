@@ -292,6 +292,9 @@ def cmd_run(args):
             args.debug_client = True
         elif profile and hasattr(profile, 'client') and profile.client == "vite":
             args.debug_client = False
+        elif profile and hasattr(profile, 'backend') and profile.backend == "mcp":
+            # MCP backend should use Vite client by default
+            args.debug_client = False
     
     # CRITICAL: Setup logging early to catch dependency installer logs
     log_level = getattr(args, "log_level", None)
