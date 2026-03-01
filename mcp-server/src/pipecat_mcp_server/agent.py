@@ -137,6 +137,12 @@ class PipecatMCPAgent:
         )
 
         # Create voice profile switcher (same as main server)
+        import sys
+        import os
+        # Add project root to path so we can import from server
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        sys.path.insert(0, project_root)
+        
         from server.features.voice_switcher import VoiceProfileSwitcher
         from shared.profile_manager import get_profile_manager
         
