@@ -120,8 +120,8 @@ class PipecatMCPAgent:
         # Override Pipecat's noisy logging
         configure_quiet_logging()
 
-        # Create services from default voice profile
-        stt, tts = self._create_voice_services()
+        # Create STT service (TTS handled by VoiceProfileSwitcher)
+        stt = self._create_stt_service()
 
         context = LLMContext()
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
@@ -136,31 +136,44 @@ class PipecatMCPAgent:
             ),
         )
 
-        self._screen_capture = ScreenCaptureProcessor()
-        self._vision = VisionProcessor()
+        # Create voice profile switcher (same as main server)
+        from server.features.voice_switcher import VoiceProfileSwitcher
+        from shared.profile_manager import get_profile_manager
+        
+        pm = get_profile_manager()
+        profile_name = pm.get_default_voice_profile()
+        self.voice_switcher = VoiceProfileSwitcher(profile_name, pm, task=None)
+        tts_switcher = self.voice_switcher.get_service_switcher()
 
-        # Create pipeline with parallel branches:
-        # - Main branch: audio processing (STT → aggregator → TTS)
-        # - Vision branch: saves frames to disk on demand
+        # Create simplified pipeline (no vision bullshit)
         pipeline = Pipeline(
             [
                 self._transport.input(),
-                self._screen_capture,
-                ParallelPipeline(
-                    [stt, user_aggregator, tts],
-                    [self._vision],
-                ),
-                # Assistant aggregator before the transport, because we want to
-                # keep everyting from the client.
-                assistant_aggregator,
+                stt,
+                user_aggregator,
+                tts_switcher,  # Use ServiceSwitcher for dynamic TTS
                 self._transport.output(),
+                assistant_aggregator,
             ]
         )
 
         self._pipeline_task = PipelineTask(
             pipeline,
-            cancel_on_idle_timeout=False,
+            params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
         )
+
+        # Set task reference for voice switcher (needed for ManuallySwitchServiceFrame)
+        self.voice_switcher.set_task(self._pipeline_task)
+
+        # Add RTVI event handlers for voice switching (same as main server)
+        @self._pipeline_task.rtvi.event_handler("on_client_ready")
+        async def on_client_ready(rtvi):
+            logger.info("Client ready event fired")
+
+        @self._pipeline_task.rtvi.event_handler("on_client_message")
+        async def handle_client_message(rtvi, msg):
+            """Handle RTVI messages from browser voice client."""
+            await self.voice_switcher.handle_message(rtvi, msg)
 
         self._pipeline_runner = PipelineRunner(handle_sigterm=True)
 
@@ -290,20 +303,11 @@ class PipecatMCPAgent:
         return await self._screen_capture.screen_capture(window_id)
 
     async def capture_screenshot(self) -> str:
-        """Capture a screenshot from the current screen capture stream.
+        """Screenshot functionality removed - not needed for voice bot."""
+        return "Screenshot functionality removed"
 
-        Saves the next frame to a temporary PNG file. Screen capture
-        must already be started via screen_capture().
-
-        Returns:
-            The absolute path to the saved image file.
-
-        """
-        self._vision.request_capture()
-        return await self._vision.get_result()
-
-    def _create_voice_services(self) -> tuple[STTService, TTSService]:
-        """Create STT and TTS services from default voice profile."""
+    def _create_stt_service(self) -> STTService:
+        """Create STT service from default voice profile."""
         from shared.profile_manager import get_profile_manager
 
         pm = get_profile_manager()
@@ -312,12 +316,10 @@ class PipecatMCPAgent:
 
         if profile:
             stt = create_stt_service_from_config(profile.stt_provider, model=profile.stt_model)
-            tts = create_tts_service_from_config(profile.tts_provider, voice_id=profile.tts_voice)
         else:
             stt = create_stt_service_from_config("whisper_local")
-            tts = create_tts_service_from_config("kokoro")
 
-        return stt, tts
+        return stt
 
 
 async def create_agent(runner_args: RunnerArguments) -> PipecatMCPAgent:
