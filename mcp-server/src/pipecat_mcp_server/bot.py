@@ -66,15 +66,6 @@ async def bot(runner_args: RunnerArguments):
                 await agent.speak(request["text"])
                 await send_response({"ok": True})
                 logger.debug(f"Command '{cmd}' finished")
-            elif cmd == "list_windows":
-                await send_response({"windows": []})
-                logger.debug(f"Command '{cmd}' finished")
-            elif cmd == "screen_capture":
-                await send_response({"ok": False, "error": "Not implemented"})
-                logger.debug(f"Command '{cmd}' finished")
-            elif cmd == "capture_screenshot":
-                await send_response({"path": "Not implemented"})
-                logger.debug(f"Command '{cmd}' finished")
             elif cmd == "stop":
                 await agent.stop()
                 await send_response({"ok": True})

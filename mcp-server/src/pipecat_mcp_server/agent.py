@@ -282,18 +282,7 @@ class PipecatMCPAgent:
             ]
         )
 
-    async def list_windows(self) -> list[dict]:
-        """List windows - not implemented."""
-        return []
-
-    async def screen_capture(self, window_id: Optional[int] = None) -> Optional[int]:
-        """Screen capture - not implemented."""
-        return None
-
-    async def capture_screenshot(self) -> str:
-        """Screenshot - not implemented."""
-        return "Not implemented"
-
+    
     def _create_stt_service(self) -> STTService:
         """Create STT service from default voice profile."""
         from shared.profile_manager import get_profile_manager
