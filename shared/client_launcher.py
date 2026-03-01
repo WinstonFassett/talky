@@ -89,17 +89,34 @@ class AppLauncher:
             "mcp__pipecat-mcp-server__capture_screenshot"
         ]
         
-        # Options first, then prompt as positional argument
-        claude_args = ["claude", "--allowedTools", ",".join(allowed_tools), "I want to have a voice conversation"]
-        
-        # Debug: log exact command being executed
-        logger.info(f"Executing: {' '.join(claude_args)}")
+                
+        # Start Claude without prompt, then send message via stdin
+        claude_args_no_prompt = ["claude", "--allowedTools", ",".join(allowed_tools)]
+        logger.info(f"Executing: {' '.join(claude_args_no_prompt)}")
         
         process = subprocess.Popen(
-            claude_args,
+            claude_args_no_prompt,
             cwd=self.work_dir,
-            text=True
+            text=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT
         )
+        
+        # Send the initial message after Claude starts
+        import threading
+        import time
+        
+        def send_initial_message():
+            time.sleep(3)  # Wait for Claude to fully start
+            try:
+                process.stdin.write("I want to have a voice conversation\n")
+                process.stdin.flush()
+                logger.info("Sent initial message to Claude via stdin")
+            except Exception as e:
+                logger.error(f"Failed to send message to Claude: {e}")
+        
+        threading.Thread(target=send_initial_message, daemon=True).start()
         
         self.processes["claude"] = process
         return process
