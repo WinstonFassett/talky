@@ -92,6 +92,9 @@ class AppLauncher:
         # Options first, then prompt as positional argument
         claude_args = ["claude", "--allowedTools", ",".join(allowed_tools), "I want to have a voice conversation"]
         
+        # Debug: log exact command being executed
+        logger.info(f"Executing: {' '.join(claude_args)}")
+        
         process = subprocess.Popen(
             claude_args,
             cwd=self.work_dir,
