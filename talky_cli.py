@@ -633,13 +633,30 @@ def main():
     
     if hasattr(args, "func"):
         args.func(args)
-    elif hasattr(args, 'profile') or getattr(args, 'profile_flag', None):
-        # We have a profile but no subcommand - use cmd_run
-        cmd_run(args)
     else:
-        # No subcommand - show help
-        parser.print_help()
-        return
+        # No subcommand, use default profile or show help
+        if not getattr(args, 'profile', None):
+            # Use default from settings.yaml
+            try:
+                from shared.profile_manager import get_profile_manager
+                pm = get_profile_manager()
+                default_profile = pm.defaults.get("talky_profile")
+                if default_profile and default_profile in pm.list_talky_profiles():
+                    args.profile = default_profile
+                else:
+                    # Fallback to first available profile
+                    profiles = pm.list_talky_profiles()
+                    if profiles:
+                        args.profile = profiles[0]
+                    else:
+                        print("❌ Error: No talky profiles configured.")
+                        return
+            except Exception as e:
+                print(f"❌ Error loading profiles: {e}")
+                return
+        
+        # We have a profile now - use cmd_run
+        cmd_run(args)
 
 
 def cmd_run_client_profile(args):

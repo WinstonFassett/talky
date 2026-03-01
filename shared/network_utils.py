@@ -15,23 +15,23 @@ def detect_external_hostname(config_host: str, external_host: Optional[str] = No
     Returns:
         str: The hostname to use for external connections
     """
-    # If external_host is explicitly configured, use it
-    if external_host:
-        return external_host
+    # If external_host is explicitly configured and not empty, use it
+    if external_host and external_host.strip() and external_host.strip().lower() != 'none':
+        return external_host.strip()
     
     # If config_host is not localhost, use it directly
-    if config_host and config_host != "localhost":
+    if config_host and config_host.strip() and config_host != "localhost":
         if config_host == "0.0.0.0":
             # For 0.0.0.0 binding, try to detect actual hostname
             try:
                 hostname = socket.gethostname()
-                return hostname
+                return hostname if hostname else "localhost"
             except Exception:
                 # Fallback to localhost if hostname detection fails
                 return "localhost"
         else:
             # Use the configured hostname directly
-            return config_host
+            return config_host.strip()
     
     # Default to localhost
     return "localhost"

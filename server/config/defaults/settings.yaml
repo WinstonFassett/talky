@@ -2,6 +2,7 @@
 defaults:
   llm_backend: "openclaw"
   voice_profile: "default"
+  talky_profile: "openclaw"
 
 # Network settings
 network:

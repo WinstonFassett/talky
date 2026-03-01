@@ -79,7 +79,7 @@ def main():
 
     parser.add_argument("--session", "-s", help="Override session key for LLM backend")
 
-    parser.add_argument("--host", help="Host address for Pipecat server (default: localhost)")
+    parser.add_argument("--host", default="localhost", help="Host address for Pipecat server (default: localhost)")
     
     parser.add_argument("--ssl", action="store_true", help="Enable HTTPS with self-signed certificates")
 
@@ -176,25 +176,34 @@ def main():
                 from shared.profile_manager import get_profile_manager
                 pm = get_profile_manager()
                 network_config = getattr(pm, 'settings', {}).get("network", {})
-                config_host = network_config.get("host", "localhost")
-                external_host = network_config.get("external_host")
-                
-                # Import shared network utility
-                import sys
-                sys.path.append(str(Path(__file__).parent.parent))
-                from shared.network_utils import detect_external_hostname, get_browser_url
                 
                 # Get port configuration
                 frontend_port = network_config.get("frontend_port", 5173)
                 backend_port = network_config.get("backend_port", 7860)
                 
+                # Only do external hostname detection if actually binding externally
                 if host == '0.0.0.0':
+                    config_host = network_config.get("host", "localhost")
+                    external_host = network_config.get("external_host")
+                    
+                    # Import shared network utility
+                    import sys
+                    from pathlib import Path
+                    sys.path.append(str(Path(__file__).parent.parent))
+                    from shared.network_utils import detect_external_hostname, get_browser_url
+                    
                     # For external binding, detect actual hostname
                     detected_host = detect_external_hostname(config_host, external_host)
                     if detected_host != config_host:
                         print(f"⚠️  No external_host configured in settings.yaml, using detected hostname: {detected_host}")
                         print("   Set external_host in ~/.talky/settings.yaml for reliable external access")
                     host = detected_host
+                else:
+                    # For localhost binding, just import get_browser_url
+                    import sys
+                    from pathlib import Path
+                    sys.path.append(str(Path(__file__).parent.parent))
+                    from shared.network_utils import get_browser_url
                 
                 protocol = 'https' if getattr(args, 'ssl', False) else 'http'
                 vite_url = get_browser_url(host, frontend_port, getattr(args, 'ssl', False), autoconnect=True)
@@ -236,8 +245,8 @@ def main():
                         webbrowser.open(debug_url)
                         print(f"🌐 Opened browser to debug UI (fallback): {debug_url}")
                     except Exception as e2:
-                    print(f"⚠️  Could not open debug UI either")
-                    print(f"🔗 Debug UI fallback: {debug_url}")
+                        print(f"⚠️  Could not open debug UI either")
+                        print(f"🔗 Debug UI fallback: {debug_url}")
 
         # Start delayed browser open in background thread
         threading.Thread(target=delayed_open, daemon=True).start()
