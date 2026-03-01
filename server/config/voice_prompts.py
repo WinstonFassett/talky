@@ -25,7 +25,10 @@ def format_voice_message(user_message: str) -> str:
         user_message: The original user message
         
     Returns:
-        Message with TALKY VOICE STT tag
+        Message with TALKY VOICE STT tag (only if not already present)
     """
+    # Avoid double-tagging messages that already have the STT prefix
+    if user_message.startswith("[TALKY VOICE STT]:"):
+        return user_message
     return f"[TALKY VOICE STT]: {user_message}"
 
