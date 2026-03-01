@@ -8,16 +8,27 @@ This is the reverse of most Talky integrations: instead of Talky starting an LLM
 
 ## Architecture
 
-```
-┌──────────────────┐   MCP over HTTP   ┌──────────────────┐   IPC   ┌────────────────┐
-│  Pi Coding Agent │ ◄────────────────► │  Talky MCP Server│ ◄─────► │ Voice Pipeline │
-│  + Talky ext.    │                    │  (port 9090)     │         │ (WebRTC 7860)  │
-└──────────────────┘                    └──────────────────┘         └────────────────┘
-                                                                           ▲
-                                                                     WebRTC audio
-                                                                     ┌─────┘
-                                                                     │ Browser
-                                                                     └───────┘
+```mermaid
+graph TB
+    subgraph "Pi Coding Agent"
+        Pi[Pi Agent<br/>+ Talky Extension]
+    end
+    
+    subgraph "Talky MCP Server"
+        MCP[MCP Server<br/>port 9090]
+    end
+    
+    subgraph "Voice Pipeline"
+        Pipeline[Voice Pipeline<br/>WebRTC port 7860]
+    end
+    
+    subgraph "Browser"
+        Browser[WebRTC Audio<br/>Client]
+    end
+    
+    Pi -.->|MCP over HTTP| MCP
+    MCP -.->|IPC| Pipeline
+    Browser <-->|WebRTC| Pipeline
 ```
 
 **Components:**
