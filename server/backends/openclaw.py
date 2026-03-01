@@ -46,25 +46,41 @@ def load_paired_tokens(openclaw_dir: str = None):
 
     # Load gateway auth token from openclaw.json
     openclaw_config_path = os.path.join(openclaw_dir, "openclaw.json")
-    with open(openclaw_config_path, "r") as f:
-        openclaw_config = json.load(f)
+    try:
+        with open(openclaw_config_path, "r") as f:
+            openclaw_config = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"OpenClaw config not found at {openclaw_config_path}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {openclaw_config_path}: {e}")
 
     # Use remote token if available, fallback to auth token
     gateway_config = openclaw_config.get("gateway", {})
     gateway_token = (gateway_config.get("remote", {}).get("token") or 
                      gateway_config.get("auth", {}).get("token"))
 
+    if not gateway_token:
+        raise ValueError("No gateway token found in OpenClaw config")
+
     # Load device-specific tokens from paired.json
     paired_path = os.path.join(openclaw_dir, "devices/paired.json")
-    with open(paired_path, "r") as f:
-        paired_config = json.load(f)
+    try:
+        with open(paired_path, "r") as f:
+            paired_config = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Paired devices config not found at {paired_path}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {paired_path}: {e}")
 
     # Get the current device ID from identity
     device_identity = load_device_identity(openclaw_dir)
     device_id = device_identity["deviceId"]
 
     # Get the operator token for this device
-    operator_token = paired_config[device_id]["tokens"]["operator"]["token"]
+    try:
+        operator_token = paired_config[device_id]["tokens"]["operator"]["token"]
+    except KeyError:
+        raise KeyError(f"Device {device_id} not found in paired config or missing operator token")
 
     return {"operator": operator_token, "node": gateway_token, "gateway": gateway_token}
 
@@ -370,12 +386,13 @@ class OpenClawLLMService(LLMService):
 
             logger.info(f"✅ Connected to OpenClaw")
 
-            # Start message handler BEFORE marking as connected
+            # Start message handler and wait for it to be ready
             self._message_handler_task = asyncio.create_task(self._handle_messages())
             
-            # Wait for message handler to be ready (no race condition)
-            await asyncio.sleep(0.1)  # Brief wait for task to start
+            # Give the message handler a moment to start processing
+            await asyncio.sleep(0.05)
             
+            # Now mark as connected
             self._connected = True
             self._connected_event.set()
             

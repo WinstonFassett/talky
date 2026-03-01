@@ -143,6 +143,8 @@ class MCPClient {
 	/** Parse an SSE response stream to extract the JSON-RPC result */
 	private async parseSSEResponse(response: Response): Promise<any> {
 		const text = await response.text();
+		let lastResult: any = null;
+		
 		for (const line of text.split("\n")) {
 			if (!line.startsWith("data: ")) continue;
 			const raw = line.slice(6).trim();
@@ -150,12 +152,14 @@ class MCPClient {
 			try {
 				const msg = JSON.parse(raw);
 				if (msg.error) throw new Error(msg.error.message || JSON.stringify(msg.error));
-				if (msg.result !== undefined) return msg.result;
+				if (msg.result !== undefined) lastResult = msg.result;
 			} catch (e) {
 				if (e instanceof SyntaxError) continue;
 				throw e;
 			}
 		}
+		
+		if (lastResult !== null) return lastResult;
 		throw new Error("No result found in SSE response");
 	}
 
@@ -250,7 +254,6 @@ export default function (pi: ExtensionAPI) {
 		// Start talky mcp server
 		const { spawn } = await import("node:child_process");
 		talkyProcess = spawn("talky", ["mcp"], {
-			detached: true,
 			stdio: "ignore",
 		});
 
