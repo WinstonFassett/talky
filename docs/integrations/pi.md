@@ -10,25 +10,9 @@ This is the reverse of most Talky integrations: instead of Talky starting an LLM
 
 ```mermaid
 graph TB
-    subgraph "Pi Coding Agent"
-        Pi[Pi Agent<br/>+ Talky Extension]
-    end
-    
-    subgraph "Talky MCP Server"
-        MCP[MCP Server<br/>port 9090]
-    end
-    
-    subgraph "Voice Pipeline"
-        Pipeline[Voice Pipeline<br/>WebRTC port 7860]
-    end
-    
-    subgraph "Browser"
-        Browser[WebRTC Audio<br/>Client]
-    end
-    
-    Pi -.->|MCP over HTTP| MCP
-    MCP -.->|IPC| Pipeline
-    Browser <-->|WebRTC| Pipeline
+    Pi[Pi Agent + Talky Extension] -->|MCP over HTTP| MCP[MCP Server port 9090]
+    MCP -->|IPC| Pipeline[Voice Pipeline WebRTC port 7860]
+    Browser[WebRTC Audio Client] <-->|WebRTC| Pipeline
 ```
 
 **Components:**
