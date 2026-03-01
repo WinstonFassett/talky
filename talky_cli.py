@@ -495,7 +495,7 @@ def cmd_mcp(args):
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as profile name
-    known_commands = {"say", "config", "mcp", "ls", "auth", "pi"}
+    known_commands = {"say", "config", "mcp", "ls", "auth", "pi", "claude"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "--profile")
@@ -554,6 +554,26 @@ def main():
         return cmd_run_client_profile(args_obj)
     
     pi_parser.set_defaults(func=cmd_pi)
+
+    # === claude subcommand ===
+    claude_parser = subparsers.add_parser("claude", help="Start Claude with voice")
+    claude_parser.add_argument("--dir", "-d", help="Working directory for app (default: current)")
+    
+    def cmd_claude(args):
+        # Create a simple object with the profile and copy all attributes
+        class Args:
+            def __init__(self, profile, **kwargs):
+                self.profile = profile
+                # Copy all attributes from the original args
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+        
+        # Copy all attributes from original args
+        args_dict = {k: v for k, v in vars(args).items() if k != 'func'}
+        args_obj = Args('claude', **args_dict)
+        return cmd_run_client_profile(args_obj)
+    
+    claude_parser.set_defaults(func=cmd_claude)
 
     # === auth subcommand ===
     auth_parser = subparsers.add_parser("auth", help="Manage provider credentials")

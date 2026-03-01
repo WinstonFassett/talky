@@ -50,8 +50,28 @@ class AppLauncher:
         return process
     
     async def _launch_claude(self, config: Dict[str, Any]) -> subprocess.Popen:
-        """Launch Claude app (placeholder for future implementation)."""
-        raise NotImplementedError("Claude app not yet implemented")
+        """Launch Claude app."""
+        # Check if claude command exists
+        try:
+            subprocess.run(["claude", "--version"], capture_output=True, check=True, timeout=10)
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            raise RuntimeError("Claude command not found. Install from https://claude.ai/install.sh") from e
+        
+        # Note: Claude MCP connection should be set up manually by user
+        # See docs/integrations/claude-code.md for setup instructions
+        logger.info("Make sure Claude is connected to Talky MCP server:")
+        logger.info("  claude mcp add --transport http talky http://localhost:9090/mcp")
+        
+        # Launch Claude interactively 
+        logger.info(f"Starting Claude in: {self.work_dir}")
+        process = subprocess.Popen(
+            ["claude"],
+            cwd=self.work_dir,
+            text=True
+        )
+        
+        self.processes["claude"] = process
+        return process
     
     def _ensure_talky_extension_linked(self):
         """Create symlink to Talky extension if not exists."""
@@ -74,9 +94,12 @@ class AppLauncher:
     
     async def trigger_voice_command(self, app_name: str):
         """Trigger voice command in the running app."""
-        # Pi is launched with /voice directly, so no need to trigger it
         if app_name == "pi" and app_name in self.processes:
             logger.info("Pi app running with /voice command already executed.")
+            return True
+        elif app_name == "claude" and app_name in self.processes:
+            logger.info("Claude app running with MCP server connection.")
+            logger.info("Use voice tools: voice_speak, voice_listen, voice_stop")
             return True
         return False
     
