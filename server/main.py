@@ -85,7 +85,7 @@ def main():
 
     # Handle list profiles
     if args.list_profiles:
-        from config.profile_manager import get_profile_manager
+        from shared.profile_manager import get_profile_manager
         
         pm = get_profile_manager(config_dir=args.config_dir)
 
@@ -109,7 +109,7 @@ def main():
             print("⚠️  --local-speech overrides --voice-profile")
         # Use configured local speech profile, don't hardcode
         try:
-            from config.profile_manager import get_profile_manager
+            from shared.profile_manager import get_profile_manager
 
             pm = get_profile_manager(config_dir=args.config_dir)
 
@@ -127,7 +127,7 @@ def main():
         setup_logging(args.log_level)
 
     # Use provided talky profile or require explicit selection
-    from config.profile_manager import get_profile_manager
+    from shared.profile_manager import get_profile_manager
     
     pm = get_profile_manager(config_dir=args.config_dir)
 
@@ -171,7 +171,7 @@ def main():
             # Determine host and protocol using shared network utility
             host = getattr(args, 'host', 'localhost')
             try:
-                from config.profile_manager import get_profile_manager
+                from shared.profile_manager import get_profile_manager
                 pm = get_profile_manager()
                 network_config = getattr(pm, 'settings', {}).get("network", {})
                 config_host = network_config.get("host", "localhost")

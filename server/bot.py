@@ -184,7 +184,7 @@ async def run_bot(
 
 async def bot(runner_args: RunnerArguments):
     """Main bot entry point."""
-    from config.profile_manager import get_profile_manager
+    from shared.profile_manager import get_profile_manager
     
     pm = get_profile_manager()
     

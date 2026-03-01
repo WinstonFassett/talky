@@ -1,0 +1,149 @@
+"""Client launcher for different AI clients (Pi, Claude, etc.)"""
+
+import asyncio
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Optional, Dict, Any
+
+from loguru import logger
+
+
+class AppLauncher:
+    """Launches AI apps and manages their lifecycle."""
+    
+    def __init__(self, work_dir: Optional[str] = None):
+        self.work_dir = Path(work_dir) if work_dir else Path.cwd()
+        self.processes: Dict[str, subprocess.Popen] = {}
+        
+    async def launch_app(self, app_name: str, config: Dict[str, Any]) -> subprocess.Popen:
+        """Launch a specific app with configuration."""
+        if app_name == "pi":
+            return await self._launch_pi(config)
+        elif app_name == "claude":
+            return await self._launch_claude(config)
+        else:
+            raise ValueError(f"Unknown app: {app_name}")
+    
+    async def _launch_pi(self, config: Dict[str, Any]) -> subprocess.Popen:
+        """Launch Pi app."""
+        # Check if pi command exists
+        try:
+            subprocess.run(["pi", "--version"], capture_output=True, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            raise RuntimeError("Pi command not found. Install from https://github.com/mariozechner/pi") from e
+        
+        # Ensure Talky extension is linked
+        self._ensure_talky_extension_linked()
+        
+        # Launch Pi interactively with /voice as initial command
+        logger.info(f"Starting Pi interactively with /voice command: {self.work_dir}")
+        process = subprocess.Popen(
+            ["pi", "/voice"],
+            cwd=self.work_dir,
+            text=True
+        )
+        
+        self.processes["pi"] = process
+        return process
+    
+    async def _launch_claude(self, config: Dict[str, Any]) -> subprocess.Popen:
+        """Launch Claude app (placeholder for future implementation)."""
+        raise NotImplementedError("Claude app not yet implemented")
+    
+    def _ensure_talky_extension_linked(self):
+        """Create symlink to Talky extension if not exists."""
+        pi_extensions_dir = Path.home() / ".pi" / "agent" / "extensions"
+        talky_extension = pi_extensions_dir / "talky"
+        
+        if not talky_extension.exists():
+            logger.info("Creating symlink to Talky extension...")
+            pi_extensions_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Get the talky repo root
+            talky_root = Path(__file__).parent.parent.parent
+            extension_source = talky_root / "pi-extension"
+            
+            if not extension_source.exists():
+                raise RuntimeError(f"Extension not found at: {extension_source}")
+            
+            talky_extension.symlink_to(extension_source, target_is_directory=True)
+            logger.info(f"Extension linked: {talky_extension}")
+    
+    async def trigger_voice_command(self, app_name: str):
+        """Trigger voice command in the running app."""
+        # Pi is launched with /voice directly, so no need to trigger it
+        if app_name == "pi" and app_name in self.processes:
+            logger.info("Pi app running with /voice command already executed.")
+            return True
+        return False
+    
+    async def stop_all(self):
+        """Stop all running apps."""
+        for name, process in self.processes.items():
+            logger.info(f"Stopping {name} app...")
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        self.processes.clear()
+        logger.info("All apps stopped")
+
+
+class MCPServerManager:
+    """Manages MCP server lifecycle."""
+    
+    def __init__(self):
+        self.process: Optional[subprocess.Popen] = None
+        
+    async def ensure_running(self, config: Dict[str, Any]) -> bool:
+        """Ensure MCP server is running, start if needed. Returns True if server is available."""
+        # Check if port is already in use
+        try:
+            result = subprocess.run(["lsof", "-ti:9090"], capture_output=True, text=True)
+            if result.stdout.strip():
+                logger.info("MCP server already running on port 9090")
+                return True
+        except (FileNotFoundError, subprocess.SubprocessError) as e:
+            logger.debug(f"Could not check port 9090: {e}")
+        
+        # Start MCP server in background
+        logger.info("Starting Talky MCP server in background...")
+        mcp_args = ["talky", "mcp"]
+        
+        if voice_profile := config.get("voice_profile"):
+            mcp_args.extend(["--voice-profile", voice_profile])
+        
+        if host := config.get("host"):
+            mcp_args.extend(["--host", host])
+        
+        # Start detached - don't wait for it
+        subprocess.Popen(
+            mcp_args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True  # Detach from parent process
+        )
+        
+        # Give MCP server a moment to start
+        time.sleep(2)
+        
+        # Verify it started
+        try:
+            result = subprocess.run(["lsof", "-ti:9090"], capture_output=True, text=True)
+            if result.stdout.strip():
+                logger.info("MCP server started successfully")
+                return True
+            else:
+                logger.error("MCP server failed to start")
+                return False
+        except (FileNotFoundError, subprocess.SubprocessError):
+            logger.error("Could not verify MCP server startup")
+            return False
+    
+    async def stop(self):
+        """MCP server is left running as a service - no cleanup needed."""
+        logger.info("MCP server left running as background service")

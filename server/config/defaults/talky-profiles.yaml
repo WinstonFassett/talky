@@ -13,7 +13,16 @@ talky_profiles:
     description: "Moltis"
     llm_backend: "moltis"
 
-  # Pi Coding Agent
+  # Pi Coding Agent with MCP voice
   pi:
-    description: "Pi Coding Agent"
-    llm_backend: "pi"
+    description: "Pi Coding Agent with voice"
+    backend: "mcp"
+    app: "pi"
+    voice_profile: null  # Use default
+
+  # Claude with MCP voice (future)
+  claude:
+    description: "Claude with voice"
+    backend: "mcp"
+    app: "claude"
+    voice_profile: null  # Use default

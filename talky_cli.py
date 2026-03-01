@@ -495,7 +495,7 @@ def cmd_mcp(args):
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as profile name
-    known_commands = {"say", "config", "mcp", "ls", "auth"}
+    known_commands = {"say", "config", "mcp", "ls", "auth", "pi"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "--profile")
@@ -534,17 +534,37 @@ def main():
     ls_parser = subparsers.add_parser("ls", help="List profiles")
     ls_parser.set_defaults(func=lambda args: cmd_list_profiles(args))
 
+    
+    # === pi subcommand ===
+    pi_parser = subparsers.add_parser("pi", help="Start Pi with voice")
+    pi_parser.add_argument("--dir", "-d", help="Working directory for app (default: current)")
+    
+    def cmd_pi(args):
+        # Create a simple object with the profile and copy all attributes
+        class Args:
+            def __init__(self, profile, **kwargs):
+                self.profile = profile
+                # Copy all attributes from the original args
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+        
+        # Copy all attributes from original args
+        args_dict = {k: v for k, v in vars(args).items() if k != 'func'}
+        args_obj = Args('pi', **args_dict)
+        return cmd_run_client_profile(args_obj)
+    
+    pi_parser.set_defaults(func=cmd_pi)
+
     # === auth subcommand ===
     auth_parser = subparsers.add_parser("auth", help="Manage provider credentials")
     auth_parser.set_defaults(func=cmd_auth)
 
     # === Main bot arguments (default command) ===
-    parser.add_argument("profile", nargs="?", help="Talky profile name")
-    parser.add_argument("--profile", "-p", dest="profile_flag", help="Talky profile")
+    parser.add_argument("--dir", "-d", help="Working directory for app (default: current)")
     parser.add_argument("--voice-profile", "-v", help="Voice profile override")
     parser.add_argument("--config-dir", "-c", help="Config directory (default: ~/.talky)")
     parser.add_argument("--list-profiles", "-l", action="store_true", help="List available profiles")
-    parser.add_argument("--debug-client", "-d", action="store_true", help="Use Pipecat debug client instead of custom React client")
+    parser.add_argument("--debug-client", action="store_true", help="Use Pipecat debug client instead of custom React client")
     parser.add_argument("--no-open", action="store_true", help="Don't open browser")
     parser.add_argument("--local-speech", action="store_true", help="Use local speech")
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
@@ -552,32 +572,93 @@ def main():
 
     parser.add_argument("--host", help="Override host binding (default: from config)")
 
-    args, remaining = parser.parse_known_args()
-
+    args = parser.parse_args()
+    
     if hasattr(args, "func"):
         args.func(args)
     else:
-        # No subcommand, use default profile or show help
-        if not args.profile and not args.profile_flag:
-            # Use default from settings.yaml
-            try:
-                from shared.profile_manager import get_profile_manager
-                pm = get_profile_manager()
-                default_backend = pm.defaults.get("llm_backend")
-                if default_backend and default_backend in pm.list_talky_profiles():
-                    args.profile = default_backend
-                else:
-                    # Fallback to first available profile
-                    profiles = pm.list_talky_profiles()
-                    if profiles:
-                        args.profile = profiles[0]
-                    else:
-                        print("❌ Error: No talky profiles configured.")
-                        return
-            except Exception as e:
-                print(f"❌ Error loading profiles: {e}")
-                return
-        cmd_run(args)
+        # No subcommand - show help
+        parser.print_help()
+        return
+
+
+def cmd_run_client_profile(args):
+    """Run an app profile (e.g., 'talky pi', 'talky claude')."""
+    import asyncio
+    from shared.client_launcher import AppLauncher, MCPServerManager
+    from shared.profile_manager import get_profile_manager
+    
+    profile_name = args.profile
+    work_dir = getattr(args, 'dir', None)
+    
+    try:
+        pm = get_profile_manager()
+        profile = pm.get_talky_profile(profile_name)
+        if not profile:
+            print(f"❌ Unknown profile: {profile_name}")
+            print("Available profiles:")
+            for name, desc in pm.list_talky_profiles().items():
+                print(f"  {name:<20} - {desc}")
+            return
+        
+        # Check if this is a new-style profile with backend/app
+        if profile.backend and profile.app:
+            asyncio.run(_run_backend_client_profile(profile, work_dir))
+        else:
+            # Legacy profile - use original bot
+            cmd_run(args)
+            
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return
+
+
+async def _run_backend_client_profile(profile, work_dir):
+    """Run a new-style backend + app profile."""
+    import asyncio
+    from shared.client_launcher import AppLauncher, MCPServerManager
+    
+    print(f"🚀 Starting {profile.app} with {profile.backend} voice backend...")
+    
+    # Initialize managers
+    mcp_manager = MCPServerManager()
+    app_launcher = AppLauncher(work_dir)
+    
+    try:
+        # Start MCP server if needed (runs as background service)
+        mcp_config = {}
+        if profile.voice_profile:
+            mcp_config["voice_profile"] = profile.voice_profile
+        
+        mcp_available = await mcp_manager.ensure_running(mcp_config)
+        if not mcp_available:
+            print("❌ Failed to start MCP server")
+            return
+        
+        # Launch app
+        app_config = {}
+        await app_launcher.launch_app(profile.app, app_config)
+        
+        # Trigger voice command
+        await app_launcher.trigger_voice_command(profile.app)
+        
+        print(f"✅ {profile.app.capitalize()} is running. Use Ctrl+C to stop.")
+        
+        # Wait for Pi process to finish (when voice conversation ends)
+        pi_process = app_launcher.processes.get(profile.app)
+        if pi_process:
+            await asyncio.get_event_loop().run_in_executor(None, pi_process.wait)
+        
+        print("👋 Pi session completed.")
+            
+    except KeyboardInterrupt:
+        print("\n👋 Shutting down...")
+    except Exception as e:
+        print(f"❌ Error: {e}")
+    finally:
+        await app_launcher.stop_all()
+        await mcp_manager.stop()  # Just logs that MCP server is left running
+        print("✅ Done")
 
 
 if __name__ == "__main__":

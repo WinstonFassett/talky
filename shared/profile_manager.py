@@ -43,8 +43,10 @@ class VoiceProfile:
 class TalkyProfile:
     name: str
     description: str
-    llm_backend: str
-    voice_profile: str
+    llm_backend: Optional[str] = None  # Legacy - for backends like OpenClaw/Moltis
+    voice_profile: Optional[str] = None
+    backend: Optional[str] = None  # New: "mcp" for voice backends
+    app: Optional[str] = None  # New: "pi", "claude", etc.
     session_key: Optional[str] = None  # Override session for LLM backend
     system_message: Optional[str] = None  # Optional system message
 
@@ -296,9 +298,12 @@ class ProfileManager:
                     self.talky_profiles[name] = TalkyProfile(
                         name=name,
                         description=config.get("description", ""),
-                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend") or "",
-                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile") or "",
+                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend"),
+                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
+                        backend=config.get("backend"),
+                        app=config.get("app"),
                         session_key=config.get("session_key"),
+                        system_message=config.get("system_message"),
                     )
             
             # Then apply user overrides
@@ -315,8 +320,10 @@ class ProfileManager:
                         self.talky_profiles[name] = TalkyProfile(
                             name=name,
                             description=merged_config.get("description", ""),
-                            llm_backend=merged_config.get("llm_backend") or self.defaults.get("llm_backend") or "",
-                            voice_profile=merged_config.get("voice_profile") or self.defaults.get("voice_profile") or "",
+                            llm_backend=merged_config.get("llm_backend") or self.defaults.get("llm_backend"),
+                            voice_profile=merged_config.get("voice_profile") or self.defaults.get("voice_profile"),
+                            backend=merged_config.get("backend"),
+                            app=merged_config.get("app"),
                             session_key=merged_config.get("session_key"),
                             system_message=merged_config.get("system_message"),
                         )
@@ -344,9 +351,12 @@ class ProfileManager:
                     self.talky_profiles[name] = TalkyProfile(
                         name=name,
                         description=config.get("description", ""),
-                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend") or "",
-                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile") or "",
+                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend"),
+                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
+                        backend=config.get("backend"),
+                        app=config.get("app"),
                         session_key=config.get("session_key"),
+                        system_message=config.get("system_message"),
                     )
         except Exception as e:
             logger.warning(f"Error loading user talky profiles: {e}. Using core profiles only.")
@@ -357,9 +367,12 @@ class ProfileManager:
                     self.talky_profiles[name] = TalkyProfile(
                         name=name,
                         description=config.get("description", ""),
-                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend") or "",
-                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile") or "",
+                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend"),
+                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
+                        backend=config.get("backend"),
+                        app=config.get("app"),
                         session_key=config.get("session_key"),
+                        system_message=config.get("system_message"),
                     )
 
     def _load_defaults(self):
