@@ -57,6 +57,21 @@ class AppLauncher:
         except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             raise RuntimeError("Claude command not found. Install from https://claude.ai/install.sh") from e
         
+        # Ensure Talky skill is installed
+        self._ensure_claude_skill_installed()
+        
+        # Ensure MCP server is running (same logic as in _run_backend_client_profile)
+        from shared.client_launcher import MCPServerManager
+        mcp_manager = MCPServerManager()
+        
+        mcp_config = {}
+        if config.get("voice_profile"):
+            mcp_config["voice_profile"] = config["voice_profile"]
+        
+        mcp_available = await mcp_manager.ensure_running(mcp_config)
+        if not mcp_available:
+            logger.warning("Failed to start MCP server - voice features may not work")
+        
         # Note: Claude MCP connection should be set up manually by user
         # See docs/integrations/claude-code.md for setup instructions
         logger.info("Make sure Claude is connected to Talky MCP server:")
@@ -82,8 +97,8 @@ class AppLauncher:
             logger.info("Creating symlink to Talky extension...")
             pi_extensions_dir.mkdir(parents=True, exist_ok=True)
             
-            # Get the talky repo root
-            talky_root = Path(__file__).parent.parent.parent
+            # Find Talky root directory
+            talky_root = Path(__file__).parent.parent
             extension_source = talky_root / "pi-extension"
             
             if not extension_source.exists():
@@ -91,6 +106,30 @@ class AppLauncher:
             
             talky_extension.symlink_to(extension_source, target_is_directory=True)
             logger.info(f"Extension linked: {talky_extension}")
+    
+    def _ensure_claude_skill_installed(self):
+        """Install Talky skill for Claude if not exists."""
+        claude_skills_dir = Path.home() / ".claude" / "skills"
+        talky_skill_dir = claude_skills_dir / "talky"
+        talky_skill_file = talky_skill_dir / "SKILL.md"
+        
+        if not talky_skill_file.exists():
+            logger.info("Installing Talky skill for Claude...")
+            claude_skills_dir.mkdir(parents=True, exist_ok=True)
+            talky_skill_dir.mkdir(exist_ok=True)
+            
+            # Find Talky root directory and copy skill file
+            talky_root = Path(__file__).parent.parent
+            skill_source = talky_root / "docs" / "integrations" / "claude-skill.md"
+            
+            if not skill_source.exists():
+                raise RuntimeError(f"Skill file not found at: {skill_source}")
+            
+            import shutil
+            shutil.copy2(skill_source, talky_skill_file)
+            logger.info(f"Talky skill installed: {talky_skill_file}")
+        else:
+            logger.debug("Talky skill already installed")
     
     async def trigger_voice_command(self, app_name: str):
         """Trigger voice command in the running app."""

@@ -48,25 +48,54 @@ claude mcp list
 
 The Talky skill provides voice conversation capabilities:
 
+**Automatic Installation (Recommended):**
 ```bash
-# Skill should be at ~/.claude/skills/talky/SKILL.md
-# Created automatically by talky claude command
+# Skill is installed automatically when you run talky claude
+talky claude
+```
+
+**Manual Installation:**
+```bash
+# Run the installation script
+./scripts/install-claude-skill.sh
+
+# Or manually copy the skill file
+mkdir -p ~/.claude/skills/talky
+cp docs/integrations/claude-skill.md ~/.claude/skills/talky/SKILL.md
 ```
 
 ## Usage
 
-### Starting a Voice Conversation
+### Quick Start (One Command)
 
-In Claude Code, simply say:
+```bash
+# This handles everything: MCP server, skill installation, and Claude
+talky claude
+```
 
+Then in Claude, say:
 ```
 I want to have a voice conversation
 ```
 
-This will:
-1. Start the voice session using the Talky skill
-2. Open a browser window for WebRTC audio connection
-3. Allow you to talk with Claude through your microphone
+### Manual Steps
+
+If you prefer manual setup:
+
+1. **Start MCP server**: `talky mcp`
+2. **Install skill**: `./scripts/install-claude-skill.sh`
+3. **Connect Claude**: `claude mcp add --transport http talky http://localhost:9090/mcp`
+4. **Run Claude**: `claude`
+5. **Start voice**: "I want to have a voice conversation"
+
+### What Happens
+
+When you start a voice conversation:
+
+1. The Talky skill initializes the voice session
+2. A browser window opens for WebRTC audio connection
+3. You can talk with Claude through your microphone
+4. Claude responds using text-to-speech
 
 ### Voice Tools Available
 
