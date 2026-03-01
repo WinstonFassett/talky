@@ -75,10 +75,22 @@ class AppLauncher:
         # Ensure Claude is connected to Talky MCP server
         self._ensure_claude_mcp_connected()
         
-        # Launch Claude with initial voice conversation prompt
+        # Launch Claude with pre-approved tools and initial prompt
         logger.info(f"Starting Claude in: {self.work_dir}")
         
-        claude_args = ["claude", "I want to have a voice conversation"]
+        # List of Talky MCP tools to pre-approve
+        allowed_tools = [
+            "mcp__pipecat-mcp-server__start",
+            "mcp__pipecat-mcp-server__speak", 
+            "mcp__pipecat-mcp-server__listen",
+            "mcp__pipecat-mcp-server__stop",
+            "mcp__pipecat-mcp-server__list_windows",
+            "mcp__pipecat-mcp-server__screen_capture",
+            "mcp__pipecat-mcp-server__capture_screenshot"
+        ]
+        
+        # Options first, then prompt as positional argument
+        claude_args = ["claude", "--allowedTools", ",".join(allowed_tools), "I want to have a voice conversation"]
         
         process = subprocess.Popen(
             claude_args,
