@@ -34,9 +34,19 @@ async def bot(runner_args: RunnerArguments):
             transport type and connection settings.
 
     """
-    # Create and start the agent
-    agent = await create_agent(runner_args)
-    await agent.start()
+    try:
+        logger.info("Creating Pipecat MCP Agent...")
+        # Create and start the agent
+        agent = await create_agent(runner_args)
+        logger.info("Starting Pipecat MCP Agent pipeline...")
+        await agent.start()
+        logger.info("Pipecat MCP Agent pipeline started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start Pipecat MCP Agent: {e}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise
 
     logger.info("Voice agent started, processing commands...")
 
