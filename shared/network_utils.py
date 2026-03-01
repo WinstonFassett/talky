@@ -53,7 +53,7 @@ def get_default_gateway_url(config_host: str, external_host: Optional[str] = Non
     return f"ws://{hostname}:{port}"
 
 
-def get_browser_url(host: str, port: int, ssl_enabled: bool = False) -> str:
+def get_browser_url(host: str, port: int, ssl_enabled: bool = False, autoconnect: bool = True) -> str:
     """
     Get the browser URL for accessing the web interface.
     
@@ -61,9 +61,13 @@ def get_browser_url(host: str, port: int, ssl_enabled: bool = False) -> str:
         host: Host for the browser URL
         port: Port number
         ssl_enabled: Whether HTTPS is enabled
+        autoconnect: Whether to add autoconnect=true parameter
         
     Returns:
-        str: Browser URL (e.g., "https://localhost:5173")
+        str: Browser URL (e.g., "https://localhost:5173?autoconnect=true")
     """
     protocol = "https" if ssl_enabled else "http"
-    return f"{protocol}://{host}:{port}"
+    url = f"{protocol}://{host}:{port}"
+    if autoconnect:
+        url += "?autoconnect=true"
+    return url

@@ -197,8 +197,8 @@ def main():
                     host = detected_host
                 
                 protocol = 'https' if getattr(args, 'ssl', False) else 'http'
-                vite_url = get_browser_url(host, frontend_port, getattr(args, 'ssl', False))
-                debug_url = get_browser_url(host, backend_port, getattr(args, 'ssl', False))
+                vite_url = get_browser_url(host, frontend_port, getattr(args, 'ssl', False), autoconnect=True)
+                debug_url = get_browser_url(host, backend_port, getattr(args, 'ssl', False), autoconnect=True)
                 
             except Exception as e:
                 print(f"⚠️  Could not detect external hostname: {e}")
@@ -208,8 +208,10 @@ def main():
                 # Use default ports for fallback
                 frontend_port = 5173
                 backend_port = 7860
-                vite_url = f"{protocol}://{host}:{frontend_port}?autoconnect=true"
-                debug_url = f"{protocol}://{host}:{backend_port}/client?autoconnect=true"
+                vite_url = get_browser_url(host, frontend_port, getattr(args, 'ssl', False), autoconnect=True)
+                debug_url = get_browser_url(host, backend_port, getattr(args, 'ssl', False), autoconnect=True)
+                # For debug client, add /client path
+                debug_url = debug_url.replace("?autoconnect=true", "/client?autoconnect=true")
 
             # Choose client based on debug-client flag
             if args.debug_client:
