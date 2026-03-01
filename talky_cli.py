@@ -128,6 +128,18 @@ def start_client_dev_server(external_binding=False, host="localhost"):
         env = os.environ.copy()
         env['VITE_HOST'] = host
         
+        # Add HTTPS and external host configuration for external binding
+        if external_binding:
+            env['VITE_HTTPS'] = 'true'
+            env['VITE_EXTERNAL_HOST'] = host
+            # Set up backend URL for HTTPS
+            try:
+                network_config = getattr(pm, 'settings', {}).get("network", {})
+                backend_port = network_config.get("backend_port", "7860")
+                env['VITE_BOT_START_URL'] = f"https://{host}:{backend_port}/start"
+            except:
+                env['VITE_BOT_START_URL'] = f"https://{host}:7860/start"
+        
         # Get backend port from config
         try:
             network_config = getattr(pm, 'settings', {}).get("network", {})

@@ -5,6 +5,15 @@ set -e
 
 echo "🔐 Generating SSL certificates for development..."
 
+# Function to get external hostname from settings
+get_external_hostname() {
+    local settings_file="$HOME/.talky/settings.yaml"
+    if [[ -f "$settings_file" ]]; then
+        # Extract external_host from settings.yaml - get the value after the colon
+        grep "^[[:space:]]*external_host:" "$settings_file" | sed 's/.*external_host:[[:space:]]*//' | sed 's/[[:space:]]*#.*//' | sed 's/"//g' | tr -d ' '
+    fi
+}
+
 # Function to validate certificate file
 validate_cert() {
     local cert_file=$1
@@ -48,6 +57,13 @@ validate_cert() {
     echo "✅ $description validated successfully"
 }
 
+# Determine hostname for certificates
+EXTERNAL_HOST=$(get_external_hostname)
+HOSTNAME=${1:-$EXTERNAL_HOST}
+HOSTNAME=${HOSTNAME:-"localhost"}
+
+echo "🌐 Using hostname: $HOSTNAME"
+
 # Client certificates
 echo "📱 Generating client certificates..."
 cd client
@@ -56,7 +72,7 @@ openssl req -x509 -newkey rsa:2048 \
   -out localhost-cert.pem \
   -days 365 \
   -nodes \
-  -subj "/CN=localhost"
+  -subj "/CN=$HOSTNAME"
 
 # Server certificates  
 echo "🖥️  Generating server certificates..."
@@ -66,7 +82,7 @@ openssl req -x509 -newkey rsa:2048 \
   -out server-cert.pem \
   -days 365 \
   -nodes \
-  -subj "/CN=localhost"
+  -subj "/CN=$HOSTNAME"
 
 cd ..
 
