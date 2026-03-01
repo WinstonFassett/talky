@@ -144,6 +144,12 @@ def _check_extra_installed(extra: str) -> bool:
         except ImportError:
             return False
     
+    if extra == "stt-deepgram":
+        try:
+            import deepgram
+        except ImportError:
+            return False
+    
     return True
 
 
