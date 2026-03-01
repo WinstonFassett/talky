@@ -120,6 +120,7 @@ def _check_extra_installed(extra: str) -> bool:
     """Return True if every package required by an extra is present.
     
     Reads from pyproject.toml static definitions instead of pipecat metadata.
+    Also checks for specific module availability for providers with optional deps.
     """
     extras = _read_project_extras()
     if extra not in extras:
@@ -135,6 +136,14 @@ def _check_extra_installed(extra: str) -> bool:
             importlib.metadata.distribution(pkg_name)
         except importlib.metadata.PackageNotFoundError:
             return False
+    
+    # Additional checks for specific provider modules
+    if extra == "stt-google":
+        try:
+            import google.genai
+        except ImportError:
+            return False
+    
     return True
 
 

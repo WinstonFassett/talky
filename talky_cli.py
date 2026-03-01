@@ -188,7 +188,18 @@ def cmd_say(args):
 
     # Daemon management sub-actions
     if args.start_daemon or args.stop_daemon or args.daemon_status:
-        cmd = [sys.executable, str(server_dir / "tts_daemon.py")]
+        # Check if we're in a uv tool environment and use uv run for proper dependency handling
+        if ".local/share/uv/tools/" in sys.executable:
+            # In tool environment, use uv run to ensure dependencies are available
+            import shutil
+            uv_cmd = shutil.which("uv")
+            if uv_cmd:
+                cmd = [uv_cmd, "run", str(server_dir / "tts_daemon.py")]
+            else:
+                cmd = [sys.executable, str(server_dir / "tts_daemon.py")]
+        else:
+            cmd = [sys.executable, str(server_dir / "tts_daemon.py")]
+        
         if args.start_daemon:
             cmd.append("--start")
         elif args.stop_daemon:
@@ -199,7 +210,16 @@ def cmd_say(args):
         sys.exit(result.returncode)
 
     if args.list_profiles:
-        cmd = [sys.executable, str(server_dir / "tts_daemon.py"), "--list-profiles"]
+        # Check if we're in a uv tool environment and use uv run for proper dependency handling
+        if ".local/share/uv/tools/" in sys.executable:
+            import shutil
+            uv_cmd = shutil.which("uv")
+            if uv_cmd:
+                cmd = [uv_cmd, "run", str(server_dir / "tts_daemon.py"), "--list-profiles"]
+            else:
+                cmd = [sys.executable, str(server_dir / "tts_daemon.py"), "--list-profiles"]
+        else:
+            cmd = [sys.executable, str(server_dir / "tts_daemon.py"), "--list-profiles"]
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 

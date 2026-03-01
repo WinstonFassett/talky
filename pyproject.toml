@@ -25,6 +25,9 @@ dev = [
 ]
 
 [project.optional-dependencies]
+# Audio output for CLI commands
+local_audio = ["pyaudio"]
+
 # Audio extras
 audio = ["pyaudio"]
 
@@ -51,7 +54,7 @@ stt-asyncai = ["pipecat-ai[asyncai]"]
 stt-deepgram = ["pipecat-ai[deepgram]"]
 stt-fish = ["pipecat-ai[fish]"]
 stt-gladia = ["pipecat-ai[gladia]"]
-stt-google = ["pipecat-ai[google]"]
+stt-google = ["pipecat-ai[google]", "google-genai"]
 stt-hume = ["pipecat-ai[hume]"]
 stt-inworld = ["pipecat-ai[inworld]"]
 stt-nvidia = ["pipecat-ai[nvidia]"]
