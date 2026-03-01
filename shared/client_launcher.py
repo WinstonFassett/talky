@@ -166,6 +166,45 @@ class AppLauncher:
             logger.info("  claude mcp add --transport http talky http://localhost:9090/mcp")
     
         
+    def _ensure_vite_client_running(self):
+        """Start Vite client if not already running."""
+        # Check if Vite client is already running on port 5173
+        try:
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex(('localhost', 5173))
+            sock.close()
+            
+            if result == 0:
+                logger.debug("Vite client already running on port 5173")
+                return
+        except Exception:
+            pass
+        
+        # Start Vite client
+        logger.info("Starting Vite client for WebRTC connection...")
+        try:
+            # Find Talky root directory and client directory
+            talky_root = Path(__file__).parent.parent
+            client_dir = talky_root / "client"
+            
+            if not client_dir.exists():
+                raise RuntimeError(f"Client directory not found: {client_dir}")
+            
+            # Start Vite dev server
+            vite_process = subprocess.Popen(
+                ["npm", "run", "dev"],
+                cwd=client_dir,
+                text=True
+            )
+            
+            self.processes["vite"] = vite_process
+            logger.info("Vite client started on port 5173")
+            
+        except Exception as e:
+            logger.error(f"Failed to start Vite client: {e}")
+            logger.info("You may need to start it manually: cd client && npm run dev")
+    
     async def trigger_voice_command(self, app_name: str):
         """Trigger voice command in the running app."""
         if app_name == "pi" and app_name in self.processes:

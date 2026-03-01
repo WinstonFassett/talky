@@ -26,11 +26,12 @@ multiprocessing.set_start_method("spawn", force=True)
 _cmd_queue: Optional[multiprocessing.Queue] = None
 _response_queue: Optional[multiprocessing.Queue] = None
 _pipecat_process: Optional[multiprocessing.Process] = None
+_vite_process: Optional[multiprocessing.Process] = None
 
 
 def _cleanup():
     """Clean up the pipecat child process."""
-    global _pipecat_process, _cmd_queue, _response_queue
+    global _pipecat_process, _vite_process, _cmd_queue, _response_queue
 
     logger.debug(f"Checking if Pipecat MCP Agent process is actually running...")
     if _pipecat_process:
@@ -46,14 +47,18 @@ def _cleanup():
             _pipecat_process.kill()
             _pipecat_process.join(timeout=5.0)
 
+        logger.debug(f"Pipecat MCP Agent process stopped")
         _pipecat_process = None
-
-    # Kill any stray processes on ports 7860 and 9090
-    import signal
-    import subprocess
-
-    try:
-        # Kill processes on port 7860 (bot) and their children
+    
+    # Clean up Vite process
+    if _vite_process:
+        if _vite_process.poll() is None:  # Process is still running
+            logger.debug(f"Terminating Vite process (PID {_vite_process.pid})")
+            _vite_process.terminate()
+            _vite_process.wait(timeout=5.0)
+        
+        logger.debug(f"Vite process stopped")
+        _vite_process = None
         port_7860_pids = subprocess.run(
             ["lsof", "-ti:7860"], capture_output=True, text=True
         ).stdout.strip()
@@ -83,10 +88,10 @@ def _cleanup():
 
 
 def start_pipecat_process():
-    """Start the Pipecat child process.
+    """Start the Pipecat child process and Vite client.
 
     Creates IPC queues and spawns a new process to run the Pipecat voice agent.
-    Cleans up any existing process before starting a new one.
+    Also starts the Vite client for the UI. Cleans up any existing process before starting new ones.
     """
     global _cmd_queue, _response_queue, _pipecat_process
 
@@ -106,6 +111,53 @@ def start_pipecat_process():
     # Start the process in a new process group
     _pipecat_process.start()
     logger.debug(f"Started Pipecat MCP Agent process (PID {_pipecat_process.ident})")
+    
+    # Start Vite client
+    _start_vite_client()
+
+
+def _start_vite_client():
+    """Start the Vite client for the UI."""
+    global _vite_process
+    
+    # Check if Vite client is already running on port 5173
+    try:
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        result = sock.connect_ex(('localhost', 5173))
+        sock.close()
+        
+        if result == 0:
+            logger.debug("Vite client already running on port 5173")
+            return
+    except Exception:
+        pass
+    
+    # Start Vite client
+    logger.info("Starting Vite client for WebRTC connection...")
+    try:
+        # Find Talky root directory and client directory
+        import os
+        from pathlib import Path
+        current_dir = Path(__file__).parent.parent.parent
+        client_dir = current_dir / "client"
+        
+        if not client_dir.exists():
+            logger.error(f"Client directory not found: {client_dir}")
+            return
+        
+        # Start Vite dev server
+        _vite_process = subprocess.Popen(
+            ["npm", "run", "dev"],
+            cwd=client_dir,
+            text=True
+        )
+        
+        logger.info(f"Vite client started (PID {_vite_process.pid})")
+        
+    except Exception as e:
+        logger.error(f"Failed to start Vite client: {e}")
+        logger.info("You may need to start it manually: cd client && npm run dev")
 
 
 def stop_pipecat_process():

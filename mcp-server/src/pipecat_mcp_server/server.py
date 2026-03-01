@@ -54,8 +54,9 @@ async def start() -> dict:
     
     return {
         "success": True,
+        "vite_url": "http://localhost:5173",
         "webrtc_url": "http://localhost:7860",
-        "message": "Voice agent started. Connect via browser using the WebRTC URL."
+        "message": "Voice agent started. Connect via Vite client at localhost:5173."
     }
 
 
