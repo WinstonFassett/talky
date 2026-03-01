@@ -14,6 +14,7 @@ process runs separately to avoid stdio collisions with the MCP protocol.
 import asyncio
 import multiprocessing
 import queue as queue_module
+import subprocess
 from typing import Optional
 
 from loguru import logger
@@ -51,14 +52,15 @@ def _cleanup():
         _pipecat_process = None
     
     # Clean up Vite process
-    if _vite_process:
-        if _vite_process.poll() is None:  # Process is still running
-            logger.debug(f"Terminating Vite process (PID {_vite_process.pid})")
-            _vite_process.terminate()
-            _vite_process.wait(timeout=5.0)
-        
-        logger.debug(f"Vite process stopped")
-        _vite_process = None
+    try:
+        if _vite_process:
+            if _vite_process.poll() is None:  # Process is still running
+                logger.debug(f"Terminating Vite process (PID {_vite_process.pid})")
+                _vite_process.terminate()
+                _vite_process.wait(timeout=5.0)
+
+            logger.debug(f"Vite process stopped")
+            _vite_process = None
         port_7860_pids = subprocess.run(
             ["lsof", "-ti:7860"], capture_output=True, text=True
         ).stdout.strip()
