@@ -396,6 +396,47 @@ def cmd_auth(args):
     run_auth_tui()
 
 
+def cmd_transcribe(args):
+    """Handle the 'transcribe' subcommand."""
+    # Set log level environment variable if specified
+    if getattr(args, "log_level", None):
+        os.environ["TALKY_LOG_LEVEL"] = args.log_level
+    
+    # Setup logging using the same pattern as other commands
+    sys.path.insert(0, str(server_dir))
+    from logging_config import setup_logging
+    log_level = getattr(args, "log_level", None)
+    setup_logging(log_level)
+    
+    try:
+        import pyaudio  # noqa: F401
+    except ImportError:
+        print("pyaudio is required for transcription. Install with:")
+        if ".local/share/uv/tools/" in sys.executable:
+            print("  uv tool install --editable . --with pyaudio")
+        else:
+            print("  uv pip install pyaudio")
+        sys.exit(1)
+
+    import asyncio
+
+    from server.transcribe import transcribe
+
+    try:
+        asyncio.run(
+            transcribe(
+                stt_provider=args.stt,
+                stt_model=args.stt_model,
+                voice_profile=args.voice_profile,
+                output=args.output,
+                fmt=args.fmt,
+                timestamp=args.timestamp,
+            )
+        )
+    except KeyboardInterrupt:
+        pass
+
+
 def cmd_config(args):
     """Setup wizard for talky configuration."""
     import shutil
@@ -542,7 +583,7 @@ def cmd_mcp(args):
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as profile name
-    known_commands = {"config", "say", "mcp", "ls", "auth", "pi", "claude"}
+    known_commands = {"config", "say", "mcp", "ls", "auth", "pi", "claude", "transcribe"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "--profile")
@@ -625,6 +666,20 @@ def main():
     # === auth subcommand ===
     auth_parser = subparsers.add_parser("auth", help="Manage provider credentials")
     auth_parser.set_defaults(func=cmd_auth)
+
+    # === transcribe subcommand ===
+    tr_parser = subparsers.add_parser("transcribe", help="Live speech-to-text transcription")
+    tr_parser.add_argument("-o", "--output", help="Write to file (default: stdout)")
+    tr_parser.add_argument(
+        "--format", dest="fmt", default="raw", choices=["raw", "markdown", "jsonl"],
+        help="Output format (default: raw)",
+    )
+    tr_parser.add_argument("--stt", help="STT provider override")
+    tr_parser.add_argument("--stt-model", help="STT model override")
+    tr_parser.add_argument("--voice-profile", "-v", help="Use STT from this voice profile")
+    tr_parser.add_argument("--timestamp", action="store_true", help="Include timestamps")
+    tr_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
+    tr_parser.set_defaults(func=cmd_transcribe)
 
     # === Main bot arguments (default command) ===
     parser.add_argument("--profile", "-p", help="Talky profile to run")
