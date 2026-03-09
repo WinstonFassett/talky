@@ -139,7 +139,8 @@ async def transcribe(
     asyncio.create_task(_monitor_stop())
 
     if not output:
-        # Hint: transcribing to stdout — suppress logging noise
-        logger.remove()
+        # Hint: transcribing to stdout — keep logging at configured level
+        # Don't remove logger entirely, just ensure it's not too noisy
+        pass
 
     await runner.run(task)

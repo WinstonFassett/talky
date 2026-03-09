@@ -398,6 +398,16 @@ def cmd_auth(args):
 
 def cmd_transcribe(args):
     """Handle the 'transcribe' subcommand."""
+    # Set log level environment variable if specified
+    if getattr(args, "log_level", None):
+        os.environ["TALKY_LOG_LEVEL"] = args.log_level
+    
+    # Setup logging using the same pattern as other commands
+    sys.path.insert(0, str(server_dir))
+    from logging_config import setup_logging
+    log_level = getattr(args, "log_level", None)
+    setup_logging(log_level)
+    
     try:
         import pyaudio  # noqa: F401
     except ImportError:
@@ -668,6 +678,7 @@ def main():
     tr_parser.add_argument("--stt-model", help="STT model override")
     tr_parser.add_argument("--voice-profile", "-v", help="Use STT from this voice profile")
     tr_parser.add_argument("--timestamp", action="store_true", help="Include timestamps")
+    tr_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
     tr_parser.set_defaults(func=cmd_transcribe)
 
     # === Main bot arguments (default command) ===
