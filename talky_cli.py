@@ -73,11 +73,18 @@ def validate_certificates(client_dir: Path, external_binding: bool) -> bool:
 def start_client_dev_server(external_binding=False, host="localhost"):
     """Start the client dev server if not already running."""
     try:
+        # Load profile manager to get network configuration
+        try:
+            from shared.profile_manager import get_profile_manager
+            pm = get_profile_manager()
+        except:
+            pm = None
+        
         # Check if port 5173 is already in use with retry logic
         # Get configured frontend port
         try:
-            network_config = getattr(pm, 'settings', {}).get("network", {})
-            frontend_port = network_config.get("frontend_port", 5173)
+            network_config = getattr(pm, 'settings', {}).get("network", {}) if pm else {}
+            frontend_port = int(network_config.get("frontend_port", 5173))
         except:
             frontend_port = 5173
             
@@ -134,16 +141,16 @@ def start_client_dev_server(external_binding=False, host="localhost"):
             env['VITE_EXTERNAL_HOST'] = host
             # Set up backend URL for HTTPS
             try:
-                network_config = getattr(pm, 'settings', {}).get("network", {})
-                backend_port = network_config.get("backend_port", "7860")
+                network_config = getattr(pm, 'settings', {}).get("network", {}) if pm else {}
+                backend_port = str(network_config.get("backend_port", "7860"))
                 env['VITE_BOT_START_URL'] = f"https://{host}:{backend_port}/start"
             except:
                 env['VITE_BOT_START_URL'] = f"https://{host}:7860/start"
         
         # Get backend port from config
         try:
-            network_config = getattr(pm, 'settings', {}).get("network", {})
-            backend_port = network_config.get("backend_port", "7860")
+            network_config = getattr(pm, 'settings', {}).get("network", {}) if pm else {}
+            backend_port = str(network_config.get("backend_port", "7860"))
             env['VITE_BACKEND_PORT'] = backend_port
         except:
             env['VITE_BACKEND_PORT'] = "7860"
