@@ -149,8 +149,9 @@ async def run_bot(
         params=PipelineParams(
             enable_metrics=True, 
             enable_usage_metrics=True,
-            idle_timeout_secs=None  # Disable idle timeout entirely
         ),
+        idle_timeout_secs=None,  # Disable idle timeout entirely (PipelineTask parameter, not PipelineParams)
+        cancel_on_idle_timeout=False,  # Also disable cancellation on idle timeout
     )
     logger.info("Pipeline idle timeout disabled - conversations stay connected until user closes them")
 
