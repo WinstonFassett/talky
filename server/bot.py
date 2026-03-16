@@ -12,6 +12,7 @@ Pipeline: Speech-to-Text -> LLM -> Text-to-Speech
 import os
 import sys
 import asyncio
+import time
 
 # Add parent directory to path for shared modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -141,10 +142,17 @@ async def run_bot(
         ]
     )
 
+    # Fix: Disable Pipecat's idle timeout completely for local development
+    # No reason to timeout conversations during local development - user controls when to close
     task = PipelineTask(
         pipeline,
-        params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+        params=PipelineParams(
+            enable_metrics=True, 
+            enable_usage_metrics=True,
+            idle_timeout_secs=None  # Disable idle timeout entirely
+        ),
     )
+    logger.info("Pipeline idle timeout disabled - conversations stay connected until user closes them")
 
     # Set task reference in voice switcher (needed for ManuallySwitchServiceFrame)
     voice_switcher.set_task(task)
@@ -214,7 +222,7 @@ async def bot(runner_args: RunnerArguments):
                 webrtc_connection=webrtc_connection,
                 params=TransportParams(
                     audio_in_enabled=True,
-                    audio_out_enabled=True,
+                    audio_out_enabled=True,  # Fix: Enable audio output for TTS
                 ),
             )
         case _:
@@ -222,6 +230,7 @@ async def bot(runner_args: RunnerArguments):
             return
 
     await run_bot(transport, llm_backend_name, voice_profile_name, session_key)
+
 
 
 if __name__ == "__main__":
