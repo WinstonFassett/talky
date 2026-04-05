@@ -213,11 +213,11 @@ def cmd_say(args):
             import shutil
             uv_cmd = shutil.which("uv")
             if uv_cmd:
-                cmd = [uv_cmd, "run", str(server_dir / "tts_daemon.py")]
+                cmd = [uv_cmd, "run", str(server_dir / "voice_daemon.py")]
             else:
-                cmd = [sys.executable, str(server_dir / "tts_daemon.py")]
+                cmd = [sys.executable, str(server_dir / "voice_daemon.py")]
         else:
-            cmd = [sys.executable, str(server_dir / "tts_daemon.py")]
+            cmd = [sys.executable, str(server_dir / "voice_daemon.py")]
         
         if args.start_daemon:
             cmd.append("--start")
@@ -234,11 +234,11 @@ def cmd_say(args):
             import shutil
             uv_cmd = shutil.which("uv")
             if uv_cmd:
-                cmd = [uv_cmd, "run", str(server_dir / "tts_daemon.py"), "--list-profiles"]
+                cmd = [uv_cmd, "run", str(server_dir / "voice_daemon.py"), "--list-profiles"]
             else:
-                cmd = [sys.executable, str(server_dir / "tts_daemon.py"), "--list-profiles"]
+                cmd = [sys.executable, str(server_dir / "voice_daemon.py"), "--list-profiles"]
         else:
-            cmd = [sys.executable, str(server_dir / "tts_daemon.py"), "--list-profiles"]
+            cmd = [sys.executable, str(server_dir / "voice_daemon.py"), "--list-profiles"]
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
@@ -274,7 +274,7 @@ def cmd_say(args):
     else:
         # Auto-start daemon, use client with wait
         subprocess.Popen(
-            [sys.executable, str(server_dir / "tts_daemon.py"), "--start"],
+            [sys.executable, str(server_dir / "voice_daemon.py"), "--start"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=server_dir
@@ -401,6 +401,89 @@ def cmd_auth(args):
     """Manage provider credentials."""
     from talky_auth import run_auth_tui
     run_auth_tui()
+
+
+def cmd_ask(args):
+    """Handle the 'ask' subcommand — speak text then listen for response."""
+    if getattr(args, "log_level", None):
+        os.environ["TALKY_LOG_LEVEL"] = args.log_level
+
+    from shared.daemon_protocol import daemon_is_running
+
+    if not args.text:
+        print("Usage: talky ask <text>", file=sys.stderr)
+        sys.exit(1)
+
+    # Ensure daemon is running (auto-start if needed)
+    if not daemon_is_running():
+        subprocess.Popen(
+            [sys.executable, str(server_dir / "voice_daemon.py"), "--start"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            cwd=server_dir,
+        )
+
+    # Build voice_client command
+    cmd = [
+        sys.executable,
+        str(server_dir / "voice_client.py"),
+        "--cmd", "ask",
+    ]
+
+    if not daemon_is_running():
+        cmd.extend(["--wait", "15"])
+
+    cmd.append(args.text)
+
+    if args.voice_profile:
+        cmd.extend(["-p", args.voice_profile])
+    if getattr(args, "provider", None):
+        cmd.extend(["--provider", args.provider])
+    if getattr(args, "voice", None):
+        cmd.extend(["--voice", args.voice])
+    if getattr(args, "listen_timeout", None):
+        cmd.extend(["--listen-timeout", str(args.listen_timeout)])
+    if getattr(args, "silence_timeout", None):
+        cmd.extend(["--silence-timeout", str(args.silence_timeout)])
+
+    result = subprocess.run(cmd, cwd=str(server_dir))
+    sys.exit(result.returncode)
+
+
+def cmd_end_convo(args):
+    """Handle the 'end-convo' subcommand — kill running browser pipeline session."""
+    killed = False
+
+    # Kill WebRTC server on 7860
+    try:
+        result = subprocess.run(["lsof", "-ti", ":7860"], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            for pid in result.stdout.strip().split("\n"):
+                try:
+                    subprocess.run(["kill", "-9", pid], capture_output=True)
+                    print(f"Killed process {pid} on port 7860")
+                    killed = True
+                except subprocess.SubprocessError:
+                    pass
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+
+    # Kill Vite on 5173
+    try:
+        result = subprocess.run(["lsof", "-ti", ":5173"], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            for pid in result.stdout.strip().split("\n"):
+                try:
+                    subprocess.run(["kill", "-9", pid], capture_output=True)
+                    print(f"Killed process {pid} on port 5173")
+                    killed = True
+                except subprocess.SubprocessError:
+                    pass
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+
+    if not killed:
+        print("No active conversation session found")
 
 
 def cmd_transcribe(args):
@@ -590,7 +673,7 @@ def cmd_mcp(args):
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as profile name
-    known_commands = {"config", "say", "mcp", "ls", "auth", "pi", "claude", "transcribe"}
+    known_commands = {"config", "say", "ask", "mcp", "ls", "auth", "pi", "claude", "transcribe", "end-convo"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "--profile")
@@ -618,6 +701,21 @@ def main():
     say_parser.add_argument("--daemon-status", action="store_true")
     say_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
     say_parser.set_defaults(func=cmd_say)
+
+    # === ask subcommand ===
+    ask_parser = subparsers.add_parser("ask", help="Speak text then listen for response")
+    ask_parser.add_argument("text", nargs="?", help="Text to speak before listening")
+    ask_parser.add_argument("-p", "-v", "--voice-profile", help="Voice profile")
+    ask_parser.add_argument("--provider", help="TTS provider")
+    ask_parser.add_argument("--voice", help="Voice ID")
+    ask_parser.add_argument("--listen-timeout", type=float, default=15.0, help="Max seconds to listen (default: 15)")
+    ask_parser.add_argument("--silence-timeout", type=float, default=5.0, help="Seconds of silence before returning (default: 5)")
+    ask_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level")
+    ask_parser.set_defaults(func=cmd_ask)
+
+    # === end-convo subcommand ===
+    end_convo_parser = subparsers.add_parser("end-convo", help="Kill running browser voice session")
+    end_convo_parser.set_defaults(func=cmd_end_convo)
 
     # === mcp subcommand ===
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP server")
