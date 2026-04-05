@@ -242,6 +242,14 @@ def run_pipecat_process(cmd_queue: multiprocessing.Queue, response_queue: multip
 
     logger.debug("Pipecat MCP Agent process started. Launching Pipecat runner!")
 
+    # Remove server/ from sys.path so Pipecat's `import bot` finds OUR
+    # bot.py (in cwd) instead of server/bot.py. The workspace editable
+    # install adds server/ to sys.path, and Pipecat's _get_bot_module()
+    # does `import bot` which hits server/bot.py first.
+    server_path = os.path.join(os.path.dirname(package_dir), os.pardir, os.pardir, "server")
+    server_path = os.path.normpath(os.path.join(package_dir, "..", "..", "..", "server"))
+    sys.path = [p for p in sys.path if os.path.normpath(p) != server_path]
+
     # Pass the right arguments for SmallWebRTC transport
     sys.argv = ["bot.py", "--transport", "webrtc", "--host", "localhost", "--port", "7860"]
     pipecat_main()
