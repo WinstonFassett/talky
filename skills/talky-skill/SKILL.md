@@ -1,76 +1,84 @@
 ---
 name: talky
-description: Communicate with the user by voice using local audio. Use `talky ask` to speak and listen for a response. Use when told to notify, check in, ask how to proceed, or have a voice collaboration.
+description: Talky gives the agent a voice. Use when the user says "talk to me", "voice mode", "use your voice", "holler at me", "tell me when", "notify me", or wants a voice conversation. Two modes — voice prompt mode (walkie-talkie, turn-based, no setup) and voice conversation (full-duplex browser audio).
 ---
 
-Speak to the user and hear their voice response via local speakers and microphone.
+Talky lets the agent talk with the user. Two modes:
 
-## When to Use
+## Voice Prompt Mode (default)
 
-- User says "notify me when done", "tell me when you're done", "ask me how to proceed"
-- User says "let's do a voice collaboration" or "talk to me about this"
-- You need clarification and the user has indicated they prefer voice
-- You've completed a significant chunk of work and the user asked to be notified
+Turn-based, walkie-talkie style. The agent speaks, the user responds, repeat. No browser, no setup — just local speakers and mic. The agent prompts the user by voice instead of text.
 
-## How It Works
+**Triggers:** "talk to me", "use your voice", "voice mode", "holler at me when", "tell me when you're done", "notify me", "talk to me while we work", "let's talk about this"
 
-Two ways to do the same thing — pick whichever is available:
+### How to use
 
-### CLI (any agent with shell access)
+CLI (any agent with shell access):
 ```bash
-talky ask "Hey, I finished the refactor. Want me to run tests?"
-# User's spoken response printed to stdout
+talky ask "I finished the refactor. Three files changed. Want me to run tests?"
+# User's spoken response is printed to stdout
 ```
 
-### MCP (if talky MCP server is connected)
+MCP (if talky MCP server is connected):
 ```
-ask_local_audio(text="Hey, I finished the refactor. Want me to run tests?")
-# Returns {"success": true, "transcript": "Yeah go ahead and run them"}
-```
-
-Both use the same voice daemon under the hood. It auto-starts on first use and stays warm. No browser, no WebRTC, no setup.
-
-## Guidelines
-
-- **Always use `ask`, not `say`** — whenever you speak to the user, give them the chance to respond.
-- **Keep it brief** — 1-2 sentences max per call. The user is listening, not reading.
-- **Don't over-communicate** — one check-in at a natural milestone, not after every file edit.
-- **Summarize what happened, then ask** — "I finished X and Y. Z had an issue. How do you want to handle it?"
-- **If they say something, act on it** — their response is text in stdout. Read it and proceed.
-- **Multi-turn is just a loop** — call `talky ask` again if you need to follow up.
-
-## Example Patterns
-
-### Notify when done
-User says: "Let me know when you're done with the tests"
-```bash
-# ... after tests complete ...
-talky ask "Tests are done. 47 passed, 2 failed — both in the auth module. Want me to look into the failures?"
-# Read their response from stdout and act on it
+ask_local_audio(text="I finished the refactor. Three files changed. Want me to run tests?")
+# Returns {"success": true, "transcript": "Yeah go ahead"}
 ```
 
-### Ask how to proceed
-User says: "Refactor this module. Ask me before making breaking changes."
-```bash
-# ... during refactor, you find a breaking change ...
-talky ask "I need to change the return type of get_user from dict to a User dataclass. This breaks 3 callers. Should I update them too?"
+Both use the same voice daemon. It auto-starts on first use and stays warm.
+
+### Behavior
+
+- **Always use `ask`, never `say`** — the user always gets a chance to respond.
+- **Once voice prompt mode is on, keep it on.** Don't drop back to text just because there's work to do. Do the work, then talk again when you have something to report or need input.
+- **Stay in voice prompt mode until the user signals they're done.** Look for: "that's all", "I'm good", "stop talking", "voice mode off", "OK thanks". If unclear, ask: "Anything else, or should I go quiet?"
+- **Keep it brief** — 1-2 sentences per prompt. The user is listening, not reading.
+- **Summarize, then prompt** — "I finished X. Y had an issue. How do you want to handle it?"
+- **Don't over-communicate** — check in at natural milestones, not after every file edit. If you're working for 10 minutes, that's fine. Talk when you have something meaningful to say.
+- **Multi-turn is just a loop** — call `talky ask` again to follow up.
+
+### Example patterns
+
+**Working session:**
+```
+User (text): "Refactor the auth module. Talk to me while we work."
+Agent: [enters voice prompt mode, starts refactoring]
+Agent: talky ask "OK I'm looking at the auth module now. There's a lot of dead code in here. I'll clean it up and let you know what I find."
+User (voice): "Sounds good"
+Agent: [works for several minutes]
+Agent: talky ask "I pulled out 200 lines of dead code and simplified the token refresh logic. But the session store interface is weird — it mixes sync and async. Want me to clean that up too?"
+User (voice): "Yeah go for it. Also check if there are tests for that."
+Agent: [works more]
+Agent: talky ask "Done. Session store is async-only now, tests pass. The test coverage is thin though — only 40 percent. Want me to add more tests or move on?"
+User (voice): "That's good enough, let's move on."
+Agent: talky ask "Got it. Anything else or should I go quiet?"
+User (voice): "That's all for now."
+Agent: [exits voice prompt mode, continues in text]
 ```
 
-### Voice collaboration session
-User says: "Let's talk through the architecture"
-```bash
-talky ask "OK, I'm ready to talk architecture. What's on your mind?"
-# They respond, you process, then:
-talky ask "Got it. So you want the daemon to own all audio I/O and have CLI and MCP as thin clients. That makes sense. What about the browser pipeline — keep it separate?"
-# Continue the loop
+**Spot check:**
+```
+User (text): "Run the full test suite. Holler at me when it's done."
+Agent: [runs tests]
+Agent: talky ask "Tests are done. 47 passed, 2 failed in the auth module. Want me to dig into the failures?"
+User (voice): "Yeah, fix them and let me know."
+Agent: [fixes, then talks again when done]
 ```
 
-## Full Voice Conversation (Browser)
+## Voice Conversation (explicit upgrade)
 
-For a richer voice experience with echo cancellation, interruptions, voice switching, and a UI — use the browser pipeline instead:
+Full-duplex, open-channel audio via browser. Echo cancellation, interruptions, voice switching UI, mute button. For dedicated, engaged conversations — not background collaboration.
 
-1. Start with `start_convo` MCP tool
-2. Use `convo_speak` / `convo_listen` for the conversation
-3. End with `end_convo`
+**Triggers:** "start a voice conversation", "open a voice conversation", "I want to have a conversation", "let's have a discussion", "full voice mode", "/talky"
 
-This requires the Talky MCP server running and a browser connection. Use when the user explicitly asks for a full voice conversation or says `/talky`.
+### How to use
+
+Requires the Talky MCP server. Uses browser pipeline:
+
+1. `start_convo` — starts Pipecat pipeline + browser UI
+2. `convo_speak` / `convo_listen` — talk within the session
+3. `end_convo` — shut down
+
+## When ambiguous, default to voice prompt mode
+
+If the user says something like "start a voice session" or "let's talk" — use voice prompt mode. It's zero friction and always available. Only escalate to voice conversation when the user explicitly says "conversation" or "discussion" or asks for the browser/UI experience.
