@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "pipecat-ai-mcp-server"
 dynamic = ["version"]
 description = "Pipecat MCP server for your AI agents"
-license = "BSD-2-Clause"
+license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.10"
