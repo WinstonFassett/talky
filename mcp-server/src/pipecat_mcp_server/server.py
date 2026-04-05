@@ -24,6 +24,7 @@ import asyncio
 import os
 import signal
 import sys
+import webbrowser
 from contextlib import asynccontextmanager
 
 from loguru import logger
@@ -90,7 +91,7 @@ async def ask_local_audio(text: str, silence_timeout: float = 10.0) -> dict:
 
 
 @mcp.tool()
-async def start_convo() -> dict:
+async def start_convo(auto_open: bool = True) -> dict:
     """Start a full voice conversation with browser UI and WebRTC audio.
 
     Launches a Pipecat voice pipeline and a Vite frontend client. The user
@@ -99,7 +100,11 @@ async def start_convo() -> dict:
 
     Once started, use convo_speak() and convo_listen() to interact.
 
+    Args:
+        auto_open: Automatically open the browser to the WebRTC client (default: True).
+
     Returns connection information including the browser URL.
+
     """
     start_pipecat_process()
 
@@ -113,11 +118,17 @@ async def start_convo() -> dict:
     # Wait for Vite client to be ready
     await _wait_for_vite_ready()
 
+    client_url = "http://localhost:5173?autoconnect=true"
+
+    if auto_open:
+        webbrowser.open(client_url)
+
     return {
         "success": True,
+        "client_url": client_url,
         "vite_url": "http://localhost:5173",
         "webrtc_url": "http://localhost:7860",
-        "message": "Voice conversation started. Connect via browser at localhost:5173."
+        "message": f"Voice conversation started. Browser opened to {client_url}."
     }
 
 
@@ -185,17 +196,18 @@ async def convo_speak(text: str) -> bool:
 
 
 @mcp.tool()
-async def convo_listen() -> str:
+async def convo_listen() -> dict:
     """Listen for user speech within an active browser conversation.
 
+    Blocks until the user speaks, then returns all buffered speech.
     Requires start_convo() to have been called first.
 
     Returns:
-        The transcribed text of what the user said.
+        Dict with 'text' (combined transcription) and 'segments' (list of
+        utterances with timestamps for gap/silence awareness).
 
     """
-    result = await send_command("listen")
-    return result["text"]
+    return await send_command("listen")
 
 
 @mcp.tool()

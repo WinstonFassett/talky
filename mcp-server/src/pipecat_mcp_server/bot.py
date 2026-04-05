@@ -59,9 +59,9 @@ async def bot(runner_args: RunnerArguments):
 
         try:
             if cmd == "listen":
-                text = await agent.listen()
-                await send_response({"text": text})
-                logger.debug(f"Command '{cmd}' finished, returning: {text}")
+                result = await agent.listen()
+                await send_response(result)
+                logger.debug(f"Command '{cmd}' finished, returning: {result['text']}")
             elif cmd == "speak":
                 await agent.speak(request["text"])
                 await send_response({"ok": True})

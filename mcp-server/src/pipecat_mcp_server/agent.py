@@ -14,6 +14,7 @@ services, allowing an MCP client to listen for user speech and speak responses.
 import asyncio
 import os
 import sys
+import time
 from typing import Any, Optional
 
 from loguru import logger
@@ -30,7 +31,7 @@ from pipecat.frames.frames import (
 from pipecat.pipeline.parallel_pipeline import ParallelPipeline
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineTask, PipelineParams
+from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -137,8 +138,8 @@ class PipecatMCPAgent:
         # Create voice profile switcher (same as main server)
         # Use safe import with proper path handling
         try:
-            import sys
             import os
+            import sys
             # Get absolute path to talky root (avoid relative path issues)
             current_file = os.path.abspath(__file__)
             mcp_server_src = os.path.dirname(current_file)
@@ -222,7 +223,10 @@ class PipecatMCPAgent:
         @user_aggregator.event_handler("on_user_turn_stopped")
         async def on_user_turn_stopped(aggregator, strategy, message: UserTurnStoppedMessage):
             if message.content:
-                await self._user_speech_queue.put(message.content)
+                await self._user_speech_queue.put({
+                    "text": message.content,
+                    "timestamp": time.time(),
+                })
 
         # Start pipeline in background
         self._task = asyncio.create_task(self._pipeline_runner.run(self._pipeline_task))
@@ -250,14 +254,16 @@ class PipecatMCPAgent:
         self._started = False
         logger.info("Pipecat MCP Agent stopped")
 
-    async def listen(self) -> str:
-        """Wait for user speech and return the transcribed text.
+    async def listen(self) -> dict:
+        """Wait for user speech and return all buffered transcriptions.
 
-        Blocks until the user completes an utterance (detected via VAD).
-        Starts the pipeline automatically if not already running.
+        Blocks until at least one utterance is available, then drains any
+        additional buffered utterances. Returns combined text plus individual
+        segments with timestamps for gap/silence awareness.
 
         Returns:
-            The transcribed text from the user's speech.
+            Dict with 'text' (combined string) and 'segments' (list of
+            dicts with 'text' and 'timestamp' for each utterance).
 
         Raises:
             RuntimeError: If the pipeline task is not initialized.
@@ -269,13 +275,32 @@ class PipecatMCPAgent:
         if not self._pipeline_task:
             raise RuntimeError("Pipecat MCP Agent not initialized")
 
-        text = await self._user_speech_queue.get()
+        # Block until first utterance
+        first = await self._user_speech_queue.get()
 
         # Check if this is a disconnect signal
-        if text is self._DISCONNECT_SENTINEL:
+        if first is self._DISCONNECT_SENTINEL:
             raise RuntimeError("I just disconnected, but I might come back.")
 
-        return text
+        segments = [first]
+
+        # Drain any additional buffered utterances (non-blocking)
+        while not self._user_speech_queue.empty():
+            try:
+                item = self._user_speech_queue.get_nowait()
+                if item is self._DISCONNECT_SENTINEL:
+                    break
+                segments.append(item)
+            except asyncio.QueueEmpty:
+                break
+
+        # Build combined text
+        combined = " ".join(seg["text"] for seg in segments)
+
+        return {
+            "text": combined,
+            "segments": segments,
+        }
 
     async def speak(self, text: str):
         """Speak text to the user using text-to-speech.
