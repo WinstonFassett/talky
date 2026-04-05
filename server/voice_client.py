@@ -21,18 +21,21 @@ def send_ask_request(
     voice_profile: Optional[str] = None,
     provider: Optional[str] = None,
     voice_id: Optional[str] = None,
-    listen_timeout: float = 15.0,
-    silence_timeout: float = 5.0,
+    silence_timeout: float = 10.0,
     timeout: Optional[float] = None,
 ) -> dict:
-    """Send ask request to daemon: speak text then listen for response."""
+    """Send ask request to daemon: speak text then listen for response.
+
+    Turn detection (SpeechTimeoutUserTurnStopStrategy) handles ending the turn
+    once the user stops talking. silence_timeout only applies if nobody speaks at all.
+    """
     import socket as socket_mod
 
     sock = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
     sock.connect(str(VOICE_SOCKET_PATH))
 
-    # Total timeout: TTS generation + playback + listen time + buffer
-    recv_timeout = timeout or (listen_timeout + 30.0)
+    # No hard cap — turn detection handles ending. Just need enough for TTS + open-ended listen.
+    recv_timeout = timeout or 600.0
 
     try:
         send_message(
@@ -43,7 +46,6 @@ def send_ask_request(
                 "voice_profile": voice_profile,
                 "provider": provider,
                 "voice_id": voice_id,
-                "listen_timeout": listen_timeout,
                 "silence_timeout": silence_timeout,
             },
         )
@@ -54,8 +56,7 @@ def send_ask_request(
 
 def send_listen_request(
     voice_profile: Optional[str] = None,
-    listen_timeout: float = 15.0,
-    silence_timeout: float = 5.0,
+    silence_timeout: float = 10.0,
     timeout: Optional[float] = None,
 ) -> dict:
     """Send listen request to daemon: just listen for speech."""
@@ -64,7 +65,7 @@ def send_listen_request(
     sock = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
     sock.connect(str(VOICE_SOCKET_PATH))
 
-    recv_timeout = timeout or (listen_timeout + 5.0)
+    recv_timeout = timeout or 600.0
 
     try:
         send_message(
@@ -72,7 +73,6 @@ def send_listen_request(
             {
                 "cmd": "listen",
                 "voice_profile": voice_profile,
-                "listen_timeout": listen_timeout,
                 "silence_timeout": silence_timeout,
             },
         )
@@ -91,8 +91,7 @@ def main():
     parser.add_argument("-p", "--voice-profile", help="Voice profile")
     parser.add_argument("--provider", help="TTS provider")
     parser.add_argument("--voice", help="Voice ID")
-    parser.add_argument("--listen-timeout", type=float, default=15.0)
-    parser.add_argument("--silence-timeout", type=float, default=5.0)
+    parser.add_argument("--silence-timeout", type=float, default=10.0)
     parser.add_argument("--wait", type=float, default=0, help="Wait N seconds for daemon")
 
     args = parser.parse_args()
@@ -118,13 +117,11 @@ def main():
                 voice_profile=args.voice_profile,
                 provider=args.provider,
                 voice_id=args.voice,
-                listen_timeout=args.listen_timeout,
                 silence_timeout=args.silence_timeout,
             )
         else:
             result = send_listen_request(
                 voice_profile=args.voice_profile,
-                listen_timeout=args.listen_timeout,
                 silence_timeout=args.silence_timeout,
             )
 

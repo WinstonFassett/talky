@@ -27,7 +27,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import EndFrame, StartFrame, TranscriptionFrame, TTSAudioRawFrame
+from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.frames.frames import (
+    EndFrame,
+    StartFrame,
+    TranscriptionFrame,
+    TTSAudioRawFrame,
+    UserStartedSpeakingFrame,
+)
 from shared.daemon_protocol import (
     VOICE_PID_FILE,
     VOICE_SOCKET_PATH,
@@ -45,8 +52,50 @@ IDLE_TIMEOUT = 60 * 60
 CHANNELS = 1
 
 # Default timeouts for listening
-DEFAULT_LISTEN_TIMEOUT = 15.0  # max seconds mic stays open
-DEFAULT_SILENCE_TIMEOUT = 5.0  # max seconds of no speech before returning
+DEFAULT_LISTEN_TIMEOUT = 300.0  # hard cap — safety net only, turn detection handles normal ending
+DEFAULT_SILENCE_TIMEOUT = 10.0  # max seconds of no speech at all before returning
+
+# Listen indicator tones (generated once, cached)
+_TONE_CACHE: dict[str, bytes] = {}
+TONE_SAMPLE_RATE = 16000
+
+
+def _generate_tone(freq_start: float, freq_end: float, duration: float = 0.2) -> bytes:
+    """Generate a short sine tone as 16-bit PCM. Lightweight — stdlib only."""
+    import math
+
+    n_samples = int(TONE_SAMPLE_RATE * duration)
+    amplitude = 12000  # moderate volume, not jarring
+    samples = bytearray()
+    for i in range(n_samples):
+        t = i / TONE_SAMPLE_RATE
+        # Linear frequency sweep
+        freq = freq_start + (freq_end - freq_start) * (i / n_samples)
+        # Fade in/out envelope (first/last 20% of samples)
+        fade_samples = int(n_samples * 0.2)
+        if i < fade_samples:
+            envelope = i / fade_samples
+        elif i > n_samples - fade_samples:
+            envelope = (n_samples - i) / fade_samples
+        else:
+            envelope = 1.0
+        value = int(amplitude * envelope * math.sin(2 * math.pi * freq * t))
+        samples.extend(struct.pack("<h", max(-32768, min(32767, value))))
+    return bytes(samples)
+
+
+def get_listen_start_tone() -> bytes:
+    """Rising tone: 'listening now'."""
+    if "start" not in _TONE_CACHE:
+        _TONE_CACHE["start"] = _generate_tone(600, 900, duration=0.15)
+    return _TONE_CACHE["start"]
+
+
+def get_listen_stop_tone() -> bytes:
+    """Falling tone: 'got it'."""
+    if "stop" not in _TONE_CACHE:
+        _TONE_CACHE["stop"] = _generate_tone(900, 600, duration=0.15)
+    return _TONE_CACHE["stop"]
 
 
 class VoiceDaemon:
@@ -159,6 +208,11 @@ class VoiceDaemon:
             logger.error(f"Speech generation error: {e}")
             return {"success": False, "error": str(e)}
 
+    async def _play_tone(self, tone_data: bytes) -> None:
+        """Play a short indicator tone through speakers."""
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._play_audio, tone_data, TONE_SAMPLE_RATE)
+
     def _play_audio(self, audio_data: bytes, sample_rate: int) -> bool:
         """Play audio through speakers (runs in executor)."""
         try:
@@ -202,15 +256,35 @@ class VoiceDaemon:
         listen_timeout: float,
         silence_timeout: float,
     ) -> dict:
-        """Listen using a Pipecat pipeline (same proven pattern as transcribe.py)."""
+        """Listen using Pipecat's built-in turn detection (LLMUserAggregator).
+
+        Uses the same pattern as the MCP agent: LLMContextAggregatorPair with
+        UserTurnStrategies + LocalSmartTurnAnalyzerV3 for proper turn detection.
+        The aggregator handles VAD, speech accumulation, and fires
+        on_user_turn_stopped with the complete transcript.
+        """
+        from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
+            LocalSmartTurnAnalyzerV3,
+        )
         from pipecat.pipeline.pipeline import Pipeline
         from pipecat.pipeline.runner import PipelineRunner
         from pipecat.pipeline.task import PipelineParams, PipelineTask
-        from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+        from pipecat.processors.aggregators.llm_context import LLMContext
+        from pipecat.processors.aggregators.llm_response_universal import (
+            LLMContextAggregatorPair,
+            LLMUserAggregatorParams,
+        )
         from pipecat.transports.local.audio import (
             LocalAudioTransport,
             LocalAudioTransportParams,
         )
+        from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+            SpeechTimeoutUserTurnStopStrategy,
+        )
+        from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
+            TurnAnalyzerUserTurnStopStrategy,
+        )
+        from pipecat.turns.user_turn_strategies import UserTurnStrategies
         from shared.profile_manager import get_profile_manager
         from shared.service_factory import create_stt_service_from_config
 
@@ -227,78 +301,84 @@ class VoiceDaemon:
                 stt_kwargs["model"] = vp.stt_model
             stt = create_stt_service_from_config(vp.stt_provider, **stt_kwargs)
 
-            # Local mic transport with VAD
+            # Play "listening" indicator tone
+            await self._play_tone(get_listen_start_tone())
+
+            # Local mic transport — VAD is on the aggregator, not the transport
             transport = LocalAudioTransport(
                 LocalAudioTransportParams(
                     audio_in_enabled=True,
                     audio_out_enabled=False,
-                    vad_analyzer=SileroVADAnalyzer(),
                 )
             )
 
-            # Collector: captures first transcription then stops pipeline
-            result_holder: dict = {"transcript": "", "got_speech": False}
+            # Use Pipecat's built-in turn detection (same as MCP agent)
+            context = LLMContext()
+            user_aggregator, _assistant_aggregator = LLMContextAggregatorPair(
+                context,
+                user_params=LLMUserAggregatorParams(
+                    user_turn_strategies=UserTurnStrategies(
+                        stop=[
+                            SpeechTimeoutUserTurnStopStrategy(
+                                user_speech_timeout=2.0,
+                            )
+                        ]
+                    ),
+                    vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+                ),
+            )
 
-            class TranscriptCollector(FrameProcessor):
-                """Captures first TranscriptionFrame and signals pipeline to stop."""
+            # Result holder — populated by turn events
+            result_holder: dict = {
+                "transcript": "",
+                "turn_complete": False,
+                "speech_started": False,
+            }
 
-                def __init__(self, task_ref, **kwargs):
-                    super().__init__(name="TranscriptCollector", **kwargs)
-                    self._task_ref = task_ref
+            @user_aggregator.event_handler("on_user_turn_started")
+            async def on_user_turn_started(aggregator, strategy):
+                result_holder["speech_started"] = True
+                logger.info("User turn started (speech detected)")
 
-                async def process_frame(self, frame, direction: FrameDirection):
-                    await super().process_frame(frame, direction)
-                    if isinstance(frame, TranscriptionFrame) and frame.text.strip():
-                        result_holder["transcript"] = frame.text.strip()
-                        result_holder["got_speech"] = True
-                        logger.info(f"Transcribed: {frame.text.strip()[:80]}")
-                        # Stop the pipeline
-                        await self._task_ref[0].queue_frame(EndFrame())
-                    await self.push_frame(frame, direction)
+            @user_aggregator.event_handler("on_user_turn_stopped")
+            async def on_user_turn_stopped(aggregator, strategy, message):
+                if message.content:
+                    result_holder["transcript"] = message.content
+                    result_holder["turn_complete"] = True
+                    logger.info(f"Turn complete: {message.content[:80]}")
+                    await task.queue_frame(EndFrame())
 
-            # We need a reference the collector can use to stop the task
-            task_ref: list = [None]
-            collector = TranscriptCollector(task_ref)
-
-            pipeline = Pipeline([transport.input(), stt, collector])
+            pipeline = Pipeline([transport.input(), stt, user_aggregator])
             task = PipelineTask(
                 pipeline,
                 params=PipelineParams(allow_interruptions=False),
             )
-            task_ref[0] = task
             runner = PipelineRunner()
 
-            # Timeout: stop pipeline after listen_timeout
-            async def _timeout_monitor():
-                # Wait for silence_timeout first (no speech at all case)
+            # Silence timeout: if no speech at all within silence_timeout, stop.
+            # Once speech starts, turn detection handles the rest — no hard cap.
+            async def _silence_monitor():
                 await asyncio.sleep(silence_timeout)
-                if not result_holder["got_speech"]:
+                if not result_holder["speech_started"]:
                     logger.info(f"No speech after {silence_timeout}s, stopping")
                     await task.queue_frame(EndFrame())
-                    return
 
-                # If speech was detected, wait for remaining listen_timeout
-                remaining = listen_timeout - silence_timeout
-                if remaining > 0:
-                    await asyncio.sleep(remaining)
-                    if not result_holder["transcript"]:
-                        logger.info(f"Listen timeout ({listen_timeout}s), stopping")
-                        await task.queue_frame(EndFrame())
-
-            timeout_task = asyncio.create_task(_timeout_monitor())
+            silence_task = asyncio.create_task(_silence_monitor())
 
             try:
                 await runner.run(task)
             finally:
-                timeout_task.cancel()
+                silence_task.cancel()
                 try:
-                    await timeout_task
+                    await silence_task
                 except asyncio.CancelledError:
                     pass
 
             if result_holder["transcript"]:
+                await self._play_tone(get_listen_stop_tone())
                 return {"success": True, "transcript": result_holder["transcript"]}
             else:
+                await self._play_tone(get_listen_stop_tone())
                 return {"success": True, "transcript": "", "timeout": True}
 
         except Exception as e:

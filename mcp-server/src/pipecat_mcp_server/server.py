@@ -66,22 +66,22 @@ async def say_local_audio(text: str) -> dict:
 
 
 @mcp.tool()
-async def ask_local_audio(text: str, listen_timeout: float = 15.0, silence_timeout: float = 8.0) -> dict:
+async def ask_local_audio(text: str, silence_timeout: float = 10.0) -> dict:
     """Speak text through local speakers, then listen for the user's spoken response.
 
     Uses local audio (speakers + microphone) via the voice daemon. No browser needed.
     The daemon auto-starts if not already running. Returns the transcribed response.
+    Turn detection handles knowing when the user is done talking — no hard time limit.
 
     Args:
         text: The text to speak before listening.
-        listen_timeout: Max seconds to keep the mic open (default: 15).
-        silence_timeout: Seconds of silence before giving up (default: 8).
+        silence_timeout: Seconds of no speech at all before giving up (default: 10).
 
     Returns:
         Dict with success status and transcript of user's response.
 
     """
-    return await daemon_ask(text, listen_timeout=listen_timeout, silence_timeout=silence_timeout)
+    return await daemon_ask(text, silence_timeout=silence_timeout)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

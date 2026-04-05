@@ -249,6 +249,7 @@ def cmd_say(args):
     if args.no_daemon:
         # Direct mode — no daemon, handle dependencies here
         import asyncio
+
         from shared.dependency_installer import ensure_dependencies, get_configured_providers
         
         if not ensure_dependencies(for_cli=True):
@@ -441,8 +442,6 @@ def cmd_ask(args):
         cmd.extend(["--provider", args.provider])
     if getattr(args, "voice", None):
         cmd.extend(["--voice", args.voice])
-    if getattr(args, "listen_timeout", None):
-        cmd.extend(["--listen-timeout", str(args.listen_timeout)])
     if getattr(args, "silence_timeout", None):
         cmd.extend(["--silence-timeout", str(args.silence_timeout)])
 
@@ -708,8 +707,7 @@ def main():
     ask_parser.add_argument("-p", "-v", "--voice-profile", help="Voice profile")
     ask_parser.add_argument("--provider", help="TTS provider")
     ask_parser.add_argument("--voice", help="Voice ID")
-    ask_parser.add_argument("--listen-timeout", type=float, default=15.0, help="Max seconds to listen (default: 15)")
-    ask_parser.add_argument("--silence-timeout", type=float, default=5.0, help="Seconds of silence before returning (default: 5)")
+    ask_parser.add_argument("--silence-timeout", type=float, default=10.0, help="Seconds of no speech before giving up (default: 10)")
     ask_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level")
     ask_parser.set_defaults(func=cmd_ask)
 
@@ -833,6 +831,7 @@ def main():
 def cmd_run_client_profile(args):
     """Run an app profile (e.g., 'talky pi', 'talky claude')."""
     import asyncio
+
     from shared.client_launcher import AppLauncher, MCPServerManager
     
     # Check if this is a new-style backend + app profile
@@ -857,6 +856,7 @@ def cmd_run_client_profile(args):
 async def _run_backend_client_profile(profile, work_dir):
     """Run a new-style backend + app profile."""
     import asyncio
+
     from shared.client_launcher import AppLauncher, MCPServerManager
     
     print(f"🚀 Starting {profile.app} with {profile.backend} voice backend...")

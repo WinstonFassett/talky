@@ -164,15 +164,14 @@ async def ask(
     voice_profile: Optional[str] = None,
     provider: Optional[str] = None,
     voice_id: Optional[str] = None,
-    listen_timeout: float = 15.0,
-    silence_timeout: float = 5.0,
+    silence_timeout: float = 10.0,
 ) -> dict:
     """Speak text then listen for response via daemon (local audio, no browser)."""
     if not ensure_daemon_running():
         return {"success": False, "error": "Voice daemon not available"}
 
-    # Timeout for recv: TTS time + listen time + buffer
-    recv_timeout = listen_timeout + 30.0
+    # No hard cap — turn detection handles ending. Just need enough for TTS + open-ended listen.
+    recv_timeout = 600.0
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
@@ -184,7 +183,6 @@ async def ask(
             "voice_profile": voice_profile,
             "provider": provider,
             "voice_id": voice_id,
-            "listen_timeout": listen_timeout,
             "silence_timeout": silence_timeout,
         },
         recv_timeout,
