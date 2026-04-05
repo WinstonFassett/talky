@@ -30,6 +30,7 @@ dependencies = [
     "pyobjc-framework-CoreMedia>=11.0; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=11.0; sys_platform == 'darwin'",
     "pyobjc-framework-ScreenCaptureKit>=11.0; sys_platform == 'darwin'",
+    "httpx>=0.28.0,<1",
     "python-dotenv>=1.0.0,<2",
     "python-xlib>=0.33; sys_platform == 'linux'",
     "requests>=2.32.5,<3",

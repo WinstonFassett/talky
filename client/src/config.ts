@@ -19,16 +19,11 @@ export const TRANSPORT_LABELS: Record<TransportType, string> = {
 
 export const DEFAULT_TRANSPORT: TransportType = 'smallwebrtc';
 
+// Default to same-origin (unified server serves frontend + proxies WebRTC).
+// In dev mode with Vite on :5173, set VITE_BOT_START_URL to point at the MCP server.
 const botStartUrl =
-  import.meta.env.VITE_BOT_START_URL || `${window.location.protocol}//${window.location.hostname}:${import.meta.env.VITE_BACKEND_PORT || '7860'}/start`;
+  import.meta.env.VITE_BOT_START_URL || `${window.location.origin}/start`;
 const botStartPublicApiKey = import.meta.env.VITE_BOT_START_PUBLIC_API_KEY;
-
-if (!import.meta.env.VITE_BOT_START_URL) {
-  const defaultPort = import.meta.env.VITE_BACKEND_PORT || '7860';
-  console.warn(
-    `VITE_BOT_START_URL not configured, using default: ${window.location.protocol}//${window.location.hostname}:${defaultPort}/start`
-  );
-}
 
 const dailyConfig: DailyConnectionEndpoint = {
   endpoint: botStartUrl,

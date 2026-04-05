@@ -25,7 +25,7 @@ import os
 import signal
 import sys
 import webbrowser
-from contextlib import asynccontextmanager
+from pathlib import Path
 
 from loguru import logger
 from mcp.server.fastmcp import FastMCP
@@ -94,9 +94,8 @@ async def ask_local_audio(text: str, silence_timeout: float = 10.0) -> dict:
 async def start_convo(auto_open: bool = True) -> dict:
     """Start a full voice conversation with browser UI and WebRTC audio.
 
-    Launches a Pipecat voice pipeline and a Vite frontend client. The user
-    connects via browser for echo-cancelled, full-duplex conversation with
-    voice switching, mute controls, and interruption support.
+    Launches a Pipecat voice pipeline. The frontend is served on the same
+    port as the MCP server, with WebRTC signaling proxied through.
 
     Once started, use convo_speak() and convo_listen() to interact.
 
@@ -111,14 +110,8 @@ async def start_convo(auto_open: bool = True) -> dict:
     # Wait for Pipecat to be fully ready with proper async checking
     await _wait_for_pipecat_ready()
 
-    # Start Vite client asynchronously
-    from .agent_ipc import _start_vite_client
-    await _start_vite_client()
-
-    # Wait for Vite client to be ready
-    await _wait_for_vite_ready()
-
-    client_url = "http://localhost:5173?autoconnect=true"
+    scheme = "https" if os.getenv("MCP_SSL_CERTFILE") else "http"
+    client_url = f"{scheme}://{mcp_host}:{mcp_port}?autoconnect=true"
 
     if auto_open:
         webbrowser.open(client_url)
@@ -126,8 +119,6 @@ async def start_convo(auto_open: bool = True) -> dict:
     return {
         "success": True,
         "client_url": client_url,
-        "vite_url": "http://localhost:5173",
-        "webrtc_url": "http://localhost:7860",
         "message": f"Voice conversation started. Browser opened to {client_url}."
     }
 
@@ -154,28 +145,6 @@ async def _wait_for_pipecat_ready(timeout: int = 30) -> bool:
     logger.warning("Pipecat server did not become ready within timeout")
     return False
 
-
-async def _wait_for_vite_ready(timeout: int = 15) -> bool:
-    """Wait for Vite client to be ready with proper timeout."""
-    import socket
-
-    start_time = asyncio.get_event_loop().time()
-    while (asyncio.get_event_loop().time() - start_time) < timeout:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            result = sock.connect_ex(('localhost', 5173))
-            sock.close()
-
-            if result == 0:
-                logger.info("Vite client is ready on port 5173")
-                return True
-        except Exception:
-            pass
-
-        await asyncio.sleep(0.5)
-
-    logger.warning("Vite client did not become ready within timeout")
-    return False
 
 
 @mcp.tool()
@@ -214,7 +183,7 @@ async def convo_listen() -> dict:
 async def end_convo() -> bool:
     """End the active browser voice conversation and clean up resources.
 
-    Shuts down the Pipecat pipeline and Vite client.
+    Shuts down the Pipecat pipeline.
 
     Returns:
         True if the conversation was ended successfully.
@@ -231,14 +200,79 @@ def signal_handler(signum, frame):
     sys.exit(0)
 
 
+def _build_app():
+    """Build the unified Starlette app with MCP, proxy, and static files.
+
+    Route layout:
+        POST /start          → proxy → Pipecat :7860 (session init)
+        POST/PATCH /api/offer → proxy → Pipecat :7860 (WebRTC signaling)
+        ALL  /mcp            → FastMCP (MCP protocol, streamable-http)
+        GET  /*              → static files (client/dist/, production only)
+    """
+    from starlette.applications import Starlette
+    from starlette.routing import Mount, Route
+    from starlette.staticfiles import StaticFiles
+
+    from starlette.staticfiles import StaticFiles
+
+    from pipecat_mcp_server.proxy import proxy_routes
+
+    # Build the MCP Starlette app — it has a single Route("/mcp", ...) and a
+    # lifespan that manages the StreamableHTTP session manager.
+    # We inject our proxy routes and static files directly into its route list
+    # so everything shares one Starlette app (and its lifespan).
+    mcp_starlette = mcp.streamable_http_app()
+
+    # Determine client dist directory
+    client_dist = Path(__file__).parent.parent.parent.parent / "client" / "dist"
+
+    # Prepend proxy routes (checked before /mcp)
+    for route in reversed(proxy_routes):
+        mcp_starlette.router.routes.insert(0, route)
+
+    # Append static files as catch-all (checked last)
+    dev_mode = os.getenv("TALKY_DEV", "").strip() not in ("", "0")
+    if not dev_mode and client_dist.is_dir():
+        logger.info(f"Serving frontend from {client_dist}")
+        mcp_starlette.router.routes.append(
+            Mount("/", app=StaticFiles(directory=str(client_dist), html=True)),
+        )
+    elif dev_mode:
+        logger.info("Dev mode: skipping static frontend (use Vite at :5173 for HMR)")
+    else:
+        logger.warning(f"No built frontend at {client_dist} — run 'npm run build' in client/")
+
+    return mcp_starlette
+
+
 def main():
     """Run the MCP server."""
+    import uvicorn
+
     # Set up signal handlers
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
+    app = _build_app()
+
+    ssl_certfile = os.getenv("MCP_SSL_CERTFILE")
+    ssl_keyfile = os.getenv("MCP_SSL_KEYFILE")
+
+    uvicorn_kwargs = {
+        "host": mcp_host,
+        "port": mcp_port,
+        "log_level": "info",
+    }
+
+    if ssl_certfile and ssl_keyfile:
+        uvicorn_kwargs["ssl_certfile"] = ssl_certfile
+        uvicorn_kwargs["ssl_keyfile"] = ssl_keyfile
+        logger.info(f"SSL enabled: cert={ssl_certfile}")
+
+    logger.info(f"Starting unified server on {mcp_host}:{mcp_port}")
+
     try:
-        mcp.run(transport="streamable-http")
+        uvicorn.run(app, **uvicorn_kwargs)
     except KeyboardInterrupt:
         logger.info("Ctrl-C detected, exiting!")
     finally:
