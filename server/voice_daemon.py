@@ -55,47 +55,24 @@ CHANNELS = 1
 DEFAULT_LISTEN_TIMEOUT = 300.0  # hard cap — safety net only, turn detection handles normal ending
 DEFAULT_SILENCE_TIMEOUT = 10.0  # max seconds of no speech at all before returning
 
-# Listen indicator tones (generated once, cached)
-_TONE_CACHE: dict[str, bytes] = {}
+# Ticket b3c4: listen-start / listen-stop audio cues are now generated in
+# shared/audio_cues.py as three discrete beeps (ascending / descending), not
+# a single sweep. The old sweep sounded like a "reverse raindrop" per user
+# feedback. The daemon and the browser convo pipeline both consume the same
+# generator so the cues are identical across paths.
 TONE_SAMPLE_RATE = 16000
 
 
-def _generate_tone(freq_start: float, freq_end: float, duration: float = 0.2) -> bytes:
-    """Generate a short sine tone as 16-bit PCM. Lightweight — stdlib only."""
-    import math
-
-    n_samples = int(TONE_SAMPLE_RATE * duration)
-    amplitude = 12000  # moderate volume, not jarring
-    samples = bytearray()
-    for i in range(n_samples):
-        t = i / TONE_SAMPLE_RATE
-        # Linear frequency sweep
-        freq = freq_start + (freq_end - freq_start) * (i / n_samples)
-        # Fade in/out envelope (first/last 20% of samples)
-        fade_samples = int(n_samples * 0.2)
-        if i < fade_samples:
-            envelope = i / fade_samples
-        elif i > n_samples - fade_samples:
-            envelope = (n_samples - i) / fade_samples
-        else:
-            envelope = 1.0
-        value = int(amplitude * envelope * math.sin(2 * math.pi * freq * t))
-        samples.extend(struct.pack("<h", max(-32768, min(32767, value))))
-    return bytes(samples)
-
-
 def get_listen_start_tone() -> bytes:
-    """Rising tone: 'listening now'."""
-    if "start" not in _TONE_CACHE:
-        _TONE_CACHE["start"] = _generate_tone(600, 900, duration=0.15)
-    return _TONE_CACHE["start"]
+    """Three ascending beeps — 'listening now'. Delegates to shared.audio_cues."""
+    from shared.audio_cues import start_cue_pcm
+    return start_cue_pcm(TONE_SAMPLE_RATE)
 
 
 def get_listen_stop_tone() -> bytes:
-    """Falling tone: 'got it'."""
-    if "stop" not in _TONE_CACHE:
-        _TONE_CACHE["stop"] = _generate_tone(900, 600, duration=0.15)
-    return _TONE_CACHE["stop"]
+    """Three descending beeps — 'got it'. Delegates to shared.audio_cues."""
+    from shared.audio_cues import stop_cue_pcm
+    return stop_cue_pcm(TONE_SAMPLE_RATE)
 
 
 class VoiceDaemon:

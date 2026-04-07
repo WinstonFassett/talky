@@ -27,6 +27,7 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
+    OutputAudioRawFrame,
 )
 from pipecat.pipeline.parallel_pipeline import ParallelPipeline
 from pipecat.pipeline.pipeline import Pipeline
@@ -259,9 +260,35 @@ class PipecatMCPAgent:
                 self._started = False
                 self._pipeline_task = None
 
+        # b3c4: audible "got it" cue when the user's turn ends. Three
+        # descending beeps, generated in shared/audio_cues.py and pushed
+        # through transport.output() via OutputAudioRawFrame. We only play
+        # the stop cue here — the start cue would either overlap with the
+        # user's own speech (firing on turn_started) or require a hook on
+        # BotStoppedSpeakingFrame that doesn't exist as a simple event.
+        # Start cue for the browser flow is tracked as future work on b3c4.
+        from shared.audio_cues import stop_cue_pcm
+        _stop_cue_sample_rate = 16000
+        _stop_cue_bytes = stop_cue_pcm(_stop_cue_sample_rate)
+
         @user_aggregator.event_handler("on_user_turn_stopped")
         async def on_user_turn_stopped(aggregator, strategy, message: UserTurnStoppedMessage):
             if message.content:
+                # Play the descending cue first (audio frame goes downstream
+                # to transport.output). Fire-and-forget; we don't wait for
+                # the audio to actually play on the peer before putting the
+                # transcript on the queue.
+                try:
+                    await self._pipeline_task.queue_frame(
+                        OutputAudioRawFrame(
+                            audio=_stop_cue_bytes,
+                            sample_rate=_stop_cue_sample_rate,
+                            num_channels=1,
+                        )
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not queue stop cue: {e}")
+
                 await self._user_speech_queue.put({
                     "text": message.content,
                     "timestamp": time.time(),
