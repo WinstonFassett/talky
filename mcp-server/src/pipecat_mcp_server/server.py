@@ -317,6 +317,8 @@ def _build_app():
         ALL  /mcp            → FastMCP (MCP protocol, streamable-http)
         GET  /*              → static files (client/dist/, production only)
     """
+    from contextlib import asynccontextmanager
+
     from starlette.applications import Starlette
     from starlette.routing import Mount, Route
     from starlette.staticfiles import StaticFiles
@@ -330,6 +332,39 @@ def _build_app():
     # We inject our proxy routes and static files directly into its route list
     # so everything shares one Starlette app (and its lifespan).
     mcp_starlette = mcp.streamable_http_app()
+
+    # 727e defense #3: compose our cleanup into the Starlette lifespan.
+    #
+    # Background: uvicorn replaces SIGTERM/SIGINT handlers via
+    # Server.capture_signals, so the signal.signal() calls in main() are
+    # effectively dead code once uvicorn.run() starts. The `finally:
+    # stop_pipecat_process()` in main() does catch normal graceful exits,
+    # but that's outside the event loop and after uvicorn has already
+    # released ports — a narrow window where external observers can see a
+    # "port free but child still alive" state. Moving cleanup into the
+    # Starlette lifespan shutdown hook runs it inside uvicorn's graceful
+    # shutdown, before uvicorn returns, and on the correct event loop.
+    #
+    # FastMCP's `streamable_http_app()` already installs a lifespan that
+    # runs `session_manager.run()` — we must not break that. Compose: enter
+    # FastMCP's lifespan first, yield, then on exit run FastMCP teardown
+    # followed by our own child-cleanup.
+    _original_lifespan = mcp_starlette.router.lifespan_context
+
+    @asynccontextmanager
+    async def _composed_lifespan(app):
+        async with _original_lifespan(app):
+            try:
+                yield
+            finally:
+                logger.info("Lifespan shutdown: cleaning up pipecat children")
+                try:
+                    stop_pipecat_process()
+                except Exception as e:
+                    # Never let cleanup errors prevent shutdown from completing.
+                    logger.warning(f"Lifespan cleanup raised: {e}")
+
+    mcp_starlette.router.lifespan_context = _composed_lifespan
 
     # Determine client dist directory
     client_dist = Path(__file__).parent.parent.parent.parent / "client" / "dist"
@@ -406,6 +441,11 @@ def main():
     except KeyboardInterrupt:
         logger.info("Ctrl-C detected, exiting!")
     finally:
+        # Backstop for the non-lifespan path (e.g. exception before
+        # uvicorn.run() got to its lifespan shutdown). In the normal case
+        # the lifespan context manager in _build_app has already run
+        # stop_pipecat_process() before uvicorn returned, and this call is
+        # an idempotent no-op. See 727e defense #3.
         stop_pipecat_process()
 
 
