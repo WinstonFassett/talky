@@ -13,8 +13,11 @@ process runs separately to avoid stdio collisions with the MCP protocol.
 
 import asyncio
 import multiprocessing
+import os
 import queue as queue_module
+import signal
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 from loguru import logger
@@ -28,6 +31,107 @@ _cmd_queue: Optional[multiprocessing.Queue] = None
 _response_queue: Optional[multiprocessing.Queue] = None
 _pipecat_process: Optional[multiprocessing.Process] = None
 
+# Defense #5 (ticket 727e): PID file so orphans survive parent restarts.
+# The child calls os.setsid() on entry (see run_pipecat_process below), which
+# makes _pipecat_process.pid the pgid leader — that's what we write here, so
+# sweep_orphan_pipecat() can os.killpg() the whole subtree without needing
+# the parent to still be alive.
+PIPECAT_RUN_DIR = Path.home() / ".talky" / "run"
+PIPECAT_PID_FILE = PIPECAT_RUN_DIR / "pipecat.pid"
+
+
+def _write_pid_file(pid: int) -> None:
+    """Record the pipecat child's pid (== pgid) so orphans can be swept."""
+    try:
+        PIPECAT_RUN_DIR.mkdir(parents=True, exist_ok=True)
+        PIPECAT_PID_FILE.write_text(str(pid))
+        logger.debug(f"Wrote pipecat pid file: {PIPECAT_PID_FILE} = {pid}")
+    except OSError as e:
+        logger.warning(f"Could not write pipecat pid file: {e}")
+
+
+def _clear_pid_file() -> None:
+    """Remove the pipecat pid file. Idempotent."""
+    try:
+        PIPECAT_PID_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning(f"Could not remove pipecat pid file: {e}")
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """True iff a process with this pid currently exists (signal 0 probe)."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we don't own it — treat as alive for safety;
+        # we'd rather fail-closed than kill a stranger.
+        return True
+
+
+def sweep_orphan_pipecat() -> bool:
+    """Kill any pipecat orphan from a prior parent, if a pid file points at one.
+
+    Returns True if something was killed. Callers: `start_pipecat_process()`
+    (before spawning a new child) and `server.main()` on startup. Safe to
+    call with no pid file, a stale pid file, or a dead pid — each is a no-op.
+    """
+    if not PIPECAT_PID_FILE.exists():
+        return False
+
+    try:
+        pid = int(PIPECAT_PID_FILE.read_text().strip())
+    except (OSError, ValueError) as e:
+        logger.warning(f"Pipecat pid file exists but is unreadable: {e}; removing")
+        _clear_pid_file()
+        return False
+
+    if not _pid_is_alive(pid):
+        logger.debug(f"Pipecat pid file points at dead pid {pid}; clearing")
+        _clear_pid_file()
+        return False
+
+    # Safety: never killpg our own process group.
+    if pid == os.getpgrp():
+        logger.error(
+            f"Pipecat pid file points at our own pgid ({pid}); refusing to killpg. "
+            "Clearing the file so we can move on."
+        )
+        _clear_pid_file()
+        return False
+
+    logger.warning(f"Found orphan pipecat process pid={pid}; sending SIGTERM to pgid")
+    killed_anything = False
+    try:
+        os.killpg(pid, signal.SIGTERM)
+        killed_anything = True
+    except ProcessLookupError:
+        logger.debug(f"killpg({pid}, SIGTERM): pgid already gone")
+    except PermissionError as e:
+        logger.error(f"killpg({pid}, SIGTERM): {e}")
+        _clear_pid_file()
+        return False
+
+    # Give it a moment to die, then SIGKILL if it didn't.
+    import time
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if not _pid_is_alive(pid):
+            break
+        time.sleep(0.1)
+
+    if _pid_is_alive(pid):
+        logger.warning(f"pgid {pid} survived SIGTERM; sending SIGKILL")
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    _clear_pid_file()
+    return killed_anything
+
 
 def _cleanup():
     """Clean up the pipecat child process."""
@@ -35,20 +139,50 @@ def _cleanup():
 
     logger.debug(f"Checking if Pipecat MCP Agent process is actually running...")
     if _pipecat_process:
-        # Force terminate if still alive
+        # Defense #2 (ticket 727e): fan out SIGTERM to the child's whole
+        # process group, not just the child. _pipecat_process.pid is the pgid
+        # because run_pipecat_process() below calls os.setsid() on entry.
+        pid = _pipecat_process.pid
+        if _pipecat_process.is_alive() and pid is not None:
+            if pid == os.getpgrp():
+                logger.error(
+                    f"Pipecat pid {pid} equals our own pgid; skipping killpg to avoid suicide"
+                )
+            else:
+                try:
+                    logger.debug(
+                        f"Sending SIGTERM to pipecat pgid {pid}"
+                    )
+                    os.killpg(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except PermissionError as e:
+                    logger.warning(f"killpg({pid}, SIGTERM): {e}")
+            _pipecat_process.join(timeout=5.0)
+
+        # Belt-and-suspenders: fall back to Process.terminate()/kill() if the
+        # pgid fan-out didn't take the process down (e.g. child never reached
+        # os.setsid before dying).
         if _pipecat_process.is_alive():
             logger.debug(f"Terminating Pipecat MCP Agent process (PID {_pipecat_process.ident})")
             _pipecat_process.terminate()
             _pipecat_process.join(timeout=5.0)
 
-        # Kill if terminate didn't work
         if _pipecat_process.is_alive():
             logger.debug(f"Killing Pipecat MCP Agent process (PID {_pipecat_process.ident})")
+            if pid is not None and pid != os.getpgrp():
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
             _pipecat_process.kill()
             _pipecat_process.join(timeout=5.0)
 
         logger.debug(f"Pipecat MCP Agent process stopped")
         _pipecat_process = None
+
+    # Defense #5: clear the pid file as part of cleanup.
+    _clear_pid_file()
 
     # Kill any stray processes on port 7860
     try:
@@ -85,11 +219,16 @@ def start_pipecat_process():
     """Start the Pipecat child process.
 
     Creates IPC queues and spawns a new process to run the Pipecat voice agent.
-    Cleans up any existing process before starting a new one.
+    Cleans up any existing process (in-memory) and any orphan from a prior
+    parent (via pid file) before starting a new one.
     """
     global _cmd_queue, _response_queue, _pipecat_process
 
-    # Clean up any existing process first
+    # Sweep any orphan from a prior parent that we don't know about in memory.
+    # This is the recovery path for "parent died but child kept running."
+    sweep_orphan_pipecat()
+
+    # Clean up any existing in-memory process handle.
     _cleanup()
 
     # Create IPC queues using spawn context
@@ -102,9 +241,13 @@ def start_pipecat_process():
         target=run_pipecat_process,
         args=(_cmd_queue, _response_queue),
     )
-    # Start the process in a new process group
     _pipecat_process.start()
     logger.debug(f"Started Pipecat MCP Agent process (PID {_pipecat_process.ident})")
+
+    # Defense #5: record the child's pid so future parents can sweep it.
+    # The child's pid == pgid because run_pipecat_process() calls os.setsid().
+    if _pipecat_process.pid is not None:
+        _write_pid_file(_pipecat_process.pid)
 
 
 
@@ -131,8 +274,17 @@ def run_pipecat_process(cmd_queue: multiprocessing.Queue, response_queue: multip
     import os
     import sys
 
-    # Make this process the leader of a new process group
-    # This ensures all child processes die when this process dies
+    # Become a new session leader. This has two important consequences:
+    #
+    # 1. Any subprocesses this child spawns (pipecat workers, etc.) inherit
+    #    our pgid, so killing the pgid tears down the whole subtree.
+    # 2. Our own pid == our pgid (session leader invariant). The parent
+    #    relies on this in _cleanup() and sweep_orphan_pipecat() to call
+    #    os.killpg(_pipecat_process.pid, ...) and reach every descendant.
+    #
+    # DO NOT remove this line without updating the parent-side kill code
+    # above — killpg on a non-leader pid would target the wrong group and
+    # could kill the parent.
     os.setsid()
 
     _cmd_queue = cmd_queue

@@ -30,7 +30,12 @@ from pathlib import Path
 from loguru import logger
 from mcp.server.fastmcp import FastMCP
 
-from pipecat_mcp_server.agent_ipc import send_command, start_pipecat_process, stop_pipecat_process
+from pipecat_mcp_server.agent_ipc import (
+    send_command,
+    start_pipecat_process,
+    stop_pipecat_process,
+    sweep_orphan_pipecat,
+)
 from pipecat_mcp_server.daemon_bridge import ask as daemon_ask
 from pipecat_mcp_server.daemon_bridge import say as daemon_say
 
@@ -269,7 +274,22 @@ def main():
     """Run the MCP server."""
     import uvicorn
 
-    # Set up signal handlers
+    # Defense #5 (ticket 727e): sweep any pipecat orphan from a prior parent
+    # before we try to bind ports. Reads ~/.talky/run/pipecat.pid and
+    # os.killpg()s the whole session if still alive. No-op if the file is
+    # missing, stale, or points at a dead pid.
+    sweep_orphan_pipecat()
+
+    # Signal handlers — note these are REPLACED by uvicorn once uvicorn.run
+    # starts. uvicorn.Server.capture_signals installs self.handle_exit for
+    # SIGTERM/SIGINT (verified in installed uvicorn source). So this handler
+    # is only active for the narrow window between here and uvicorn.run()
+    # below, plus the non-uvicorn direct-import path. Load-bearing cleanup
+    # in the normal path is the `finally: stop_pipecat_process()` below —
+    # uvicorn's handle_exit flips should_exit, the event loop drains, and
+    # control returns to us so the finally runs. See 727e spike notes and
+    # process-management-plan.md §3 defense #3 for the full story and the
+    # lifespan-migration fix that's still on the table.
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 

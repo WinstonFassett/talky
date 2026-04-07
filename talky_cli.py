@@ -8,6 +8,7 @@ Run from anywhere: talky moltis
 import argparse
 import logging
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -492,16 +493,38 @@ def cmd_kill(args):
     """Handle the 'kill' subcommand — reclaim all Talky ports.
 
     Kills whatever processes are holding Talky's TCP ports (9090 MCP,
-    7860 pipecat WebRTC, 5173 Vite). Kills by PID-from-port rather than
-    by process name, because child processes spawned by `talky mcp`
-    have their own cmdlines and don't match `pkill -f "talky mcp"`.
+    7860 pipecat WebRTC, 5173 Vite). Prefers the pipecat pid file
+    (~/.talky/run/pipecat.pid) for the pgid-accurate sweep; falls back
+    to lsof-by-port for anything the pid file doesn't cover.
 
     The voice daemon (unix socket) is intentionally left alone — its
     lifecycle is separate and well-behaved. Use `talky say --stop-daemon`
     to bounce the daemon if needed.
     """
-    ports = [9090, 7860, 5173]
     any_killed = False
+
+    # Preferred path: pipecat pid file points at the session leader, which
+    # lets us killpg the whole subtree in one shot. This is defense #5.
+    pipecat_pid_file = Path.home() / ".talky" / "run" / "pipecat.pid"
+    if pipecat_pid_file.exists():
+        try:
+            pgid = int(pipecat_pid_file.read_text().strip())
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+                print(f"pipecat pgid {pgid}: SIGTERM sent")
+                any_killed = True
+            except ProcessLookupError:
+                pass
+            except PermissionError as e:
+                print(f"pipecat pgid {pgid}: {e}", file=sys.stderr)
+        except (OSError, ValueError):
+            pass
+        try:
+            pipecat_pid_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    ports = [9090, 7860, 5173]
     for port in ports:
         if _kill_pids_on_port(port):
             any_killed = True
