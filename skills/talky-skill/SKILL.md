@@ -1,9 +1,16 @@
 ---
 name: talky
-description: Talky gives the agent a voice. Use when the user says "talk to me", "voice mode", "use your voice", "holler at me", "tell me when", "notify me", or wants a voice conversation. Two modes — voice prompt mode (walkie-talkie, turn-based, no setup) and voice conversation (full-duplex browser audio).
+description: Talky gives the agent a voice and ears. Use this skill whenever the user wants the agent to speak, listen, hold a voice conversation, go quiet, or change how it engages via audio — even if they don't say "talky" by name. Triggers include "talk to me", "voice mode", "use your voice", "holler at me", "tell me when", "notify me", "let's talk", "start a voice conversation", "I want to have a conversation", "let's have a discussion", "standby mode", "go quiet", "just listen", "be a fly on the wall", "don't speak unless spoken to", "listen but don't respond". Covers two invocation styles (voice prompt mode / walkie-talkie, and voice conversation / full-duplex browser) plus two cross-cutting listening behaviors (ambient awareness and standby mode).
 ---
 
-Talky lets the agent talk with the user. Two modes:
+Talky lets the agent speak and listen. There are **two ways to invoke** voice (voice prompt mode, voice conversation) and **two cross-cutting behaviors** that shape *how* the agent listens once invoked (ambient awareness, standby mode).
+
+## Decision guide: which mode to use
+
+- **Nothing active, user wants to be reached**: voice prompt mode. Zero setup, walkie-talkie, turn-based.
+- **User explicitly wants a conversation / discussion / dedicated talk session**: voice conversation. Full-duplex browser UI.
+- **Already in a voice session and user wants silence**: stay in the current session, enter standby mode. Don't fall back to voice prompt mode — that would be a regression in fidelity.
+- **Ambient awareness is always on** any time the mic is open. It is not a mode to choose; it's how you listen.
 
 ## Voice Prompt Mode (default)
 
@@ -25,7 +32,7 @@ ask_local_audio(text="I finished the refactor. Three files changed. Want me to r
 # Returns {"success": true, "transcript": "Yeah go ahead"}
 ```
 
-Both use the same voice daemon. It auto-starts on first use and stays warm.
+Both use the same voice daemon. It auto-starts on first use and stays warm — i.e. the pipeline stays loaded in the background so subsequent calls have no cold-start latency.
 
 ### Behavior
 
@@ -79,13 +86,42 @@ Requires the Talky MCP server. Uses browser pipeline:
 2. `convo_speak` / `convo_listen` — talk within the session
 3. `end_convo` — shut down
 
+### Behavior
+
+- **Keep the channel alive.** After every `convo_speak`, call `convo_listen` immediately. If you forget, the conversation dies silently — the user is still standing there waiting and you've quietly dropped out of voice without telling them. This is the single most common way to break a voice conversation.
+- **Don't narrate your actions.** The user can hear the tool calls as silence. Tell them *what you found* or *what you decided*, not *"I'm now reading the file."*
+- **Short turns.** 1–3 sentences is the sweet spot. Long monologues are hard to listen to and make it awkward to interrupt.
+- **Silence is information.** If `convo_listen` returns something short like "uh huh" or "right," that's a continue signal, not an invitation to restart the topic. Keep going.
+- **If the pipeline dies, restart it.** If a tool call returns "voice agent process has stopped," call `end_convo` (best-effort, may also error) then `start_convo` again, acknowledge the blip in one sentence, and continue.
+- **End on signal.** When the user says "that's all," "I'm good," "we're done," etc., call `end_convo` and drop back to text. Don't linger.
+
+### Example transcript
+
+```
+User: [clicks into voice conversation, browser opens]
+Agent: start_convo
+Agent: convo_speak "Hey, what's up?"
+Agent: convo_listen
+User (voice): "Quick thing — what's the state of the auth refactor?"
+Agent: [silently reads the relevant files]
+Agent: convo_speak "Refactor is mostly done. Token middleware is clean, session store is async-only, tests pass. The one loose end is the legacy refresh-token path — still there, still untested. Want me to rip it out or leave it?"
+Agent: convo_listen
+User (voice): "Rip it out."
+Agent: [works, returns]
+Agent: convo_speak "Done, one file deleted, tests still green."
+Agent: convo_listen
+User (voice): "Cool, that's all for now."
+Agent: convo_speak "Later."
+Agent: end_convo
+```
+
 ## Ambient awareness (applies to all listening)
 
 Whenever the mic is open — whether inside `ask` (walkie-talkie) or `convo_listen` (full-duplex) — the audio stream is not guaranteed to contain only the user speaking directly to you. Anything near the mic can end up in the transcript. Be savvy about what you actually act on.
 
 **Buckets of speech you may hear:**
 
-1. **Direct address to you** — "hey \<your name>, do the thing." Act on it.
+1. **Direct address to you** — "hey <your name>, do the thing." Act on it.
 2. **Noise or garbled STT** — dog barking, traffic, a stray cough transcribed as fragments. Ignore.
 3. **User talking to another human in the room** — "no, the blue one's mine." Ignore.
 4. **User thinking out loud / muttering to themselves** — "ugh, why did I put that there." Ignore unless clearly an instruction.
@@ -114,12 +150,34 @@ Think stereotypical human personal assistant: present in the room, attentive, al
 
 - Loop on `convo_listen` (or equivalent). Do not call speak.
 - For every utterance you receive, classify it using the ambient-awareness buckets above. The bar for "direct address to me" is *higher* in standby than in normal conversation — you must hear your name or an unambiguous address.
-- Your wake identifier is whatever name you currently go by — see your identity files. Safe defaults if no personal name is established: "agent," "Claude," "AI." Do **not** hard-code personal nicknames into this skill; those belong in the user's identity configuration.
+- Your wake identifier is whatever name you currently go by. It is established by the user's agent configuration — typically in the global agent config file (e.g. `~/.claude/CLAUDE.md` for Claude Code, or equivalent for other harnesses), which will either set the name directly or point at identity files that do. Read that configuration to find it. Safe defaults if no personal name is established: "agent," "Claude," "AI." Do **not** hard-code personal nicknames into this skill; those belong in the user's identity configuration.
 - Once you are addressed and respond, the rule still holds: answer briefly, then return to silent listening. Do not drift into chatty conversation mode just because one turn happened.
 - Explicit exit phrase always wins. If you hear it, acknowledge briefly and resume normal voice behavior.
 
 **Why this matters:** there are times when the user is working, thinking, or with other people, and wants you present but not interrupting. The default conversational loop (speak-on-every-listen) is wrong for those contexts. Standby is the opt-in for "shut up and be useful."
 
+### Example transcript
+
+```
+User: "OK, go into standby."
+Agent: convo_speak "Got it, going quiet."
+Agent: convo_listen
+User (voice): "Noah, come here please"         → bucket 3 (third-party) → ignore
+Agent: convo_listen                              (stay silent, keep listening)
+User (voice): "ugh why did I put that there"    → bucket 4 (self-talk) → ignore
+Agent: convo_listen
+User (voice): "the agent's still chewing on it" → bucket 5 (third-person) → ignore
+Agent: convo_listen
+User (voice): "hey Claude, status please"        → direct address → respond
+Agent: convo_speak "Tests are green, one loose end on refresh tokens."
+Agent: convo_listen                              (back to silent — don't drift into chatty mode)
+User (voice): "thanks, back to standby"
+Agent: convo_listen
+User (voice): "OK, out of standby"               → exit phrase
+Agent: convo_speak "Back with you."
+```
+
 ## When ambiguous, default to voice prompt mode
 
-If the user says something like "start a voice session" or "let's talk" — use voice prompt mode. It's zero friction and always available. Only escalate to voice conversation when the user explicitly says "conversation" or "discussion" or asks for the browser/UI experience.
+- **If no voice session is active** and the user says something like "let's talk" or "start a voice session" — use voice prompt mode. It's zero friction and always available. Only escalate to voice conversation when the user explicitly says "conversation" or "discussion" or asks for the browser/UI experience.
+- **If a voice conversation is already active** — stay in it. Apply behaviors (standby, exit, etc.) inside the existing session. Don't silently degrade to voice prompt mode; that's a regression in fidelity the user didn't ask for.
