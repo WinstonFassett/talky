@@ -667,13 +667,22 @@ def cmd_list_profiles(args):
 
 def cmd_mcp(args):
     """Start MCP server."""
-    try:
-        result = subprocess.run(["lsof", "-ti:9090"], capture_output=True, text=True)
-        if result.stdout.strip():
-            print("MCP server already running on port 9090")
-            return
-    except (FileNotFoundError, subprocess.SubprocessError) as e:
-        logging.debug(f"Could not check port 9090: {e}")
+    # Pre-check 9090 with a friendly early message. The authoritative port
+    # check (covering 7860 as well) happens inside server.main via
+    # _check_ports_or_exit; this is just a fast path for the common case
+    # where the MCP port is already bound.
+    force = bool(getattr(args, "force", False))
+    if force:
+        os.environ["TALKY_MCP_FORCE"] = "1"
+    else:
+        try:
+            result = subprocess.run(["lsof", "-ti:9090"], capture_output=True, text=True)
+            if result.stdout.strip():
+                print("MCP server already running on port 9090.")
+                print("Run `talky kill` to reclaim, or rerun with `talky mcp --force`.")
+                return
+        except (FileNotFoundError, subprocess.SubprocessError) as e:
+            logging.debug(f"Could not check port 9090: {e}")
 
     voice_profile = getattr(args, 'voice_profile', None)
     
@@ -789,6 +798,11 @@ def main():
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP server")
     mcp_parser.add_argument("--voice-profile", "-v", help="Voice profile to use")
     mcp_parser.add_argument("--host", help="Override host binding (default: from config)")
+    mcp_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Take over held ports (9090 / 7860) instead of failing",
+    )
     mcp_parser.set_defaults(func=cmd_mcp)
 
     # === ls subcommand ===

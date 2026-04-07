@@ -23,9 +23,11 @@ Conversation tools (browser pipeline, WebRTC):
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 import webbrowser
 from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 from mcp.server.fastmcp import FastMCP
@@ -225,6 +227,87 @@ def signal_handler(signum, frame):
     sys.exit(0)
 
 
+def _port_holder(port: int) -> Optional[int]:
+    """Return the holder PID if a port is bound, else None.
+
+    Uses lsof so the behavior matches `talky kill` and kill-talky.sh.
+    Returns the first PID from lsof's output (there's typically only one
+    for a bound listener). Returns None on any tool failure — fail open,
+    let uvicorn report the bind error.
+    """
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    stdout = result.stdout.strip()
+    if not stdout:
+        return None
+    first = stdout.split("\n")[0].strip()
+    try:
+        return int(first)
+    except ValueError:
+        return None
+
+
+def _check_ports_or_exit():
+    """Defense #4 (ticket 727e): refuse to start if our ports are held.
+
+    Environment variable TALKY_MCP_FORCE=1 turns this into a reclaim:
+    kill whoever's holding the port, then proceed. Default is fail-fast
+    with a clear error pointing at `talky kill` so the human gets a
+    friendly message instead of uvicorn's opaque bind traceback.
+    """
+    force = os.getenv("TALKY_MCP_FORCE", "").strip() not in ("", "0")
+    holders = []
+    for port in (mcp_port, 7860):
+        pid = _port_holder(port)
+        if pid is not None:
+            holders.append((port, pid))
+
+    if not holders:
+        return
+
+    if force:
+        for port, pid in holders:
+            logger.warning(
+                f"TALKY_MCP_FORCE: killing pid {pid} holding port {port}"
+            )
+            try:
+                # SIGTERM first — gives a graceful shot — then SIGKILL after a
+                # brief grace. Matches the semantics of `talky kill`.
+                os.kill(pid, signal.SIGTERM)
+                import time as _t
+                _t.sleep(0.2)
+                try:
+                    os.kill(pid, 0)
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            except ProcessLookupError:
+                pass
+            except PermissionError as e:
+                logger.error(f"Cannot kill pid {pid} on port {port}: {e}")
+                sys.exit(2)
+        return
+
+    lines = [
+        "Port(s) already held — cannot start talky mcp:",
+    ]
+    for port, pid in holders:
+        lines.append(f"  port {port}: pid {pid}")
+    lines.append("")
+    lines.append("Fix: run `talky kill` to reclaim, then retry.")
+    lines.append("Or: rerun with TALKY_MCP_FORCE=1 to take over automatically.")
+    for line in lines:
+        logger.error(line)
+    sys.exit(2)
+
+
 def _build_app():
     """Build the unified Starlette app with MCP, proxy, and static files.
 
@@ -279,6 +362,13 @@ def main():
     # os.killpg()s the whole session if still alive. No-op if the file is
     # missing, stale, or points at a dead pid.
     sweep_orphan_pipecat()
+
+    # Defense #4 (ticket 727e): fail fast with a friendly message if 9090 or
+    # 7860 is already held (by a stale MCP server or other program). Honors
+    # TALKY_MCP_FORCE=1 to reclaim instead of fail. This must run AFTER
+    # sweep_orphan_pipecat so a cleanly-cleared orphan doesn't trigger the
+    # check.
+    _check_ports_or_exit()
 
     # Signal handlers — note these are REPLACED by uvicorn once uvicorn.run
     # starts. uvicorn.Server.capture_signals installs self.handle_exit for
