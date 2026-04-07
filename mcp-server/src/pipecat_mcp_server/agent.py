@@ -49,8 +49,8 @@ from pipecat.services.stt_service import STTService
 from pipecat.services.tts_service import TTSService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
-from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
-    TurnAnalyzerUserTurnStopStrategy,
+from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+    SpeechTimeoutUserTurnStopStrategy,
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from shared.service_factory import create_stt_service_from_config, create_tts_service_from_config
@@ -126,10 +126,12 @@ class PipecatMCPAgent:
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
             context,
             user_params=LLMUserAggregatorParams(
+                # c1a2: use silence-based turn detection instead of the default
+                # smart-turn ML analyzer, which was cutting users off mid-sentence.
+                # 1.0s wait after VAD stop gives ~1.2-1.4s total end-of-turn latency
+                # (VAD stop_secs 0.2-0.4s + user_speech_timeout 1.0s).
                 user_turn_strategies=UserTurnStrategies(
-                    stop=[
-                        TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())
-                    ]
+                    stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=1.0)]
                 ),
                 vad_analyzer=create_vad_analyzer(),
             ),
@@ -184,9 +186,15 @@ class PipecatMCPAgent:
             ]
         )
 
+        # 9e7d: disable pipecat's default 5-minute idle timeout. Without this
+        # override, sessions quietly self-cancel whenever the user steps away
+        # for more than 300s, leaving zombie state. server/bot.py already does
+        # this; mcp-server was inheriting the default.
         self._pipeline_task = PipelineTask(
             pipeline,
             params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+            idle_timeout_secs=None,
+            cancel_on_idle_timeout=False,
         )
 
         # Set task reference for voice switcher (needed for ManuallySwitchServiceFrame)
@@ -219,6 +227,11 @@ class PipecatMCPAgent:
             else:
                 await self._user_speech_queue.put(self._DISCONNECT_SENTINEL)
                 await self._pipeline_task.cancel()
+                # d5e6: reset lifecycle flag so the next listen()/speak() will
+                # rebuild a fresh pipeline instead of reusing the cancelled one.
+                # Without this, convo_listen() blocks forever on a dead queue.
+                self._started = False
+                self._pipeline_task = None
 
         @user_aggregator.event_handler("on_user_turn_stopped")
         async def on_user_turn_stopped(aggregator, strategy, message: UserTurnStoppedMessage):

@@ -31,6 +31,10 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+    SpeechTimeoutUserTurnStopStrategy,
+)
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.transports.base_transport import BaseTransport
 from shared.service_factory import create_stt_service_from_config, create_tts_service_from_config
 from server.features.voice_switcher import VoiceProfileSwitcher
@@ -125,9 +129,18 @@ async def run_bot(
     messages = []
 
     context = LLMContext(messages)
+    # c1a2: use silence-based turn detection instead of the default smart-turn
+    # ML analyzer. The smart-turn model ends turns the instant Silero VAD
+    # detects a pause, cutting users off mid-sentence. A fixed silence timeout
+    # is more forgiving and predictable.
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(),
+            user_turn_strategies=UserTurnStrategies(
+                stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=1.0)]
+            ),
+        ),
     )
 
     pipeline = Pipeline(
