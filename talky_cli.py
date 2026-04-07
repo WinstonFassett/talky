@@ -23,30 +23,33 @@ sys.path.insert(0, str(_root))
 sys.path.insert(0, str(server_dir))
 
 
-def kill_port_7860():
-    """Kill any processes using port 7860."""
+def _kill_pids_on_port(port: int) -> bool:
+    """Kill anything bound to the given TCP port. Returns True if anything was killed."""
     try:
-        # Find process using port 7860
         result = subprocess.run(
-            ["lsof", "-ti", ":7860"],
+            ["lsof", "-ti", f":{port}"],
             capture_output=True,
-            text=True
+            text=True,
         )
-        
         if result.returncode == 0 and result.stdout.strip():
-            pids = result.stdout.strip().split('\n')
+            pids = result.stdout.strip().split("\n")
+            killed = False
             for pid in pids:
                 try:
                     subprocess.run(["kill", "-9", pid], capture_output=True)
-                    print(f"Killed process {pid} on port 7860")
+                    print(f"port {port}: killed {pid}")
+                    killed = True
                 except subprocess.SubprocessError:
                     pass
-        else:
-            # No process found on port 7860
-            pass
-    except subprocess.SubprocessError:
-        # lsof command failed (probably not on macOS/Linux)
+            return killed
+    except (FileNotFoundError, subprocess.SubprocessError):
         pass
+    return False
+
+
+def kill_port_7860():
+    """Backwards-compat shim. Prefer `_kill_pids_on_port(7860)` or `talky kill`."""
+    _kill_pids_on_port(7860)
 
 
 def validate_certificates(client_dir: Path, external_binding: bool) -> bool:
@@ -500,21 +503,10 @@ def cmd_kill(args):
     ports = [9090, 7860, 5173]
     any_killed = False
     for port in ports:
-        try:
-            result = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip():
-                pids = result.stdout.strip().split("\n")
-                for pid in pids:
-                    try:
-                        subprocess.run(["kill", "-9", pid], capture_output=True)
-                        print(f"port {port}: killed {pid}")
-                        any_killed = True
-                    except subprocess.SubprocessError:
-                        pass
-            else:
-                print(f"port {port}: clear")
-        except (FileNotFoundError, subprocess.SubprocessError):
-            pass
+        if _kill_pids_on_port(port):
+            any_killed = True
+        else:
+            print(f"port {port}: clear")
 
     # Verify nothing snuck back in.
     import time

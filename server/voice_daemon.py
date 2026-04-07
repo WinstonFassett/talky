@@ -365,14 +365,37 @@ class VoiceDaemon:
 
             silence_task = asyncio.create_task(_silence_monitor())
 
+            # listen_timeout is a hard safety cap — catastrophic fallback only.
+            # Normal end-of-turn is handled by SpeechTimeoutUserTurnStopStrategy
+            # (user_speech_timeout=2.0s above). silence_task handles "no speech
+            # at all". This wait_for is a last resort for "mic got stuck open
+            # somehow" and should be long enough (DEFAULT_LISTEN_TIMEOUT = 300s)
+            # that users never actually hit it during normal speech.
+            hard_cap_tripped = False
             try:
-                await runner.run(task)
+                await asyncio.wait_for(runner.run(task), timeout=listen_timeout)
+            except asyncio.TimeoutError:
+                hard_cap_tripped = True
+                logger.warning(
+                    f"listen_timeout ({listen_timeout}s) hard cap tripped — "
+                    "this should never happen during normal speech. If you're "
+                    "seeing this, check turn detection config."
+                )
+                await task.cancel()
             finally:
                 silence_task.cancel()
                 try:
                     await silence_task
                 except asyncio.CancelledError:
                     pass
+
+            if hard_cap_tripped:
+                await self._play_tone(get_listen_stop_tone())
+                return {
+                    "success": False,
+                    "error": f"listen_timeout ({listen_timeout}s) exceeded",
+                    "transcript": result_holder.get("transcript", ""),
+                }
 
             if result_holder["transcript"]:
                 await self._play_tone(get_listen_stop_tone())

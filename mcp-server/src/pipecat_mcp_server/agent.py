@@ -100,6 +100,24 @@ class PipecatMCPAgent:
 
         self._started = False
 
+    def _is_live(self) -> bool:
+        """True iff the pipeline is actually running right now.
+
+        `_started` alone is a flag, not an invariant — it can lie if the
+        pipeline task was cancelled behind our back (e.g. on_client_disconnected
+        cancels the task, but the handler may race with listen()/speak()).
+        Checking the task state directly is the source of truth.
+        """
+        if not self._started:
+            return False
+        if self._pipeline_task is None:
+            return False
+        if self._pipeline_task.has_finished():
+            return False
+        if self._task is not None and self._task.done():
+            return False
+        return True
+
     async def start(self):
         """Start the voice pipeline.
 
@@ -111,8 +129,16 @@ class PipecatMCPAgent:
             ValueError: If required API keys are missing from environment.
 
         """
-        if self._started:
+        if self._is_live():
             return
+
+        # The flag was true but the pipeline is actually dead. Normalize state
+        # so we can cleanly rebuild. (Belt-and-suspenders for d5e6 — the
+        # disconnect handler also clears this, but the handler may not have
+        # fired yet, and a flag without a live check is the bug shape we were
+        # burned by in the first place.)
+        self._started = False
+        self._pipeline_task = None
 
         logger.info("Starting Pipecat MCP Agent pipeline...")
 
@@ -253,7 +279,10 @@ class PipecatMCPAgent:
         Sends an `EndFrame` to gracefully shut down the pipeline and waits
         for the background task to complete.
         """
-        if not self._started:
+        # Use the flag here rather than _is_live(): even if the pipeline is
+        # already dead, we want to run the cleanup path to null out refs and
+        # flip the flag.
+        if not self._started and self._pipeline_task is None:
             return
 
         logger.info("Stopping Pipecat MCP agent...")
@@ -282,7 +311,7 @@ class PipecatMCPAgent:
             RuntimeError: If the pipeline task is not initialized.
 
         """
-        if not self._started:
+        if not self._is_live():
             await self.start()
 
         if not self._pipeline_task:
@@ -328,7 +357,7 @@ class PipecatMCPAgent:
             RuntimeError: If the pipeline task is not initialized.
 
         """
-        if not self._started:
+        if not self._is_live():
             await self.start()
 
         if not self._pipeline_task:
