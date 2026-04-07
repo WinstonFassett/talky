@@ -12,32 +12,39 @@ to interact with the user by voice.
 Local audio tools (daemon-backed, no browser):
     say_local_audio: Speak text through local speakers.
     ask_local_audio: Speak text, then listen for a spoken response.
+    talk_local_audio: Alias for ask_local_audio.
 
-Conversation tools (browser pipeline, WebRTC):
-    start_convo: Start a full voice conversation with browser UI.
+Conversation tools (browser pipeline, WebRTC, in-process):
+    start_convo: Open the browser to the voice UI.
     convo_speak: Speak text within an active conversation.
     convo_listen: Listen for user speech within an active conversation.
-    end_convo: End the voice conversation and clean up.
+    end_convo: Detach the active pipeline.
+
+Architecture (ticket 58db — "hot voice channel"):
+    The voice pipeline is in-process. There is no child `pipecat`
+    process, no port 7860, no reverse proxy. `SmallWebRTCRequestHandler`
+    is mounted directly on this Starlette app. Services are pre-warmed
+    in the lifespan startup hook; a fresh pipeline is built per browser
+    connection using those pre-warmed configs. See `channel.py`.
 """
+
+from __future__ import annotations
 
 import asyncio
 import os
 import signal
 import subprocess
 import sys
+import uuid
 import webbrowser
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 from loguru import logger
 from mcp.server.fastmcp import FastMCP
 
-from pipecat_mcp_server.agent_ipc import (
-    send_command,
-    start_pipecat_process,
-    stop_pipecat_process,
-    sweep_orphan_pipecat,
-)
+from pipecat_mcp_server.channel import VoiceChannel
 from pipecat_mcp_server.daemon_bridge import ask as daemon_ask
 from pipecat_mcp_server.daemon_bridge import say as daemon_say
 
@@ -49,6 +56,11 @@ logger.add(sys.stderr, level="INFO")
 mcp_host = os.getenv("MCP_HOST", "localhost")
 mcp_port = int(os.getenv("MCP_PORT", "9090"))
 mcp = FastMCP(name="pipecat-mcp-server", host=mcp_host, port=mcp_port)
+
+# The single in-process voice channel. Created eagerly so the MCP tools can
+# reference it during module import, but warmup is deferred to the Starlette
+# lifespan startup hook (see _build_app).
+voice_channel = VoiceChannel()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -113,30 +125,27 @@ async def talk_local_audio(text: str, silence_timeout: float = 10.0) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Conversation tools (browser pipeline, WebRTC)
+# Conversation tools (browser pipeline, WebRTC, in-process — ticket 58db)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
 async def start_convo(auto_open: bool = True) -> dict:
-    """Start a full voice conversation with browser UI and WebRTC audio.
+    """Open a voice conversation with the browser UI.
 
-    Launches a Pipecat voice pipeline. The frontend is served on the same
-    port as the MCP server, with WebRTC signaling proxied through.
-
-    Once started, use convo_speak() and convo_listen() to interact.
+    Under the 58db "hot voice channel" architecture, the voice pipeline is
+    always ready on the MCP server side — this tool just points the browser
+    at the UI, which then establishes a WebRTC peer connection. The pipeline
+    is built lazily when the browser actually connects (see
+    `channel.VoiceChannel.attach`).
 
     Args:
-        auto_open: Automatically open the browser to the WebRTC client (default: True).
+        auto_open: Automatically open the browser (default: True).
 
-    Returns connection information including the browser URL.
+    Returns:
+        Connection information including the browser URL.
 
     """
-    start_pipecat_process()
-
-    # Wait for Pipecat to be fully ready with proper async checking
-    await _wait_for_pipecat_ready()
-
     scheme = "https" if os.getenv("MCP_SSL_CERTFILE") else "http"
     client_url = f"{scheme}://{mcp_host}:{mcp_port}?autoconnect=true"
 
@@ -146,48 +155,25 @@ async def start_convo(auto_open: bool = True) -> dict:
     return {
         "success": True,
         "client_url": client_url,
-        "message": f"Voice conversation started. Browser opened to {client_url}."
+        "message": f"Voice conversation ready. Browser opened to {client_url}.",
     }
-
-
-async def _wait_for_pipecat_ready(timeout: int = 30) -> bool:
-    """Wait for Pipecat server to be ready with proper timeout."""
-    import socket
-
-    start_time = asyncio.get_event_loop().time()
-    while (asyncio.get_event_loop().time() - start_time) < timeout:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            result = sock.connect_ex(('localhost', 7860))
-            sock.close()
-
-            if result == 0:
-                logger.info("Pipecat server is ready on port 7860")
-                return True
-        except Exception:
-            pass
-
-        await asyncio.sleep(0.5)
-
-    logger.warning("Pipecat server did not become ready within timeout")
-    return False
-
 
 
 @mcp.tool()
 async def convo_speak(text: str) -> bool:
     """Speak text within an active browser conversation.
 
-    Requires start_convo() to have been called first.
+    Requires a WebRTC peer to be connected (i.e. the browser UI must be open
+    and connected). Raises on "not live".
 
     Args:
         text: The text to speak.
 
     Returns:
-        True if the agent spoke the text, false otherwise.
+        True on success.
 
     """
-    await send_command("speak", text=text)
+    await voice_channel.speak(text)
     return True
 
 
@@ -195,46 +181,43 @@ async def convo_speak(text: str) -> bool:
 async def convo_listen() -> dict:
     """Listen for user speech within an active browser conversation.
 
-    Blocks until the user speaks, then returns all buffered speech.
-    Requires start_convo() to have been called first.
-
-    Returns:
-        Dict with 'text' (combined transcription) and 'segments' (list of
-        utterances with timestamps for gap/silence awareness).
-
+    Blocks until the user speaks, then returns all buffered utterances.
+    Returns a dict with 'text' (combined transcription) and 'segments'
+    (list of utterances with timestamps).
     """
-    return await send_command("listen")
+    return await voice_channel.listen()
 
 
 @mcp.tool()
 async def end_convo() -> bool:
-    """End the active browser voice conversation and clean up resources.
+    """End the active browser voice conversation and detach the pipeline.
 
-    Shuts down the Pipecat pipeline.
-
-    Returns:
-        True if the conversation was ended successfully.
-
+    Tears down the active pipeline task but leaves the MCP server and
+    pre-warmed config in place — the next browser connection will be fast.
     """
-    await send_command("stop")
+    await voice_channel.detach()
     return True
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Signal / port management (ticket 727e)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
 def signal_handler(signum, frame):
-    """Handle SIGTERM and SIGINT signals."""
-    logger.info(f"Received signal {signum}, cleaning up...")
-    stop_pipecat_process()
+    """Handle SIGTERM and SIGINT signals.
+
+    Note: this handler is typically replaced by uvicorn's own handlers once
+    `uvicorn.run()` starts (via `Server.capture_signals`). The load-bearing
+    cleanup path is the Starlette lifespan shutdown hook in `_build_app`,
+    which runs inside the event loop before uvicorn releases ports.
+    """
+    logger.info(f"Received signal {signum}, exiting")
     sys.exit(0)
 
 
 def _port_holder(port: int) -> Optional[int]:
-    """Return the holder PID if a port is bound, else None.
-
-    Uses lsof so the behavior matches `talky kill` and kill-talky.sh.
-    Returns the first PID from lsof's output (there's typically only one
-    for a bound listener). Returns None on any tool failure — fail open,
-    let uvicorn report the bind error.
-    """
+    """Return the holder PID if a port is bound, else None."""
     try:
         result = subprocess.run(
             ["lsof", "-ti", f":{port}"],
@@ -255,125 +238,211 @@ def _port_holder(port: int) -> Optional[int]:
 
 
 def _check_ports_or_exit():
-    """Defense #4 (ticket 727e): refuse to start if our ports are held.
+    """Defense #4 (ticket 727e): refuse to start if port 9090 is held.
 
-    Environment variable TALKY_MCP_FORCE=1 turns this into a reclaim:
-    kill whoever's holding the port, then proceed. Default is fail-fast
-    with a clear error pointing at `talky kill` so the human gets a
-    friendly message instead of uvicorn's opaque bind traceback.
+    Under the 58db in-process architecture, port 7860 no longer exists —
+    we only need to check 9090. `TALKY_MCP_FORCE=1` kills whoever's there
+    and proceeds.
     """
     force = os.getenv("TALKY_MCP_FORCE", "").strip() not in ("", "0")
-    holders = []
-    for port in (mcp_port, 7860):
-        pid = _port_holder(port)
-        if pid is not None:
-            holders.append((port, pid))
-
-    if not holders:
+    holder = _port_holder(mcp_port)
+    if holder is None:
         return
 
     if force:
-        for port, pid in holders:
-            logger.warning(
-                f"TALKY_MCP_FORCE: killing pid {pid} holding port {port}"
-            )
+        logger.warning(
+            f"TALKY_MCP_FORCE: killing pid {holder} holding port {mcp_port}"
+        )
+        try:
+            os.kill(holder, signal.SIGTERM)
+            import time as _t
+
+            _t.sleep(0.2)
             try:
-                # SIGTERM first — gives a graceful shot — then SIGKILL after a
-                # brief grace. Matches the semantics of `talky kill`.
-                os.kill(pid, signal.SIGTERM)
-                import time as _t
-                _t.sleep(0.2)
-                try:
-                    os.kill(pid, 0)
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                os.kill(holder, 0)
+                os.kill(holder, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            except PermissionError as e:
-                logger.error(f"Cannot kill pid {pid} on port {port}: {e}")
-                sys.exit(2)
+        except ProcessLookupError:
+            pass
+        except PermissionError as e:
+            logger.error(f"Cannot kill pid {holder} on port {mcp_port}: {e}")
+            sys.exit(2)
         return
 
-    lines = [
-        "Port(s) already held — cannot start talky mcp:",
-    ]
-    for port, pid in holders:
-        lines.append(f"  port {port}: pid {pid}")
-    lines.append("")
-    lines.append("Fix: run `talky kill` to reclaim, then retry.")
-    lines.append("Or: rerun with TALKY_MCP_FORCE=1 to take over automatically.")
-    for line in lines:
-        logger.error(line)
+    logger.error(
+        f"Port {mcp_port} already held by pid {holder} — cannot start talky mcp."
+    )
+    logger.error("Fix: run `talky kill` to reclaim, then retry.")
+    logger.error("Or: rerun with `talky mcp --force` to take over automatically.")
     sys.exit(2)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# App construction
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _build_webrtc_routes():
+    """Build Starlette routes that embed `SmallWebRTCRequestHandler`.
+
+    Replaces the old reverse-proxy path (which forwarded /start and
+    /api/offer to a child pipecat process on 7860). Now the handler lives
+    directly on the MCP server's Starlette app.
+    """
+    from pipecat.transports.smallwebrtc.request_handler import (
+        IceCandidate,
+        SmallWebRTCPatchRequest,
+        SmallWebRTCRequest,
+        SmallWebRTCRequestHandler,
+    )
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    webrtc_handler = SmallWebRTCRequestHandler()
+    active_sessions: dict = {}
+
+    async def handle_start(request: Request):
+        """Mimic Pipecat Cloud's /start: return session_id + ICE config."""
+        try:
+            request_data = await request.json()
+        except Exception:
+            request_data = {}
+
+        session_id = str(uuid.uuid4())
+        active_sessions[session_id] = request_data.get("body", {})
+
+        result: dict = {"sessionId": session_id}
+        if request_data.get("enableDefaultIceServers"):
+            result["iceConfig"] = {
+                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+            }
+
+        logger.info(f"Voice session created: {session_id}")
+        return JSONResponse(result)
+
+    async def handle_offer(request: Request):
+        """Handle a WebRTC SDP offer → build a pipeline on the channel."""
+        body = await request.json()
+        webrtc_request = SmallWebRTCRequest.from_dict(body)
+
+        async def on_connection(connection):
+            try:
+                await voice_channel.attach(connection)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"VoiceChannel.attach failed: {e}")
+
+        answer = await webrtc_handler.handle_web_request(webrtc_request, on_connection)
+        if answer:
+            return JSONResponse(answer)
+        return JSONResponse({"error": "No WebRTC answer produced"}, status_code=500)
+
+    async def handle_session_offer(request: Request):
+        """Pipecat Cloud compat: /sessions/{session_id}/api/offer POST."""
+        session_id = request.path_params["session_id"]
+        if session_id not in active_sessions:
+            return JSONResponse({"error": "Invalid session"}, status_code=404)
+        return await handle_offer(request)
+
+    async def handle_ice(request: Request):
+        """Handle a WebRTC ICE candidate patch."""
+        body = await request.json()
+        patch = SmallWebRTCPatchRequest(
+            pc_id=body["pc_id"],
+            candidates=[IceCandidate(**c) for c in body.get("candidates", [])],
+        )
+        await webrtc_handler.handle_patch_request(patch)
+        return JSONResponse({"status": "ok"})
+
+    async def handle_session_ice(request: Request):
+        session_id = request.path_params["session_id"]
+        if session_id not in active_sessions:
+            return JSONResponse({"error": "Invalid session"}, status_code=404)
+        return await handle_ice(request)
+
+    async def handle_status(request: Request):  # noqa: ARG001
+        return JSONResponse(
+            {
+                "status": "ok",
+                "channel": voice_channel.status(),
+                "connections": len(webrtc_handler._pcs_map),
+            }
+        )
+
+    routes = [
+        Route("/start", handle_start, methods=["POST"]),
+        Route("/api/offer", handle_offer, methods=["POST"]),
+        Route("/api/offer", handle_ice, methods=["PATCH"]),
+        Route(
+            "/sessions/{session_id}/api/offer",
+            handle_session_offer,
+            methods=["POST"],
+        ),
+        Route(
+            "/sessions/{session_id}/api/offer",
+            handle_session_ice,
+            methods=["PATCH"],
+        ),
+        Route("/status", handle_status, methods=["GET"]),
+    ]
+    return routes, webrtc_handler
+
+
 def _build_app():
-    """Build the unified Starlette app with MCP, proxy, and static files.
+    """Build the unified Starlette app.
 
     Route layout:
-        POST /start          → proxy → Pipecat :7860 (session init)
-        POST/PATCH /api/offer → proxy → Pipecat :7860 (WebRTC signaling)
-        ALL  /mcp            → FastMCP (MCP protocol, streamable-http)
-        GET  /*              → static files (client/dist/, production only)
+        POST /start                    → WebRTC session init (embedded)
+        POST/PATCH /api/offer          → WebRTC signaling (embedded)
+        POST/PATCH /sessions/{id}/...  → WebRTC signaling (Pipecat Cloud compat)
+        GET  /status                   → channel introspection
+        ALL  /mcp                      → FastMCP protocol (streamable-http)
+        GET  /*                        → static files (client/dist/)
     """
-    from contextlib import asynccontextmanager
-
-    from starlette.applications import Starlette
-    from starlette.routing import Mount, Route
+    from starlette.routing import Mount
     from starlette.staticfiles import StaticFiles
 
-    from starlette.staticfiles import StaticFiles
-
-    from pipecat_mcp_server.proxy import proxy_routes
-
-    # Build the MCP Starlette app — it has a single Route("/mcp", ...) and a
-    # lifespan that manages the StreamableHTTP session manager.
-    # We inject our proxy routes and static files directly into its route list
-    # so everything shares one Starlette app (and its lifespan).
+    # Build the MCP Starlette app — it has a single /mcp route and a lifespan
+    # that manages the StreamableHTTP session manager. We compose around it.
     mcp_starlette = mcp.streamable_http_app()
 
-    # 727e defense #3: compose our cleanup into the Starlette lifespan.
-    #
-    # Background: uvicorn replaces SIGTERM/SIGINT handlers via
-    # Server.capture_signals, so the signal.signal() calls in main() are
-    # effectively dead code once uvicorn.run() starts. The `finally:
-    # stop_pipecat_process()` in main() does catch normal graceful exits,
-    # but that's outside the event loop and after uvicorn has already
-    # released ports — a narrow window where external observers can see a
-    # "port free but child still alive" state. Moving cleanup into the
-    # Starlette lifespan shutdown hook runs it inside uvicorn's graceful
-    # shutdown, before uvicorn returns, and on the correct event loop.
-    #
-    # FastMCP's `streamable_http_app()` already installs a lifespan that
-    # runs `session_manager.run()` — we must not break that. Compose: enter
-    # FastMCP's lifespan first, yield, then on exit run FastMCP teardown
-    # followed by our own child-cleanup.
+    # 727e defense #3 + 58db lifespan: compose our warmup/shutdown into the
+    # Starlette lifespan so it runs inside uvicorn's event loop, before ports
+    # are released.
     _original_lifespan = mcp_starlette.router.lifespan_context
 
     @asynccontextmanager
     async def _composed_lifespan(app):
+        # Pre-warm the voice channel synchronously in startup. Config-only,
+        # fast (~tens of ms).
+        try:
+            voice_channel.warmup()
+        except Exception as e:  # noqa: BLE001
+            # Don't let a misconfigured voice profile block the MCP server
+            # from starting — log and continue. Convo tools will fail with a
+            # clear error if the channel isn't warm.
+            logger.error(f"VoiceChannel warmup failed: {e}")
+
         async with _original_lifespan(app):
             try:
                 yield
             finally:
-                logger.info("Lifespan shutdown: cleaning up pipecat children")
+                logger.info("Lifespan shutdown: tearing down voice channel")
                 try:
-                    stop_pipecat_process()
-                except Exception as e:
-                    # Never let cleanup errors prevent shutdown from completing.
-                    logger.warning(f"Lifespan cleanup raised: {e}")
+                    await voice_channel.shutdown()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Voice channel shutdown raised: {e}")
 
     mcp_starlette.router.lifespan_context = _composed_lifespan
 
-    # Determine client dist directory
-    client_dist = Path(__file__).parent.parent.parent.parent / "client" / "dist"
-
-    # Prepend proxy routes (checked before /mcp)
-    for route in reversed(proxy_routes):
+    # Embedded WebRTC routes — prepended so they're matched before /mcp.
+    webrtc_routes, _handler = _build_webrtc_routes()
+    for route in reversed(webrtc_routes):
         mcp_starlette.router.routes.insert(0, route)
 
-    # Append static files as catch-all (checked last)
+    # Static frontend at the catch-all.
+    client_dist = Path(__file__).parent.parent.parent.parent / "client" / "dist"
     dev_mode = os.getenv("TALKY_DEV", "").strip() not in ("", "0")
     if not dev_mode and client_dist.is_dir():
         logger.info(f"Serving frontend from {client_dist}")
@@ -381,9 +450,11 @@ def _build_app():
             Mount("/", app=StaticFiles(directory=str(client_dist), html=True)),
         )
     elif dev_mode:
-        logger.info("Dev mode: skipping static frontend (use Vite at :5173 for HMR)")
+        logger.info("Dev mode: skipping static frontend (run Vite at :5173 for HMR)")
     else:
-        logger.warning(f"No built frontend at {client_dist} — run 'npm run build' in client/")
+        logger.warning(
+            f"No built frontend at {client_dist} — run 'npm run build' in client/"
+        )
 
     return mcp_starlette
 
@@ -392,29 +463,13 @@ def main():
     """Run the MCP server."""
     import uvicorn
 
-    # Defense #5 (ticket 727e): sweep any pipecat orphan from a prior parent
-    # before we try to bind ports. Reads ~/.talky/run/pipecat.pid and
-    # os.killpg()s the whole session if still alive. No-op if the file is
-    # missing, stale, or points at a dead pid.
-    sweep_orphan_pipecat()
-
-    # Defense #4 (ticket 727e): fail fast with a friendly message if 9090 or
-    # 7860 is already held (by a stale MCP server or other program). Honors
-    # TALKY_MCP_FORCE=1 to reclaim instead of fail. This must run AFTER
-    # sweep_orphan_pipecat so a cleanly-cleared orphan doesn't trigger the
-    # check.
+    # 727e defense #4: refuse to start if 9090 is already held. Honors
+    # TALKY_MCP_FORCE=1 to reclaim. No longer checks 7860 — it doesn't
+    # exist under 58db.
     _check_ports_or_exit()
 
-    # Signal handlers — note these are REPLACED by uvicorn once uvicorn.run
-    # starts. uvicorn.Server.capture_signals installs self.handle_exit for
-    # SIGTERM/SIGINT (verified in installed uvicorn source). So this handler
-    # is only active for the narrow window between here and uvicorn.run()
-    # below, plus the non-uvicorn direct-import path. Load-bearing cleanup
-    # in the normal path is the `finally: stop_pipecat_process()` below —
-    # uvicorn's handle_exit flips should_exit, the event loop drains, and
-    # control returns to us so the finally runs. See 727e spike notes and
-    # process-management-plan.md §3 defense #3 for the full story and the
-    # lifespan-migration fix that's still on the table.
+    # Best-effort handlers. uvicorn replaces these via Server.capture_signals
+    # once it starts; the lifespan shutdown hook is the load-bearing cleanup.
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
@@ -434,19 +489,14 @@ def main():
         uvicorn_kwargs["ssl_keyfile"] = ssl_keyfile
         logger.info(f"SSL enabled: cert={ssl_certfile}")
 
-    logger.info(f"Starting unified server on {mcp_host}:{mcp_port}")
+    logger.info(f"Starting unified server on {mcp_host}:{mcp_port} (in-process voice)")
 
     try:
         uvicorn.run(app, **uvicorn_kwargs)
     except KeyboardInterrupt:
         logger.info("Ctrl-C detected, exiting!")
-    finally:
-        # Backstop for the non-lifespan path (e.g. exception before
-        # uvicorn.run() got to its lifespan shutdown). In the normal case
-        # the lifespan context manager in _build_app has already run
-        # stop_pipecat_process() before uvicorn returned, and this call is
-        # an idempotent no-op. See 727e defense #3.
-        stop_pipecat_process()
+    # No finally cleanup needed — the lifespan handles it inside uvicorn's
+    # graceful shutdown path.
 
 
 if __name__ == "__main__":
