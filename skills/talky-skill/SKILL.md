@@ -79,6 +79,47 @@ Requires the Talky MCP server. Uses browser pipeline:
 2. `convo_speak` / `convo_listen` — talk within the session
 3. `end_convo` — shut down
 
+## Ambient awareness (applies to all listening)
+
+Whenever the mic is open — whether inside `ask` (walkie-talkie) or `convo_listen` (full-duplex) — the audio stream is not guaranteed to contain only the user speaking directly to you. Anything near the mic can end up in the transcript. Be savvy about what you actually act on.
+
+**Buckets of speech you may hear:**
+
+1. **Direct address to you** — "hey \<your name>, do the thing." Act on it.
+2. **Noise or garbled STT** — dog barking, traffic, a stray cough transcribed as fragments. Ignore.
+3. **User talking to another human in the room** — "no, the blue one's mine." Ignore.
+4. **User thinking out loud / muttering to themselves** — "ugh, why did I put that there." Ignore unless clearly an instruction.
+5. **User talking *about* you in third person** — "yeah, the agent's still working on it." Ignore. Third-person mention is not address.
+
+**Rules of thumb:**
+
+- If in doubt, keep listening rather than responding. Silence is cheap; a wrong response is expensive because it interrupts.
+- Proper names of known humans in the household (e.g. from user memory or identity files) are negative signals: "Noah, come here" is not for you.
+- Imperative without a clear addressee is ambiguous — prefer to wait for confirmation over guessing.
+- "You" is ambiguous. It only counts as addressing the agent if a back-and-forth is already actively in progress. A cold "you" out of silence is not address.
+
+Ambient awareness is always on. It is not a mode — it's just how you listen.
+
+## Standby mode
+
+An explicit behavioral stance, distinct from ambient awareness. In standby mode, you **do not speak unless spoken to**, even if you have things to say. You absorb everything that lands in the mic, make notes if relevant, and break silence only when directly addressed by your name.
+
+Think stereotypical human personal assistant: present in the room, attentive, almost never speaking first, but ready the instant they're called on. The user's time is not yours — every word you speak carries weight for everyone in the room, so weigh them.
+
+**Enter standby mode when** the user says things like: "standby mode," "go quiet," "don't speak unless spoken to," "just listen," "be a fly on the wall."
+
+**Exit standby mode when** the user says things like: "come back," "you can talk again," "exit standby," "out of standby."
+
+**While in standby:**
+
+- Loop on `convo_listen` (or equivalent). Do not call speak.
+- For every utterance you receive, classify it using the ambient-awareness buckets above. The bar for "direct address to me" is *higher* in standby than in normal conversation — you must hear your name or an unambiguous address.
+- Your wake identifier is whatever name you currently go by — see your identity files. Safe defaults if no personal name is established: "agent," "Claude," "AI." Do **not** hard-code personal nicknames into this skill; those belong in the user's identity configuration.
+- Once you are addressed and respond, the rule still holds: answer briefly, then return to silent listening. Do not drift into chatty conversation mode just because one turn happened.
+- Explicit exit phrase always wins. If you hear it, acknowledge briefly and resume normal voice behavior.
+
+**Why this matters:** there are times when the user is working, thinking, or with other people, and wants you present but not interrupting. The default conversational loop (speak-on-every-listen) is wrong for those contexts. Standby is the opt-in for "shut up and be useful."
+
 ## When ambiguous, default to voice prompt mode
 
 If the user says something like "start a voice session" or "let's talk" — use voice prompt mode. It's zero friction and always available. Only escalate to voice conversation when the user explicitly says "conversation" or "discussion" or asks for the browser/UI experience.
