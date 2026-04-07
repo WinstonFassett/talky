@@ -485,6 +485,54 @@ def cmd_end_convo(args):
         print("No active conversation session found")
 
 
+def cmd_kill(args):
+    """Handle the 'kill' subcommand — reclaim all Talky ports.
+
+    Kills whatever processes are holding Talky's TCP ports (9090 MCP,
+    7860 pipecat WebRTC, 5173 Vite). Kills by PID-from-port rather than
+    by process name, because child processes spawned by `talky mcp`
+    have their own cmdlines and don't match `pkill -f "talky mcp"`.
+
+    The voice daemon (unix socket) is intentionally left alone — its
+    lifecycle is separate and well-behaved. Use `talky say --stop-daemon`
+    to bounce the daemon if needed.
+    """
+    ports = [9090, 7860, 5173]
+    any_killed = False
+    for port in ports:
+        try:
+            result = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split("\n")
+                for pid in pids:
+                    try:
+                        subprocess.run(["kill", "-9", pid], capture_output=True)
+                        print(f"port {port}: killed {pid}")
+                        any_killed = True
+                    except subprocess.SubprocessError:
+                        pass
+            else:
+                print(f"port {port}: clear")
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
+
+    # Verify nothing snuck back in.
+    import time
+    time.sleep(0.3)
+    any_failed = False
+    for port in ports:
+        result = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            print(f"port {port}: STILL HELD after kill -9", file=sys.stderr)
+            any_failed = True
+
+    if any_failed:
+        return 1
+    if not any_killed:
+        print("nothing to kill — all ports were already clear")
+    return 0
+
+
 def cmd_transcribe(args):
     """Handle the 'transcribe' subcommand."""
     # Set log level environment variable if specified
@@ -672,7 +720,7 @@ def cmd_mcp(args):
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as profile name
-    known_commands = {"config", "say", "ask", "mcp", "ls", "auth", "pi", "claude", "transcribe", "end-convo"}
+    known_commands = {"config", "say", "ask", "mcp", "ls", "auth", "pi", "claude", "transcribe", "end-convo", "kill"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "--profile")
@@ -714,6 +762,13 @@ def main():
     # === end-convo subcommand ===
     end_convo_parser = subparsers.add_parser("end-convo", help="Kill running browser voice session")
     end_convo_parser.set_defaults(func=cmd_end_convo)
+
+    # === kill subcommand ===
+    kill_parser = subparsers.add_parser(
+        "kill",
+        help="Kill all Talky processes on ports 9090/7860/5173 (daemon untouched)",
+    )
+    kill_parser.set_defaults(func=cmd_kill)
 
     # === mcp subcommand ===
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP server")

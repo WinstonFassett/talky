@@ -85,6 +85,26 @@ async def ask_local_audio(text: str, silence_timeout: float = 10.0) -> dict:
     return await daemon_ask(text, silence_timeout=silence_timeout)
 
 
+@mcp.tool()
+async def talk_local_audio(text: str, silence_timeout: float = 10.0) -> dict:
+    """Alias for ask_local_audio. Prefer this verb when the user says "talk to me",
+    "let's talk", or similar. Same behavior as ask_local_audio: speak text, then
+    listen for a spoken reply via the voice daemon.
+
+    Exists because the natural verb for the user is often "talk" rather than "ask";
+    "say" is reserved for fire-and-forget status updates where no reply is expected.
+
+    Args:
+        text: The text to speak before listening.
+        silence_timeout: Seconds of no speech at all before giving up (default: 10).
+
+    Returns:
+        Dict with success status and transcript of user's response.
+
+    """
+    return await daemon_ask(text, silence_timeout=silence_timeout)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Conversation tools (browser pipeline, WebRTC)
 # ──────────────────────────────────────────────────────────────────────────────
