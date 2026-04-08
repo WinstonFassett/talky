@@ -667,15 +667,15 @@ def cmd_list_profiles(args):
 
 
 def cmd_profile(args):
-    """Show or switch the active LLM profile in the running daemon."""
+    """Show or switch the active LLM profile in the running talky server."""
     import urllib.error
     import urllib.request
 
-    if not ensure_mcp_daemon():
+    if not ensure_daemon():
         sys.exit(1)
 
-    host = os.environ.get("TALKY_MCP_HOST", "localhost")
-    port = int(os.environ.get("TALKY_MCP_PORT", "9090"))
+    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
+    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
     base_url = f"http://{host}:{port}"
 
     name = getattr(args, "name", None)
@@ -687,8 +687,8 @@ def cmd_profile(args):
             with urllib.request.urlopen(url, timeout=3) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.URLError as e:
-            print(f"❌ could not reach daemon at {base_url}: {e}")
-            print("   is `talky mcp` running? run it in another terminal if not.")
+            print(f"❌ could not reach talky daemon at {base_url}: {e}")
+            print("   is `talky daemon` running? run it in another terminal if not.")
             sys.exit(1)
 
         active = data.get("active") or "(none — no live pipeline)"
@@ -721,7 +721,7 @@ def cmd_profile(args):
             print(f"❌ HTTP {e.code}: {e.reason}")
         sys.exit(1)
     except urllib.error.URLError as e:
-        print(f"❌ could not reach daemon at {base_url}: {e}")
+        print(f"❌ could not reach talky daemon at {base_url}: {e}")
         sys.exit(1)
 
     print(f"✅ profile: {data.get('active', name)}")
@@ -744,84 +744,58 @@ def cmd_profile(args):
         webbrowser.open(client_url)
 
 
-def cmd_mcp(args):
-    """Start MCP server."""
-    # Pre-check 9090 with a friendly early message. The authoritative port
-    # check (covering 7860 as well) happens inside server.main via
-    # _check_ports_or_exit; this is just a fast path for the common case
-    # where the MCP port is already bound.
-    force = bool(getattr(args, "force", False))
-    if force:
-        os.environ["TALKY_MCP_FORCE"] = "1"
-    else:
-        try:
-            result = subprocess.run(["lsof", "-ti:9090"], capture_output=True, text=True)
-            if result.stdout.strip():
-                print("MCP server already running on port 9090.")
-                print("Run `talky kill` to reclaim, or rerun with `talky mcp --force`.")
-                return
-        except (FileNotFoundError, subprocess.SubprocessError) as e:
-            logging.debug(f"Could not check port 9090: {e}")
+def cmd_daemon(args):
+    """Ensure the talky daemon is running, or run it in foreground with --foreground.
 
-    voice_profile = getattr(args, 'voice_profile', None)
-    
-    # Get host from config or command line
-    host = getattr(args, "host", None)
-    if not host:
+    Default (user-facing): same shape as `talky openclaw` — ensures the
+    daemon is up on :9090 and returns immediately. Safe to run repeatedly.
+
+    --force: kill any existing daemon first, then start a fresh one.
+
+    --foreground (hidden): actually run the daemon in-process, blocking.
+    This is what the detached child spawned from `ensure_daemon` uses.
+    Users should not pass this directly.
+    """
+    foreground = bool(getattr(args, "foreground", False))
+    force = bool(getattr(args, "force", False))
+    voice_profile = getattr(args, "voice_profile", None)
+
+    # Foreground mode: actually run the daemon. Only reached via the
+    # detached child Popen'd from ensure_daemon.
+    if foreground:
+        if force:
+            os.environ["TALKY_DAEMON_FORCE"] = "1"
         try:
-            from shared.profile_manager import get_profile_manager
-            pm = get_profile_manager()
-            network_config = getattr(pm, 'settings', {}).get("network", {})
-            host = network_config.get("host", "localhost")
-        except:
-            host = "localhost"
-    
-    # Validate voice profile if provided
-    if voice_profile:
-        try:
-            from shared.profile_manager import get_profile_manager
-            pm = get_profile_manager()
-            available_profiles = pm.list_voice_profiles()
-            if voice_profile not in available_profiles:
-                print(f"❌ Unknown voice profile: {voice_profile}")
-                print(f"Available profiles: {', '.join(available_profiles.keys())}")
-                sys.exit(1)
+            daemon_src_path = _root / "mcp-server" / "src"
+            sys.path.insert(0, str(daemon_src_path))
+            from pipecat_mcp_server.server import main as daemon_main
+            daemon_main()
         except Exception as e:
-            print(f"⚠️  Could not validate voice profile: {e}")
-    
-    if voice_profile:
-        print(f"Starting MCP server with voice profile: {voice_profile}")
-    else:
-        print("Starting MCP server...")
-    
-    if host and host != "localhost":
-        print(f"🌐 Using host binding: {host}")
-    
-    try:
-        # Add mcp-server to path and import
-        mcp_server_path = _root / "mcp-server" / "src"
-        sys.path.insert(0, str(mcp_server_path))
-        from pipecat_mcp_server.server import main as mcp_main
-        try:
-            mcp_main()
-        except Exception as e:
-            print(f"❌ MCP server failed to start: {e}")
+            print(f"❌ talky daemon failed to start: {e}", file=sys.stderr)
             sys.exit(1)
-    except ImportError:
-        # Fall back to subprocess if dependencies not available
-        cmd = ["uv", "run", "--directory", str(_root / "mcp-server"), "python", "-m", "pipecat_mcp_server.server"]
-        if voice_profile:
-            cmd.extend(["--voice-profile", voice_profile])
+        return
+
+    # User-facing mode: ensure the daemon is up, return immediately.
+    if force and _daemon_is_running():
+        print("🔪 stopping existing daemon...", file=sys.stderr)
         try:
-            result = subprocess.run(cmd, cwd=_root)
-            sys.exit(result.returncode)
-        except Exception as e:
-            print(f"❌ Failed to start MCP server via subprocess: {e}")
-            sys.exit(1)
+            subprocess.run(["talky", "kill"], check=False)
+        except (FileNotFoundError, subprocess.SubprocessError) as e:
+            print(f"⚠️  talky kill failed: {e}", file=sys.stderr)
+
+    if _daemon_is_running():
+        print("✅ talky daemon already running on :9090")
+        return
+
+    if not ensure_daemon(verbose=True):
+        sys.exit(1)
+
+    if voice_profile:
+        print(f"(note: --voice-profile {voice_profile} is not yet propagated through the ensure path)")
 
 
 def _daemon_is_running() -> bool:
-    """Return True if a talky mcp daemon is listening on 9090."""
+    """Return True if the talky daemon is listening on 9090."""
     try:
         result = subprocess.run(
             ["lsof", "-ti:9090"], capture_output=True, text=True, timeout=1.0
@@ -831,13 +805,13 @@ def _daemon_is_running() -> bool:
         return False
 
 
-def ensure_mcp_daemon(wait_secs: float = 12.0, verbose: bool = True) -> bool:
-    """Ensure `talky mcp` is running on 9090. Spawn it if not.
+def ensure_daemon(wait_secs: float = 12.0, verbose: bool = True) -> bool:
+    """Ensure the talky daemon is running on :9090. Spawn it (detached) if not.
 
     Mirrors the voice daemon auto-start pattern: any talky subcommand
     that needs the daemon can call this first, and the daemon will be
-    lazy-started on first use. Subsequent calls see the daemon already
-    running and return immediately.
+    lazy-started on first use. Subsequent calls see it already running
+    and return immediately.
 
     Returns True on success. Prints an error and returns False if the
     spawn fails or the daemon doesn't come up within wait_secs.
@@ -846,16 +820,16 @@ def ensure_mcp_daemon(wait_secs: float = 12.0, verbose: bool = True) -> bool:
         return True
 
     if verbose:
-        print("⚙️  starting talky mcp daemon...", file=sys.stderr)
+        print("⚙️  starting talky daemon...", file=sys.stderr)
 
     log_dir = Path.home() / ".talky" / "run"
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "mcp-daemon.log"
+    log_path = log_dir / "talky-daemon.log"
 
     try:
         log_fh = open(log_path, "a")
         subprocess.Popen(
-            ["talky", "mcp"],
+            ["talky", "daemon", "--foreground"],
             stdout=log_fh,
             stderr=log_fh,
             stdin=subprocess.DEVNULL,
@@ -863,7 +837,7 @@ def ensure_mcp_daemon(wait_secs: float = 12.0, verbose: bool = True) -> bool:
             close_fds=True,
         )
     except (FileNotFoundError, subprocess.SubprocessError) as e:
-        print(f"❌ could not spawn `talky mcp`: {e}", file=sys.stderr)
+        print(f"❌ could not spawn `talky daemon`: {e}", file=sys.stderr)
         return False
 
     # Poll for the daemon to come up.
@@ -871,12 +845,12 @@ def ensure_mcp_daemon(wait_secs: float = 12.0, verbose: bool = True) -> bool:
     while time.monotonic() < deadline:
         if _daemon_is_running():
             if verbose:
-                print(f"✅ daemon up on 9090 (log: {log_path})", file=sys.stderr)
+                print(f"✅ talky daemon up on :9090 (log: {log_path})", file=sys.stderr)
             return True
         time.sleep(0.2)
 
     print(
-        f"❌ daemon failed to come up within {wait_secs:.0f}s. "
+        f"❌ talky daemon failed to come up within {wait_secs:.0f}s. "
         f"Check {log_path} for details.",
         file=sys.stderr,
     )
@@ -890,7 +864,7 @@ def main():
     # daemon if it isn't running. Set TALKY_FORCE_STANDALONE=1 to force
     # the legacy `talky --profile NAME` standalone path instead (for
     # offline / no-daemon dev). See tickets a1d4 and 9d02.
-    known_commands = {"config", "say", "ask", "mcp", "ls", "auth", "pi", "claude", "transcribe", "end-convo", "kill", "profile"}
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "pi", "claude", "transcribe", "end-convo", "kill", "profile"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         if os.environ.get("TALKY_FORCE_STANDALONE"):
@@ -947,16 +921,23 @@ def main():
     )
     kill_parser.set_defaults(func=cmd_kill)
 
-    # === mcp subcommand ===
-    mcp_parser = subparsers.add_parser("mcp", help="Start MCP server")
-    mcp_parser.add_argument("--voice-profile", "-v", help="Voice profile to use")
-    mcp_parser.add_argument("--host", help="Override host binding (default: from config)")
-    mcp_parser.add_argument(
+    # === daemon subcommand ===
+    # Ensures the talky daemon is running on :9090. The daemon hosts
+    # the voice pipeline, the WebRTC transport, the client static files,
+    # an HTTP control plane, and (among other things) a FastMCP SSE
+    # mount. MCP is a *feature* of the daemon, not the daemon itself.
+    daemon_parser = subparsers.add_parser("daemon", help="Ensure the talky daemon is running on :9090")
+    daemon_parser.add_argument("--voice-profile", "-v", help="Voice profile to use")
+    daemon_parser.add_argument("--host", help="Override host binding (default: from config)")
+    daemon_parser.add_argument(
         "--force",
         action="store_true",
-        help="Take over held ports (9090 / 7860) instead of failing",
+        help="Kill any existing daemon first, then start a fresh one",
     )
-    mcp_parser.set_defaults(func=cmd_mcp)
+    # Hidden: actually run the daemon in foreground, blocking. This is
+    # what the detached child spawned from ensure_daemon uses.
+    daemon_parser.add_argument("--foreground", action="store_true", help=argparse.SUPPRESS)
+    daemon_parser.set_defaults(func=cmd_daemon)
 
     # === profile subcommand ===
     profile_parser = subparsers.add_parser(

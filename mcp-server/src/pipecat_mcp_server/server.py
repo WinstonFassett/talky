@@ -266,17 +266,18 @@ def _check_ports_or_exit():
     """Defense #4 (ticket 727e): refuse to start if port 9090 is held.
 
     Under the 58db in-process architecture, port 7860 no longer exists —
-    we only need to check 9090. `TALKY_MCP_FORCE=1` kills whoever's there
-    and proceeds.
+    we only need to check 9090. `TALKY_DAEMON_FORCE=1` kills whoever's
+    there and proceeds. (Legacy `TALKY_MCP_FORCE` is still honored.)
     """
-    force = os.getenv("TALKY_MCP_FORCE", "").strip() not in ("", "0")
+    force_env = os.getenv("TALKY_DAEMON_FORCE", "").strip() or os.getenv("TALKY_MCP_FORCE", "").strip()
+    force = force_env not in ("", "0")
     holder = _port_holder(mcp_port)
     if holder is None:
         return
 
     if force:
         logger.warning(
-            f"TALKY_MCP_FORCE: killing pid {holder} holding port {mcp_port}"
+            f"TALKY_DAEMON_FORCE: killing pid {holder} holding port {mcp_port}"
         )
         try:
             os.kill(holder, signal.SIGTERM)
@@ -548,8 +549,8 @@ def main():
     import uvicorn
 
     # 727e defense #4: refuse to start if 9090 is already held. Honors
-    # TALKY_MCP_FORCE=1 to reclaim. No longer checks 7860 — it doesn't
-    # exist under 58db.
+    # TALKY_DAEMON_FORCE=1 (or legacy TALKY_MCP_FORCE=1) to reclaim.
+    # No longer checks 7860 — it doesn't exist under 58db.
     _check_ports_or_exit()
 
     # Best-effort handlers. uvicorn replaces these via Server.capture_signals
