@@ -800,14 +800,35 @@ def cmd_mcp(args):
             sys.exit(1)
 
 
+def _daemon_is_running() -> bool:
+    """Return True if a talky mcp daemon is listening on 9090."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti:9090"], capture_output=True, text=True, timeout=1.0
+        )
+        return bool(result.stdout.strip())
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+
+
 def main():
     """Main CLI entry point."""
-    # Shortcut: treat first non-option, non-command arg as profile name
+    # Shortcut: treat first non-option, non-command arg as a profile name.
+    # If the daemon is running, route the shortcut to `talky profile NAME`
+    # (switches the active LLM inside the running daemon). Otherwise fall
+    # back to the legacy `talky --profile NAME` standalone path.
+    # See ticket a1d4.
     known_commands = {"config", "say", "ask", "mcp", "ls", "auth", "pi", "claude", "transcribe", "end-convo", "kill", "profile"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
-        sys.argv.insert(1, "--profile")
-        sys.argv.insert(2, profile_name)
+        if _daemon_is_running() and not os.environ.get("TALKY_FORCE_STANDALONE"):
+            # Route to the daemon profile-switch subcommand.
+            sys.argv.insert(1, "profile")
+            sys.argv.insert(2, profile_name)
+        else:
+            # Legacy standalone path (no daemon running, or explicit override).
+            sys.argv.insert(1, "--profile")
+            sys.argv.insert(2, profile_name)
 
     parser = argparse.ArgumentParser(description="Talky Voice Bot CLI")
     subparsers = parser.add_subparsers(dest="command")
