@@ -304,12 +304,51 @@ class VoiceChannel:
             await self._build_and_start_pipeline(connection)
 
     async def detach(self) -> None:
-        """Tear down the active pipeline and release the WebRTC connection."""
-        async with self._attach_lock:
-            await self._teardown_locked()
+        """Tear down the active pipeline and clear room state.
 
-    async def _teardown_locked(self) -> None:
-        """Cancel the pipeline task. Caller must hold ``_attach_lock``."""
+        Explicit detach (e.g. from `end_convo`) clears everything:
+        pipeline, joined agents, active profile. Contrast with the
+        browser-disconnect path, which keeps room state so the next
+        browser connection can pick up where it left off.
+        """
+        async with self._attach_lock:
+            await self._teardown_locked(preserve_room_state=False)
+
+    async def _disconnect_cleanup(self) -> None:
+        """Tear down the pipeline but preserve room state.
+
+        Triggered by the transport's ``on_client_disconnected`` event
+        when the browser peer goes away. The next ``attach()`` will
+        rebuild a fresh pipeline and restore the saved profile.
+        """
+        async with self._attach_lock:
+            await self._teardown_locked(preserve_room_state=True)
+
+    async def _restore_profile_on_startup(self, profile_name: str) -> None:
+        """Switch the active LLM to ``profile_name`` shortly after a
+        pipeline starts, used to restore the room's last active profile
+        across a disconnect/reconnect cycle. Best-effort — logs and
+        swallows errors (no-op if pipeline isn't live by the time the
+        task runs).
+        """
+        # Small delay to let the runner get past initial StartFrame
+        # propagation before we queue a switch frame.
+        await asyncio.sleep(0.1)
+        try:
+            await self.switch_to_profile(profile_name)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"VoiceChannel: could not restore profile {profile_name!r}: {e}")
+
+    async def _teardown_locked(self, preserve_room_state: bool = False) -> None:
+        """Cancel the pipeline task. Caller must hold ``_attach_lock``.
+
+        Args:
+            preserve_room_state: If True, keep ``_joined_agents`` and
+                ``_active_profile`` so the next attach() can restore them.
+                Used when the browser peer disconnects but the room should
+                survive (ticket 3f12 phase 2). If False (explicit detach /
+                shutdown), all state is cleared.
+        """
         self._disconnected.set()
         task = self._pipeline_task
         runner_task = self._runner_task
@@ -318,8 +357,15 @@ class VoiceChannel:
         self._transport = None
         self._voice_switcher = None
         self._llm_switcher = None
+        # Per-pipeline LLM service instances can't be reused across rebuilds
+        # (pipecat services are pipeline-bound), so clear them regardless.
         self._llm_services = {}
-        self._active_profile = None
+
+        if not preserve_room_state:
+            self._joined_agents = set()
+            self._active_profile = None
+        # If preserving: joined_agents stays, and _active_profile stays as the
+        # "desired profile" that the next attach() will switch back to.
 
         if task is not None:
             try:
@@ -531,18 +577,24 @@ class VoiceChannel:
 
         @transport.event_handler("on_client_disconnected")
         async def on_disconnected(transport, client):  # noqa: ANN001, ARG001
-            logger.info("VoiceChannel: client disconnected")
-            # Flag the disconnect so listen() unblocks cleanly. Actual
-            # pipeline teardown happens via detach() when the outer handler
-            # decides it's time.
-            self._disconnected.set()
+            logger.info("VoiceChannel: client disconnected — tearing down pipeline, preserving room state")
+            # Phase 2 (3f12): tear down the pipeline when the peer goes
+            # away, but preserve room state (joined_agents, active_profile)
+            # so the next attach() can restore it. Pipecat services can't
+            # be reused across pipeline rebuilds, so the pipeline itself
+            # has to be rebuilt — but from the user's perspective, closing
+            # and reopening the browser should feel seamless.
+            asyncio.create_task(self._disconnect_cleanup())
 
         # NB: No on_user_turn_stopped handler here.
         # Speech queue writes are handled by MCPDriverLLMService via
         # LLMContextFrame. Audio cues on turn-stop were removed per ticket
-        # b5ee — they're only wanted in the walkie-talkie `ask` path (local
-        # audio daemon), not in full-duplex browser convos where every user
-        # turn would beep and feel noisy.
+        # b5ee — they're only wanted in the walkie-talkie `ask` path.
+
+        # Remember the profile the room had before (possibly from a
+        # previous pipeline that got torn down on disconnect). Default
+        # to MCP_DRIVER if none saved.
+        desired_profile = self._active_profile or self.MCP_DRIVER_PROFILE
 
         # Commit to state *before* starting the runner so anything the runner
         # emits immediately is visible via is_live().
@@ -551,9 +603,15 @@ class VoiceChannel:
         self._voice_switcher = voice_switcher
         self._llm_switcher = llm_switcher
         self._llm_services = profile_map
-        self._active_profile = self.MCP_DRIVER_PROFILE
+        self._active_profile = self.MCP_DRIVER_PROFILE  # will be re-set below
         self._runner = PipelineRunner(handle_sigint=False)
         self._runner_task = asyncio.create_task(self._runner.run(pipeline_task))
+
+        # If the room had a non-default profile active before the disconnect,
+        # switch back to it on this new pipeline. Fire-and-forget — the switch
+        # frame will be processed as soon as the runner picks it up.
+        if desired_profile != self.MCP_DRIVER_PROFILE and desired_profile in profile_map:
+            asyncio.create_task(self._restore_profile_on_startup(desired_profile))
 
         # Add a done callback so a crashed runner flips us back to "not live"
         # cleanly, instead of leaving stale refs.
