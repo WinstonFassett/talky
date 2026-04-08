@@ -68,6 +68,7 @@ app state. It owns:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import os
 import sys
 import time
@@ -119,6 +120,20 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat_mcp_server.mcp_driver_llm_service import MCPDriverLLMService
 
 
+def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
+    """Build a fresh LLM service instance for the named backend."""
+    backend = pm.get_llm_backend(backend_name)
+    if backend is None:
+        raise ValueError(f"backend {backend_name!r} not configured")
+
+    module_path = ".".join(backend.service_class.split(".")[:-1])
+    class_name = backend.service_class.split(".")[-1]
+    if not module_path.startswith("server.") and not module_path.startswith("."):
+        module_path = f"server.{module_path}"
+    llm_module = importlib.import_module(module_path)
+    return getattr(llm_module, class_name)(**backend.config)
+
+
 class VoiceChannel:
     """A single in-process voice pipeline with speak/listen operations.
 
@@ -127,6 +142,11 @@ class VoiceChannel:
     active at a time — if a second connection arrives while the first is
     live, the new one replaces the old one (last-writer-wins semantics).
     """
+
+    # Special profile name that refers to the MCPDriverLLMService null
+    # passthrough (used for external-agent-driven mode). Chosen so it
+    # can't collide with user-configured LLM backend names.
+    MCP_DRIVER_PROFILE = "__mcp__"
 
     def __init__(self) -> None:
         # Pre-warmed state (populated by warmup())
@@ -140,6 +160,15 @@ class VoiceChannel:
         self._runner: Optional[PipelineRunner] = None
         self._runner_task: Optional[asyncio.Task] = None
         self._voice_switcher: Optional[Any] = None  # VoiceProfileSwitcher
+
+        # LLM switcher + profile → service map (populated by attach()).
+        # _llm_switcher is the ServiceSwitcher wrapping all LLM services.
+        # _llm_services maps a profile name (or MCP_DRIVER_PROFILE) to the
+        # LLMService instance inside the switcher. Used by switch_to_profile
+        # to look up the target service by name.
+        self._llm_switcher: Optional[Any] = None  # LLMSwitcher
+        self._llm_services: dict[str, Any] = {}  # profile name → LLMService
+        self._active_profile: Optional[str] = None
 
         # Speech buffer — written by the turn-stopped handler, drained by listen()
         self._user_speech_queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -208,10 +237,25 @@ class VoiceChannel:
         return {
             "warm": self._warm,
             "live": self.is_live(),
-            "profile": self._warm_profile_name,
+            "voice_profile": self._warm_profile_name,
+            "active_llm_profile": self._active_profile,
+            "available_llm_profiles": sorted(self._llm_services.keys()) if self._llm_services else [],
             "queue_depth": self._user_speech_queue.qsize(),
             "disconnected": self._disconnected.is_set(),
         }
+
+    async def switch_to_profile(self, profile_name: str) -> None:
+        """Flip the active LLM in the LLMSwitcher to ``profile_name``."""
+        if not self.is_live() or self._pipeline_task is None:
+            raise RuntimeError("no live pipeline")
+        service = self._llm_services.get(profile_name)
+        if service is None:
+            raise ValueError(f"unknown profile {profile_name!r}; available: {sorted(self._llm_services)}")
+
+        from pipecat.frames.frames import ManuallySwitchServiceFrame
+        await self._pipeline_task.queue_frames([ManuallySwitchServiceFrame(service=service)])
+        self._active_profile = profile_name
+        logger.info(f"VoiceChannel: active profile → {profile_name!r}")
 
     # ── attach / detach ─────────────────────────────────────────────────────
 
@@ -248,6 +292,9 @@ class VoiceChannel:
         self._runner_task = None
         self._transport = None
         self._voice_switcher = None
+        self._llm_switcher = None
+        self._llm_services = {}
+        self._active_profile = None
 
         if task is not None:
             try:
@@ -361,32 +408,28 @@ class VoiceChannel:
         if vp is None:
             raise RuntimeError(f"Voice profile '{profile_name}' disappeared")
 
-        # STT fresh per pipeline. Cheap because the module is already imported.
+        # STT, fresh per pipeline (modules are already loaded).
         stt = create_stt_service_from_config(vp.stt_provider, model=vp.stt_model)
 
-        # LLM slot: an LLMSwitcher wrapping the MCPDriverLLMService (ticket ea77 / c3a1).
-        # The MCPDriverLLMService is a null/passthrough LLM that:
-        #   - consumes LLMContextFrame by pushing the latest user message
-        #     onto self._user_speech_queue (read by convo_listen)
-        #   - passes LLMTextFrame (injected by convo_speak) through to TTS
-        # Why a switcher around a single service? So that when ticket 9d02 /
-        # 3f12 add profile switching (browser UI picks openclaw/moltis/etc),
-        # we already have the routing infrastructure in place — new LLMs are
-        # added to the switcher's list and ManuallySwitchServiceFrame flips
-        # which is active. No architectural change at that point, just an
-        # expansion of the list.
-        #
-        # Validated by the spike in spikes/llm_switcher_spike.py (commit
-        # 822c481) and ticket c3a1. Seven spike steps passed end-to-end with
-        # MCPDriverLLMService alongside a real openclaw backend in the same
-        # switcher. For this initial landing we only include MCPDriver; the
-        # real LLM profiles will be added in the 3f12 daemon implementation.
-        mcp_driver = MCPDriverLLMService(
-            user_speech_queue=self._user_speech_queue,
-        )
-        llm_switcher = LLMSwitcher(
-            llms=[mcp_driver],
-            strategy_type=ServiceSwitcherStrategyManual,
+        # LLMSwitcher slot: MCPDriver first (default active) then every
+        # configured backend. See ticket ea77 / c3a1.
+        mcp_driver = MCPDriverLLMService(user_speech_queue=self._user_speech_queue)
+        llm_services: list = [mcp_driver]
+        profile_map: dict[str, Any] = {self.MCP_DRIVER_PROFILE: mcp_driver}
+
+        for backend_name in pm.list_llm_backends().keys():
+            try:
+                svc = _instantiate_llm_backend(pm, backend_name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"VoiceChannel: skipping LLM profile {backend_name!r}: {e}")
+                continue
+            llm_services.append(svc)
+            profile_map[backend_name] = svc
+
+        llm_switcher = LLMSwitcher(llms=llm_services, strategy_type=ServiceSwitcherStrategyManual)
+        logger.info(
+            f"VoiceChannel: LLMSwitcher ready — profiles={list(profile_map.keys())}, "
+            f"active={self.MCP_DRIVER_PROFILE}"
         )
 
         # Transport bound to the browser's WebRTC connection.
@@ -504,6 +547,9 @@ class VoiceChannel:
         self._transport = transport
         self._pipeline_task = pipeline_task
         self._voice_switcher = voice_switcher
+        self._llm_switcher = llm_switcher
+        self._llm_services = profile_map
+        self._active_profile = self.MCP_DRIVER_PROFILE
         self._runner = PipelineRunner(handle_sigint=False)
         self._runner_task = asyncio.create_task(self._runner.run(pipeline_task))
 

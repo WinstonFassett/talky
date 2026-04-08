@@ -6,6 +6,7 @@ Run from anywhere: talky moltis
 """
 
 import argparse
+import json
 import logging
 import os
 import signal
@@ -665,6 +666,64 @@ def cmd_list_profiles(args):
         print(f"❌ Error loading profiles: {e}")
 
 
+def cmd_profile(args):
+    """Show or switch the active LLM profile in the running daemon."""
+    import urllib.error
+    import urllib.request
+
+    host = os.environ.get("TALKY_MCP_HOST", "localhost")
+    port = int(os.environ.get("TALKY_MCP_PORT", "9090"))
+    base_url = f"http://{host}:{port}"
+
+    name = getattr(args, "name", None)
+
+    if name is None:
+        # GET mode: list available + show active
+        url = f"{base_url}/api/profile"
+        try:
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.URLError as e:
+            print(f"❌ could not reach daemon at {base_url}: {e}")
+            print("   is `talky mcp` running? run it in another terminal if not.")
+            sys.exit(1)
+
+        active = data.get("active") or "(none — no live pipeline)"
+        available = data.get("available") or []
+        print(f"active profile: {active}")
+        if available:
+            print("available profiles:")
+            for p in available:
+                marker = "*" if p == data.get("active") else " "
+                print(f"  {marker} {p}")
+        else:
+            print("no profiles available — connect a browser to localhost:9090 first")
+        return
+
+    # POST mode: switch to the named profile
+    url = f"{base_url}/api/profile"
+    body = json.dumps({"profile": name}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body, method="POST",
+        headers={"content-type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode("utf-8"))
+            print(f"❌ {err.get('error', e.reason)}")
+        except Exception:
+            print(f"❌ HTTP {e.code}: {e.reason}")
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"❌ could not reach daemon at {base_url}: {e}")
+        sys.exit(1)
+
+    print(f"✅ switched to profile: {data.get('active', name)}")
+
+
 def cmd_mcp(args):
     """Start MCP server."""
     # Pre-check 9090 with a friendly early message. The authoritative port
@@ -744,7 +803,7 @@ def cmd_mcp(args):
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as profile name
-    known_commands = {"config", "say", "ask", "mcp", "ls", "auth", "pi", "claude", "transcribe", "end-convo", "kill"}
+    known_commands = {"config", "say", "ask", "mcp", "ls", "auth", "pi", "claude", "transcribe", "end-convo", "kill", "profile"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "--profile")
@@ -804,6 +863,18 @@ def main():
         help="Take over held ports (9090 / 7860) instead of failing",
     )
     mcp_parser.set_defaults(func=cmd_mcp)
+
+    # === profile subcommand ===
+    profile_parser = subparsers.add_parser(
+        "profile",
+        help="Show or switch the active LLM profile in the running daemon",
+    )
+    profile_parser.add_argument(
+        "name",
+        nargs="?",
+        help="Profile name to switch to (e.g. openclaw, moltis, __mcp__). Omit to list.",
+    )
+    profile_parser.set_defaults(func=cmd_profile)
 
     # === ls subcommand ===
     ls_parser = subparsers.add_parser("ls", help="List profiles")

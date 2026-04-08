@@ -373,6 +373,42 @@ def _build_webrtc_routes():
             }
         )
 
+    async def handle_get_profile(request: Request):  # noqa: ARG001
+        """GET /api/profile — return current active profile + available list."""
+        st = voice_channel.status()
+        return JSONResponse({
+            "active": st.get("active_llm_profile"),
+            "available": st.get("available_llm_profiles", []),
+        })
+
+    async def handle_set_profile(request: Request):
+        """POST /api/profile — switch active LLM profile."""
+        profile: Optional[str] = request.query_params.get("profile")
+        if profile is None:
+            try:
+                body = await request.json()
+                profile = body.get("profile") if isinstance(body, dict) else None
+            except Exception:
+                profile = None
+
+        if not profile:
+            return JSONResponse(
+                {"error": "missing 'profile' — provide ?profile=NAME or JSON body"},
+                status_code=400,
+            )
+
+        try:
+            await voice_channel.switch_to_profile(profile)
+        except RuntimeError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+
+        return JSONResponse({
+            "status": "ok",
+            "active": profile,
+        })
+
     routes = [
         Route("/start", handle_start, methods=["POST"]),
         Route("/api/offer", handle_offer, methods=["POST"]),
@@ -388,6 +424,8 @@ def _build_webrtc_routes():
             methods=["PATCH"],
         ),
         Route("/status", handle_status, methods=["GET"]),
+        Route("/api/profile", handle_get_profile, methods=["GET"]),
+        Route("/api/profile", handle_set_profile, methods=["POST"]),
     ]
     return routes, webrtc_handler
 
