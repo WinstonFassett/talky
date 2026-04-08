@@ -97,8 +97,10 @@ from pipecat.frames.frames import (
     LLMTextFrame,
     OutputAudioRawFrame,
 )
+from pipecat.pipeline.llm_switcher import LLMSwitcher
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyManual
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
@@ -113,6 +115,8 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
     SpeechTimeoutUserTurnStopStrategy,
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
+
+from pipecat_mcp_server.mcp_driver_llm_service import MCPDriverLLMService
 
 
 class VoiceChannel:
@@ -360,21 +364,30 @@ class VoiceChannel:
         # STT fresh per pipeline. Cheap because the module is already imported.
         stt = create_stt_service_from_config(vp.stt_provider, model=vp.stt_model)
 
-        # NB: No LLM in this pipeline. This is the MCP-driven path — the agent
-        # that decides what to say is the external MCP client (Claude Code,
-        # Cursor, etc.), NOT an in-process LLM service. convo_speak()
-        # injects LLMTextFrame directly into the assistant aggregator → TTS
-        # branch, bypassing any LLM-generation step. Putting an LLM here
-        # would cause every user utterance to be handled twice: once by the
-        # MCP client via convo_listen, and a second time by the pipeline's
-        # own LLM which would then compete with the MCP client's TTS.
-        # (This was the bug that caused "I didn't hear your reply" in the
-        # first live test — openclaw was wired in and was racing with
-        # convo_speak for the TTS output.)
+        # LLM slot: an LLMSwitcher wrapping the MCPDriverLLMService (ticket ea77 / c3a1).
+        # The MCPDriverLLMService is a null/passthrough LLM that:
+        #   - consumes LLMContextFrame by pushing the latest user message
+        #     onto self._user_speech_queue (read by convo_listen)
+        #   - passes LLMTextFrame (injected by convo_speak) through to TTS
+        # Why a switcher around a single service? So that when ticket 9d02 /
+        # 3f12 add profile switching (browser UI picks openclaw/moltis/etc),
+        # we already have the routing infrastructure in place — new LLMs are
+        # added to the switcher's list and ManuallySwitchServiceFrame flips
+        # which is active. No architectural change at that point, just an
+        # expansion of the list.
         #
-        # The standalone `talky <profile>` path (server/bot.py) DOES want an
-        # LLM in the pipeline because there's no external agent driving it.
-        # Two paths, two pipeline shapes, one VoiceChannel class.
+        # Validated by the spike in spikes/llm_switcher_spike.py (commit
+        # 822c481) and ticket c3a1. Seven spike steps passed end-to-end with
+        # MCPDriverLLMService alongside a real openclaw backend in the same
+        # switcher. For this initial landing we only include MCPDriver; the
+        # real LLM profiles will be added in the 3f12 daemon implementation.
+        mcp_driver = MCPDriverLLMService(
+            user_speech_queue=self._user_speech_queue,
+        )
+        llm_switcher = LLMSwitcher(
+            llms=[mcp_driver],
+            strategy_type=ServiceSwitcherStrategyManual,
+        )
 
         # Transport bound to the browser's WebRTC connection.
         transport = SmallWebRTCTransport(
@@ -409,6 +422,7 @@ class VoiceChannel:
                 transport.input(),
                 stt,
                 user_aggregator,
+                llm_switcher,
                 tts_switcher,
                 transport.output(),
                 assistant_aggregator,
@@ -461,7 +475,12 @@ class VoiceChannel:
             # decides it's time.
             self._disconnected.set()
 
-        # User-turn events → speech queue + audio cue.
+        # User-turn events → audio cue only. The speech queue push is now
+        # handled inside MCPDriverLLMService (via LLMContextFrame), which
+        # keeps the "what happens when the user finishes talking" logic in
+        # one place. This event handler is only kept for the b3c4 descending
+        # cue, which is a pure side effect of turn completion that doesn't
+        # belong inside an LLM service.
         @user_aggregator.event_handler("on_user_turn_stopped")
         async def on_user_turn_stopped(
             aggregator, strategy, message: UserTurnStoppedMessage
@@ -469,7 +488,6 @@ class VoiceChannel:
             if not message.content:
                 return
 
-            # Descending cue first — fire-and-forget.
             try:
                 await pipeline_task.queue_frame(
                     OutputAudioRawFrame(
@@ -480,10 +498,6 @@ class VoiceChannel:
                 )
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"VoiceChannel: could not queue stop cue: {e}")
-
-            await self._user_speech_queue.put(
-                {"text": message.content, "timestamp": time.time()}
-            )
 
         # Commit to state *before* starting the runner so anything the runner
         # emits immediately is visible via is_live().
