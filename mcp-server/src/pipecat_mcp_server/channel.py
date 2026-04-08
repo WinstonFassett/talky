@@ -68,7 +68,6 @@ app state. It owns:
 from __future__ import annotations
 
 import asyncio
-import importlib
 import os
 import sys
 import time
@@ -361,19 +360,21 @@ class VoiceChannel:
         # STT fresh per pipeline. Cheap because the module is already imported.
         stt = create_stt_service_from_config(vp.stt_provider, model=vp.stt_model)
 
-        # LLM backend — resolved fresh per pipeline, same reason.
-        llm_backend_name = pm.get_default_llm_backend()
-        llm_backend = pm.get_llm_backend(llm_backend_name)
-        if llm_backend is None:
-            raise RuntimeError(f"LLM backend '{llm_backend_name}' not found")
-
-        module_path = ".".join(llm_backend.service_class.split(".")[:-1])
-        class_name = llm_backend.service_class.split(".")[-1]
-        if not module_path.startswith("server.") and not module_path.startswith("."):
-            module_path = f"server.{module_path}"
-        llm_module = importlib.import_module(module_path)
-        llm_service_class = getattr(llm_module, class_name)
-        llm = llm_service_class(**llm_backend.config)
+        # NB: No LLM in this pipeline. This is the MCP-driven path — the agent
+        # that decides what to say is the external MCP client (Claude Code,
+        # Cursor, etc.), NOT an in-process LLM service. convo_speak()
+        # injects LLMTextFrame directly into the assistant aggregator → TTS
+        # branch, bypassing any LLM-generation step. Putting an LLM here
+        # would cause every user utterance to be handled twice: once by the
+        # MCP client via convo_listen, and a second time by the pipeline's
+        # own LLM which would then compete with the MCP client's TTS.
+        # (This was the bug that caused "I didn't hear your reply" in the
+        # first live test — openclaw was wired in and was racing with
+        # convo_speak for the TTS output.)
+        #
+        # The standalone `talky <profile>` path (server/bot.py) DOES want an
+        # LLM in the pipeline because there's no external agent driving it.
+        # Two paths, two pipeline shapes, one VoiceChannel class.
 
         # Transport bound to the browser's WebRTC connection.
         transport = SmallWebRTCTransport(
@@ -408,7 +409,6 @@ class VoiceChannel:
                 transport.input(),
                 stt,
                 user_aggregator,
-                llm,
                 tts_switcher,
                 transport.output(),
                 assistant_aggregator,
