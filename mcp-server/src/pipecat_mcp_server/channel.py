@@ -94,7 +94,6 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
-    OutputAudioRawFrame,
 )
 from pipecat.pipeline.llm_switcher import LLMSwitcher
 from pipecat.pipeline.pipeline import Pipeline
@@ -105,7 +104,6 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
-    UserTurnStoppedMessage,
 )
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
@@ -509,12 +507,6 @@ class VoiceChannel:
         )
         voice_switcher.set_task(pipeline_task)
 
-        # b3c4: descending cue when the user finishes speaking. Shared with
-        # the local-audio daemon via shared.audio_cues.
-        from shared.audio_cues import stop_cue_pcm
-
-        _stop_cue_bytes = stop_cue_pcm(16000)
-
         # Voice profile switcher RTVI handlers.
         @pipeline_task.rtvi.event_handler("on_client_ready")
         async def on_client_ready(rtvi):  # noqa: ANN001
@@ -545,29 +537,12 @@ class VoiceChannel:
             # decides it's time.
             self._disconnected.set()
 
-        # User-turn events → audio cue only. The speech queue push is now
-        # handled inside MCPDriverLLMService (via LLMContextFrame), which
-        # keeps the "what happens when the user finishes talking" logic in
-        # one place. This event handler is only kept for the b3c4 descending
-        # cue, which is a pure side effect of turn completion that doesn't
-        # belong inside an LLM service.
-        @user_aggregator.event_handler("on_user_turn_stopped")
-        async def on_user_turn_stopped(
-            aggregator, strategy, message: UserTurnStoppedMessage
-        ):  # noqa: ANN001, ARG001
-            if not message.content:
-                return
-
-            try:
-                await pipeline_task.queue_frame(
-                    OutputAudioRawFrame(
-                        audio=_stop_cue_bytes,
-                        sample_rate=16000,
-                        num_channels=1,
-                    )
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.debug(f"VoiceChannel: could not queue stop cue: {e}")
+        # NB: No on_user_turn_stopped handler here.
+        # Speech queue writes are handled by MCPDriverLLMService via
+        # LLMContextFrame. Audio cues on turn-stop were removed per ticket
+        # b5ee — they're only wanted in the walkie-talkie `ask` path (local
+        # audio daemon), not in full-duplex browser convos where every user
+        # turn would beep and feel noisy.
 
         # Commit to state *before* starting the runner so anything the runner
         # emits immediately is visible via is_live().
