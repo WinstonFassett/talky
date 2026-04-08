@@ -251,17 +251,13 @@ class VoiceChannel:
     def join_convo(self, agent_id: str) -> dict:
         """Register an agent as a driver of the room.
 
-        Only one agent may be joined at a time (hard concurrency limit,
-        per ticket 3f12). If another agent is already joined and a
-        different agent_id tries to join, raises.
+        Multiple agents may be joined simultaneously. The common case
+        is one at a time — clients swap between them — but nothing
+        here enforces that. Agents who want exclusive access should
+        coordinate out of band.
 
         Re-joining with the same agent_id is idempotent.
         """
-        if self._joined_agents and agent_id not in self._joined_agents:
-            current = next(iter(self._joined_agents))
-            raise RuntimeError(
-                f"room is busy: agent {current!r} is currently joined"
-            )
         self._joined_agents.add(agent_id)
         logger.info(f"VoiceChannel: agent {agent_id!r} joined (members: {sorted(self._joined_agents)})")
         return self.status()

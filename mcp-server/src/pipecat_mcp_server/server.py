@@ -409,10 +409,7 @@ def _build_webrtc_routes():
     async def handle_join(request: Request):
         """POST /api/join?agent=NAME — register an agent as room driver."""
         agent_id = request.query_params.get("agent", "default")
-        try:
-            state = voice_channel.join_convo(agent_id)
-        except RuntimeError as e:
-            return JSONResponse({"error": str(e)}, status_code=409)
+        state = voice_channel.join_convo(agent_id)
         return JSONResponse({"status": "ok", "channel": state})
 
     async def handle_leave(request: Request):
