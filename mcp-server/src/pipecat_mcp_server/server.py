@@ -21,11 +21,11 @@ Conversation tools (browser pipeline, WebRTC, in-process):
     end_convo: Detach the active pipeline.
 
 Architecture (ticket 58db — "hot voice channel"):
-    The voice pipeline is in-process. There is no child `pipecat`
-    process, no port 7860, no reverse proxy. `SmallWebRTCRequestHandler`
-    is mounted directly on this Starlette app. Services are pre-warmed
-    in the lifespan startup hook; a fresh pipeline is built per browser
-    connection using those pre-warmed configs. See `channel.py`.
+    The voice pipeline is in-process. `SmallWebRTCRequestHandler` is
+    mounted directly on this Starlette app — no child pipecat, no
+    reverse proxy. Services are pre-warmed in the lifespan startup
+    hook; a fresh pipeline is built per browser connection using those
+    pre-warmed configs. See `channel.py`.
 """
 
 from __future__ import annotations
@@ -265,9 +265,8 @@ def _port_holder(port: int) -> Optional[int]:
 def _check_ports_or_exit():
     """Defense #4 (ticket 727e): refuse to start if port 9090 is held.
 
-    Under the 58db in-process architecture, port 7860 no longer exists —
-    we only need to check 9090. `TALKY_DAEMON_FORCE=1` kills whoever's
-    there and proceeds. (Legacy `TALKY_MCP_FORCE` is still honored.)
+    `TALKY_DAEMON_FORCE=1` kills whoever's there and proceeds.
+    (Legacy `TALKY_MCP_FORCE` is still honored as a fallback.)
     """
     force_env = os.getenv("TALKY_DAEMON_FORCE", "").strip() or os.getenv("TALKY_MCP_FORCE", "").strip()
     force = force_env not in ("", "0")
@@ -312,9 +311,8 @@ def _check_ports_or_exit():
 def _build_webrtc_routes():
     """Build Starlette routes that embed `SmallWebRTCRequestHandler`.
 
-    Replaces the old reverse-proxy path (which forwarded /start and
-    /api/offer to a child pipecat process on 7860). Now the handler lives
-    directly on the MCP server's Starlette app.
+    The handler is mounted directly on this Starlette app — no
+    reverse-proxy, no child pipecat process.
     """
     from pipecat.transports.smallwebrtc.request_handler import (
         IceCandidate,
@@ -550,7 +548,6 @@ def main():
 
     # 727e defense #4: refuse to start if 9090 is already held. Honors
     # TALKY_DAEMON_FORCE=1 (or legacy TALKY_MCP_FORCE=1) to reclaim.
-    # No longer checks 7860 — it doesn't exist under 58db.
     _check_ports_or_exit()
 
     # Best-effort handlers. uvicorn replaces these via Server.capture_signals

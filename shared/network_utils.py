@@ -64,7 +64,7 @@ def get_browser_url(host: str, port: int, ssl_enabled: bool = False, autoconnect
         autoconnect: Whether to add autoconnect=true parameter
         
     Returns:
-        str: Browser URL (e.g., "https://localhost:5173?autoconnect=true")
+        str: Browser URL (e.g., "http://localhost:9090?autoconnect=true")
     """
     protocol = "https" if ssl_enabled else "http"
     url = f"{protocol}://{host}:{port}"

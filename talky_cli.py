@@ -49,157 +49,6 @@ def _kill_pids_on_port(port: int) -> bool:
     return False
 
 
-def kill_port_7860():
-    """Backwards-compat shim. Prefer `_kill_pids_on_port(7860)` or `talky kill`."""
-    _kill_pids_on_port(7860)
-
-
-def validate_certificates(client_dir: Path, external_binding: bool) -> bool:
-    """Validate SSL certificate files exist for HTTPS configuration."""
-    if not external_binding:
-        return True  # No validation needed for HTTP
-    
-    cert_file = client_dir / "localhost-cert.pem"
-    key_file = client_dir / "localhost-key.pem"
-    
-    if not cert_file.exists():
-        print(f"❌ SSL certificate not found: {cert_file}")
-        print("   Generate certificates with: ./scripts/generate-certs.sh")
-        return False
-    
-    if not key_file.exists():
-        print(f"❌ SSL private key not found: {key_file}")
-        print("   Generate certificates with: ./scripts/generate-certs.sh")
-        return False
-    
-    return True
-
-
-def start_client_dev_server(external_binding=False, host="localhost"):
-    """Start the client dev server if not already running."""
-    try:
-        # Load profile manager to get network configuration
-        try:
-            from shared.profile_manager import get_profile_manager
-            pm = get_profile_manager()
-        except:
-            pm = None
-        
-        # Check if port 5173 is already in use with retry logic
-        # Get configured frontend port
-        try:
-            network_config = getattr(pm, 'settings', {}).get("network", {}) if pm else {}
-            frontend_port = int(network_config.get("frontend_port", 5173))
-        except:
-            frontend_port = 5173
-            
-        port_in_use = False
-        for attempt in range(3):  # Try 3 times to handle race conditions
-            result = subprocess.run(
-                ["lsof", "-ti", f":{frontend_port}"],
-                capture_output=True,
-                text=True,
-            )
-            if result.stdout.strip():
-                port_in_use = True
-                break
-            time.sleep(0.1)  # Brief delay between attempts
-        
-        if port_in_use:
-            host_msg = "externally" if external_binding else "locally"
-            print(f"📱 Client dev server already running {host_msg} on port {frontend_port}")
-            return True
-        
-        # Start the client dev server
-        client_dir = server_dir.parent / "client"
-        if not client_dir.exists():
-            print("⚠️ Client directory not found")
-            return False
-        
-        # Validate certificates for HTTPS
-        if not validate_certificates(client_dir, external_binding):
-            return False
-            
-
-        if not (client_dir / "node_modules").exists():
-            print("📦 Installing client dependencies...")
-            result = subprocess.run(["npm", "install"], cwd=str(client_dir), capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"⚠️ npm install failed: {result.stderr.strip()}")
-                return False
-
-        print("📱 Starting client dev server...")
-        if external_binding:
-            print("🌐 External binding enabled (HTTPS for WebRTC)")
-        
-        # Choose config based on external binding
-        config_file = "vite.config.https.ts" if external_binding else "vite.config.ts"
-        npm_args = ["npm", "run", "dev:https" if external_binding else "dev"]
-        
-        # Set up environment variables for Vite
-        env = os.environ.copy()
-        env['VITE_HOST'] = host
-        
-        # Add HTTPS and external host configuration for external binding
-        if external_binding:
-            env['VITE_HTTPS'] = 'true'
-            env['VITE_EXTERNAL_HOST'] = host
-            # Set up backend URL for HTTPS
-            try:
-                network_config = getattr(pm, 'settings', {}).get("network", {}) if pm else {}
-                backend_port = str(network_config.get("backend_port", "7860"))
-                env['VITE_BOT_START_URL'] = f"https://{host}:{backend_port}/start"
-            except:
-                env['VITE_BOT_START_URL'] = f"https://{host}:7860/start"
-        
-        # Get backend port from config
-        try:
-            network_config = getattr(pm, 'settings', {}).get("network", {}) if pm else {}
-            backend_port = str(network_config.get("backend_port", "7860"))
-            env['VITE_BACKEND_PORT'] = backend_port
-        except:
-            env['VITE_BACKEND_PORT'] = "7860"
-            
-        # Start server with better error handling
-        process = subprocess.Popen(
-            npm_args,
-            cwd=str(client_dir),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        # Wait a moment and check if server started successfully
-        try:
-            stdout, stderr = process.communicate(timeout=5)
-            if process.returncode != 0:
-                print(f"❌ Failed to start client dev server:")
-                if stderr:
-                    print(f"   Error: {stderr.strip()}")
-                if stdout:
-                    print(f"   Output: {stdout.strip()}")
-                return False
-        except subprocess.TimeoutExpired:
-            # Server is still running (which is good for dev server)
-            pass
-        
-        host_desc = "externally (HTTPS)" if external_binding else "locally (HTTP)"
-        print(f"📱 Client dev server starting {host_desc} on port {frontend_port}")
-        
-        # Wait a bit for the server to start
-        time.sleep(2)
-        
-        return True
-        
-    except subprocess.SubprocessError:
-        print("⚠️ Could not start client dev server")
-        return False
-    except FileNotFoundError:
-        print("⚠️ npm not found. Install Node.js and npm first.")
-        return False
-
-
 def cmd_say(args):
     """Handle the 'say' subcommand."""
     # Set log level environment variable if specified
@@ -301,108 +150,6 @@ def cmd_say(args):
     sys.exit(result.returncode)
 
 
-def cmd_run(args):
-    """Handle the 'run' subcommand (bot)."""
-    # server_dir is already defined globally from script location
-    
-    # Check if profile has client preference
-    profile_name = getattr(args, 'profile', None)
-    if profile_name:
-        from shared.profile_manager import get_profile_manager
-        pm = get_profile_manager()
-        profile = pm.get_talky_profile(profile_name)
-        
-        # Override debug-client flag based on profile preference
-        if profile and hasattr(profile, 'client') and profile.client == "debug":
-            args.debug_client = True
-        elif profile and hasattr(profile, 'client') and profile.client == "vite":
-            args.debug_client = False
-        elif profile and hasattr(profile, 'backend') and profile.backend == "mcp":
-            # MCP backend should use Vite client by default
-            args.debug_client = False
-    
-    # CRITICAL: Setup logging early to catch dependency installer logs
-    log_level = getattr(args, "log_level", None)
-    if log_level:
-        os.environ["TALKY_LOG_LEVEL"] = log_level
-    
-    # Import and setup logging before dependency check
-    sys.path.insert(0, str(server_dir))
-    from logging_config import setup_logging
-    setup_logging(log_level)
-    
-    # Start client dev server FIRST if not running
-    from shared.profile_manager import get_profile_manager
-    pm = get_profile_manager()
-    
-    # Get host from config or command line
-    host = getattr(args, "host", None)
-    if not host:
-        try:
-            network_config = getattr(pm, 'settings', {}).get("network", {})
-            host = network_config.get("host", "localhost")
-        except:
-            host = "localhost"
-    
-    external_binding = (host == "0.0.0.0")
-    start_client_dev_server(external_binding, host)
-    
-    # Kill any existing process on port 7860 (after Vite is ready)
-    kill_port_7860()
-    
-    # Ensure server dependencies are installed
-    from shared.dependency_installer import ensure_dependencies
-
-    if not ensure_dependencies():
-        print("❌ Failed to install required dependencies")
-        sys.exit(1)
-
-    if args.list_profiles:
-        cmd_list_profiles(args)
-        return
-
-    talky_profile = getattr(args, "profile", None) or getattr(args, "profile_flag", None)
-
-    if not talky_profile:
-        print("No profile specified. Use: talky <profile> or talky --profile <name>")
-        print("List profiles with: talky --list-profiles")
-        sys.exit(1)
-
-    cmd = [
-        "uv", "run", "python", str(server_dir / "main.py"),
-        "--profile",
-        talky_profile,
-    ]
-
-    # Add host binding if specified
-    if host and host != "localhost":
-        cmd.extend(["--host", host])
-        print(f"🌐 Using host binding: {host}")
-        # Add SSL for external access (HTTPS required for WebRTC)
-        cmd.extend(["--ssl"])
-        print("🔒 HTTPS enabled for external access")
-
-    if getattr(args, "voice_profile", None):
-        cmd.extend(["--voice-profile", args.voice_profile])
-    if getattr(args, "config_dir", None):
-        cmd.extend(["--config-dir", args.config_dir])
-    if getattr(args, "debug_client", False):
-        cmd.append("--debug-client")
-    if getattr(args, "no_open", False):
-        cmd.append("--no-open")
-    if getattr(args, "local_speech", False):
-        cmd.append("--local-speech")
-
-    if getattr(args, "log_level", None):
-        cmd.extend(["--log-level", args.log_level])
-
-    if getattr(args, "session", None):
-        cmd.extend(["--session", args.session])
-
-    result = subprocess.run(cmd, cwd=str(server_dir))
-    sys.exit(result.returncode)
-
-
 def cmd_auth(args):
     """Manage provider credentials."""
     from talky_auth import run_auth_tui
@@ -454,98 +201,25 @@ def cmd_ask(args):
     sys.exit(result.returncode)
 
 
-def cmd_end_convo(args):
-    """Handle the 'end-convo' subcommand — kill running browser pipeline session."""
-    killed = False
-
-    # Kill WebRTC server on 7860
-    try:
-        result = subprocess.run(["lsof", "-ti", ":7860"], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            for pid in result.stdout.strip().split("\n"):
-                try:
-                    subprocess.run(["kill", "-9", pid], capture_output=True)
-                    print(f"Killed process {pid} on port 7860")
-                    killed = True
-                except subprocess.SubprocessError:
-                    pass
-    except (FileNotFoundError, subprocess.SubprocessError):
-        pass
-
-    # Kill Vite on 5173
-    try:
-        result = subprocess.run(["lsof", "-ti", ":5173"], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            for pid in result.stdout.strip().split("\n"):
-                try:
-                    subprocess.run(["kill", "-9", pid], capture_output=True)
-                    print(f"Killed process {pid} on port 5173")
-                    killed = True
-                except subprocess.SubprocessError:
-                    pass
-    except (FileNotFoundError, subprocess.SubprocessError):
-        pass
-
-    if not killed:
-        print("No active conversation session found")
-
-
 def cmd_kill(args):
-    """Handle the 'kill' subcommand — reclaim all Talky ports.
-
-    Kills whatever processes are holding Talky's TCP ports (9090 MCP,
-    7860 pipecat WebRTC, 5173 Vite). Prefers the pipecat pid file
-    (~/.talky/run/pipecat.pid) for the pgid-accurate sweep; falls back
-    to lsof-by-port for anything the pid file doesn't cover.
+    """Handle the 'kill' subcommand — stop the talky daemon on :9090.
 
     The voice daemon (unix socket) is intentionally left alone — its
-    lifecycle is separate and well-behaved. Use `talky say --stop-daemon`
-    to bounce the daemon if needed.
+    lifecycle is separate. Use `talky say --stop-daemon` to bounce that one.
     """
-    any_killed = False
-
-    # Preferred path: pipecat pid file points at the session leader, which
-    # lets us killpg the whole subtree in one shot. This is defense #5.
-    pipecat_pid_file = Path.home() / ".talky" / "run" / "pipecat.pid"
-    if pipecat_pid_file.exists():
-        try:
-            pgid = int(pipecat_pid_file.read_text().strip())
-            try:
-                os.killpg(pgid, signal.SIGTERM)
-                print(f"pipecat pgid {pgid}: SIGTERM sent")
-                any_killed = True
-            except ProcessLookupError:
-                pass
-            except PermissionError as e:
-                print(f"pipecat pgid {pgid}: {e}", file=sys.stderr)
-        except (OSError, ValueError):
-            pass
-        try:
-            pipecat_pid_file.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-    ports = [9090, 7860, 5173]
-    for port in ports:
-        if _kill_pids_on_port(port):
-            any_killed = True
-        else:
-            print(f"port {port}: clear")
+    any_killed = _kill_pids_on_port(9090)
+    if not any_killed:
+        print("port 9090: clear")
 
     # Verify nothing snuck back in.
-    import time
     time.sleep(0.3)
-    any_failed = False
-    for port in ports:
-        result = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            print(f"port {port}: STILL HELD after kill -9", file=sys.stderr)
-            any_failed = True
-
-    if any_failed:
+    result = subprocess.run(["lsof", "-ti", ":9090"], capture_output=True, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        print("port 9090: STILL HELD after kill -9", file=sys.stderr)
         return 1
+
     if not any_killed:
-        print("nothing to kill — all ports were already clear")
+        print("nothing to kill — talky daemon was not running")
     return 0
 
 
@@ -860,22 +534,13 @@ def ensure_daemon(wait_secs: float = 12.0, verbose: bool = True) -> bool:
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as a profile name.
-    # Route to `talky profile NAME` by default, which auto-spawns the
-    # daemon if it isn't running. Set TALKY_FORCE_STANDALONE=1 to force
-    # the legacy `talky --profile NAME` standalone path instead (for
-    # offline / no-daemon dev). See tickets a1d4 and 9d02.
-    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "pi", "claude", "transcribe", "end-convo", "kill", "profile"}
+    # `talky openclaw` → `talky profile openclaw`. `cmd_profile` ensures
+    # the daemon is up.
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "pi", "claude", "transcribe", "kill", "profile"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
-        if os.environ.get("TALKY_FORCE_STANDALONE"):
-            # Explicit opt-out: run the legacy standalone path.
-            sys.argv.insert(1, "--profile")
-            sys.argv.insert(2, profile_name)
-        else:
-            # Default: route to the daemon profile-switch subcommand.
-            # `cmd_profile` will auto-spawn the daemon if it isn't running.
-            sys.argv.insert(1, "profile")
-            sys.argv.insert(2, profile_name)
+        sys.argv.insert(1, "profile")
+        sys.argv.insert(2, profile_name)
 
     parser = argparse.ArgumentParser(description="Talky Voice Bot CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -910,14 +575,10 @@ def main():
     ask_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level")
     ask_parser.set_defaults(func=cmd_ask)
 
-    # === end-convo subcommand ===
-    end_convo_parser = subparsers.add_parser("end-convo", help="Kill running browser voice session")
-    end_convo_parser.set_defaults(func=cmd_end_convo)
-
     # === kill subcommand ===
     kill_parser = subparsers.add_parser(
         "kill",
-        help="Kill all Talky processes on ports 9090/7860/5173 (daemon untouched)",
+        help="Stop the talky daemon on :9090 (voice daemon untouched)",
     )
     kill_parser.set_defaults(func=cmd_kill)
 
@@ -1014,121 +675,97 @@ def main():
     tr_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
     tr_parser.set_defaults(func=cmd_transcribe)
 
-    # === Main bot arguments (default command) ===
-    parser.add_argument("--profile", "-p", help="Talky profile to run")
-    parser.add_argument("--dir", "-d", help="Working directory for app (default: current)")
-    parser.add_argument("--voice-profile", "-v", help="Voice profile override")
-    parser.add_argument("--config-dir", "-c", help="Config directory (default: ~/.talky)")
-    parser.add_argument("--list-profiles", "-l", action="store_true", help="List available profiles")
-    parser.add_argument("--debug-client", action="store_true", help="Use Pipecat debug client instead of custom React client")
-    parser.add_argument("--no-open", action="store_true", help="Don't open browser")
-    parser.add_argument("--local-speech", action="store_true", help="Use local speech")
-    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Set logging level (default: ERROR)")
-    parser.add_argument("--session", "-s", help="Override session key for LLM backend")
-
-    parser.add_argument("--host", help="Override host binding (default: from config)")
-
     args = parser.parse_args()
-    
+
     if hasattr(args, "func"):
         args.func(args)
-    else:
-        # No subcommand, use default profile or show help
-        if not getattr(args, 'profile', None):
-            # Use default from settings.yaml
-            try:
-                from shared.profile_manager import get_profile_manager
-                pm = get_profile_manager()
-                default_profile = pm.defaults.get("talky_profile")
-                if default_profile and default_profile in pm.list_talky_profiles():
-                    args.profile = default_profile
-                else:
-                    # Fallback to first available profile
-                    profiles = pm.list_talky_profiles()
-                    if profiles:
-                        args.profile = profiles[0]
-                    else:
-                        print("❌ Error: No talky profiles configured.")
-                        return
-            except Exception as e:
-                print(f"❌ Error loading profiles: {e}")
-                return
-        
-        # We have a profile now - use cmd_run
-        cmd_run(args)
+        return
+
+    # No subcommand: route bare `talky` to the default talky profile via
+    # the daemon profile-switch path. Same shape as `talky <profile>`.
+    try:
+        from shared.profile_manager import get_profile_manager
+        pm = get_profile_manager()
+        default_profile = pm.defaults.get("talky_profile")
+        if not (default_profile and default_profile in pm.list_talky_profiles()):
+            profiles = pm.list_talky_profiles()
+            if not profiles:
+                print("❌ No talky profiles configured.", file=sys.stderr)
+                sys.exit(1)
+            default_profile = next(iter(profiles))
+    except Exception as e:
+        print(f"❌ Error loading profiles: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    args.name = default_profile
+    cmd_profile(args)
 
 
 def cmd_run_client_profile(args):
     """Run an app profile (e.g., 'talky pi', 'talky claude')."""
     import asyncio
 
-    from shared.client_launcher import AppLauncher, MCPServerManager
-    
-    # Check if this is a new-style backend + app profile
+    from shared.profile_manager import get_profile_manager
+
     profile_name = getattr(args, 'profile', None)
-    if profile_name:
-        from shared.profile_manager import get_profile_manager
-        pm = get_profile_manager()
-        profile = pm.get_talky_profile(profile_name)
-        
-        if profile and hasattr(profile, 'backend') and hasattr(profile, 'app'):
-            # New-style profile: backend + app
-            work_dir = getattr(args, 'dir', None)
-            asyncio.run(_run_backend_client_profile(profile, work_dir))
-        else:
-            # Legacy profile - use original bot
-            cmd_run(args)
-    else:
-        # No profile specified - use original bot
-        cmd_run(args)
+    if not profile_name:
+        print("❌ No profile specified", file=sys.stderr)
+        sys.exit(1)
+
+    pm = get_profile_manager()
+    profile = pm.get_talky_profile(profile_name)
+    if not (profile and hasattr(profile, 'backend') and hasattr(profile, 'app')):
+        print(
+            f"❌ Profile {profile_name!r} is not a backend+app profile. "
+            f"Expected fields: backend, app.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    work_dir = getattr(args, 'dir', None)
+    asyncio.run(_run_backend_client_profile(profile, work_dir))
 
 
 async def _run_backend_client_profile(profile, work_dir):
     """Run a new-style backend + app profile."""
     import asyncio
 
-    from shared.client_launcher import AppLauncher, MCPServerManager
-    
+    from shared.client_launcher import AppLauncher, DaemonManager
+
     print(f"🚀 Starting {profile.app} with {profile.backend} voice backend...")
-    
-    # Initialize managers
-    mcp_manager = MCPServerManager()
+
+    daemon_manager = DaemonManager()
     app_launcher = AppLauncher(work_dir)
-    
+
     try:
-        # Start MCP server if needed (runs as background service)
-        mcp_config = {}
+        daemon_config = {}
         if profile.voice_profile:
-            mcp_config["voice_profile"] = profile.voice_profile
-        
-        mcp_available = await mcp_manager.ensure_running(mcp_config)
-        if not mcp_available:
-            print("❌ Failed to start MCP server")
+            daemon_config["voice_profile"] = profile.voice_profile
+
+        daemon_available = await daemon_manager.ensure_running(daemon_config)
+        if not daemon_available:
+            print("❌ Failed to start talky daemon")
             return
-        
-        # Launch app
+
         app_config = {}
         await app_launcher.launch_app(profile.app, app_config)
-        
-        # Trigger voice command
         await app_launcher.trigger_voice_command(profile.app)
-        
+
         print(f"✅ {profile.app.capitalize()} is running. Use Ctrl+C to stop.")
-        
-        # Wait for Pi process to finish (when voice conversation ends)
-        pi_process = app_launcher.processes.get(profile.app)
-        if pi_process:
-            await asyncio.get_event_loop().run_in_executor(None, pi_process.wait)
-        
-        print("👋 Pi session completed.")
-            
+
+        app_process = app_launcher.processes.get(profile.app)
+        if app_process:
+            await asyncio.get_event_loop().run_in_executor(None, app_process.wait)
+
+        print(f"👋 {profile.app.capitalize()} session completed.")
+
     except KeyboardInterrupt:
         print("\n👋 Shutting down...")
     except Exception as e:
         print(f"❌ Error: {e}")
     finally:
         await app_launcher.stop_all()
-        await mcp_manager.stop()  # Just logs that MCP server is left running
+        await daemon_manager.stop()
         print("✅ Done")
 
 

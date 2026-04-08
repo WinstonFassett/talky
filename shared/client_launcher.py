@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from loguru import logger
 
@@ -59,20 +59,20 @@ class AppLauncher:
         
         # Ensure Talky skill is installed
         self._ensure_claude_skill_installed()
-        
-        # Ensure MCP server is running (same logic as in _run_backend_client_profile)
-        from shared.client_launcher import MCPServerManager
-        mcp_manager = MCPServerManager()
-        
-        mcp_config = {}
+
+        # Ensure the talky daemon is running.
+        from shared.client_launcher import DaemonManager
+        daemon_manager = DaemonManager()
+
+        daemon_config = {}
         if config.get("voice_profile"):
-            mcp_config["voice_profile"] = config["voice_profile"]
-        
-        mcp_available = await mcp_manager.ensure_running(mcp_config)
-        if not mcp_available:
-            logger.warning("Failed to start MCP server - voice features may not work")
-        
-        # Ensure Claude is connected to Talky MCP server
+            daemon_config["voice_profile"] = config["voice_profile"]
+
+        daemon_available = await daemon_manager.ensure_running(daemon_config)
+        if not daemon_available:
+            logger.warning("Failed to start talky daemon - voice features may not work")
+
+        # Ensure Claude is connected to the talky daemon's MCP mount.
         self._ensure_claude_mcp_connected()
         
         # Launch Claude with pre-approved tools and initial prompt
@@ -165,64 +165,22 @@ class AppLauncher:
             logger.info("Manual connection required:")
             logger.info("  claude mcp add --transport http talky http://localhost:9090/mcp")
     
-        
-    def _ensure_vite_client_running(self):
-        """Start Vite client if not already running."""
-        # Check if Vite client is already running on port 5173
-        try:
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            result = sock.connect_ex(('localhost', 5173))
-            sock.close()
-            
-            if result == 0:
-                logger.debug("Vite client already running on port 5173")
-                return
-        except Exception:
-            pass
-        
-        # Start Vite client
-        logger.info("Starting Vite client for WebRTC connection...")
-        try:
-            # Find Talky root directory and client directory
-            talky_root = Path(__file__).parent.parent
-            client_dir = talky_root / "client"
-            
-            if not client_dir.exists():
-                raise RuntimeError(f"Client directory not found: {client_dir}")
-            
-            # Start Vite dev server
-            vite_process = subprocess.Popen(
-                ["npm", "run", "dev"],
-                cwd=client_dir,
-                text=True
-            )
-            
-            self.processes["vite"] = vite_process
-            logger.info("Vite client started on port 5173")
-            
-        except Exception as e:
-            logger.error(f"Failed to start Vite client: {e}")
-            logger.info("You may need to start it manually: cd client && npm run dev")
-    
     async def trigger_voice_command(self, app_name: str):
         """Trigger voice command in the running app."""
         if app_name == "pi" and app_name in self.processes:
             logger.info("Pi app running with /voice command already executed.")
-            # Open browser to Vite client instead of letting Pi open debug client
-            import webbrowser
+            # Open browser to the talky daemon UI on :9090.
             import time
+            import webbrowser
             try:
-                # Wait a moment for Vite client to be ready
-                time.sleep(2)
-                vite_url = "http://localhost:5173"
-                webbrowser.open(vite_url)
-                logger.info(f"Opened browser to Vite client: {vite_url}")
+                time.sleep(1)
+                daemon_url = "http://localhost:9090"
+                webbrowser.open(daemon_url)
+                logger.info(f"Opened browser to talky daemon UI: {daemon_url}")
             except Exception as e:
-                logger.warning(f"Could not auto-open browser to Vite client: {e}")
+                logger.warning(f"Could not auto-open browser: {e}")
         elif app_name == "claude" and app_name in self.processes:
-            logger.info("Claude app running with MCP server connection.")
-            logger.info("Use voice tools: voice_speak, voice_listen, voice_stop")
+            logger.info("Claude app running with talky daemon MCP connection.")
         else:
             logger.warning(f"App {app_name} not running or no voice command available")
         return False
@@ -240,57 +198,56 @@ class AppLauncher:
         logger.info("All apps stopped")
 
 
-class MCPServerManager:
-    """Manages MCP server lifecycle."""
-    
+class DaemonManager:
+    """Ensures the talky daemon (:9090) is running.
+
+    The talky daemon is the unified server hosting the voice pipeline,
+    WebRTC transport, client UI, HTTP control plane, and FastMCP SSE
+    mount. This class is a thin wrapper around `talky daemon` that
+    spawns it (detached) if not already up. The daemon is intentionally
+    left running across sessions — no `stop()` cleanup.
+    """
+
     def __init__(self):
         self.process: Optional[subprocess.Popen] = None
-        
+
     async def ensure_running(self, config: Dict[str, Any]) -> bool:
-        """Ensure MCP server is running, start if needed. Returns True if server is available."""
-        # Check if port is already in use
+        """Ensure the talky daemon is running. Returns True if available."""
         try:
             result = subprocess.run(["lsof", "-ti:9090"], capture_output=True, text=True)
             if result.stdout.strip():
-                logger.info("MCP server already running on port 9090")
+                logger.info("talky daemon already running on :9090")
                 return True
         except (FileNotFoundError, subprocess.SubprocessError) as e:
             logger.debug(f"Could not check port 9090: {e}")
-        
-        # Start MCP server in background
-        logger.info("Starting Talky MCP server in background...")
-        mcp_args = ["talky", "mcp"]
-        
+
+        logger.info("Starting talky daemon in background...")
+        daemon_args = ["talky", "daemon"]
+
         if voice_profile := config.get("voice_profile"):
-            mcp_args.extend(["--voice-profile", voice_profile])
-        
+            daemon_args.extend(["--voice-profile", voice_profile])
+
         if host := config.get("host"):
-            mcp_args.extend(["--host", host])
-        
-        # Start detached - don't wait for it
-        subprocess.Popen(
-            mcp_args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True  # Detach from parent process
-        )
-        
-        # Give MCP server a moment to start
-        time.sleep(2)
-        
-        # Verify it started
+            daemon_args.extend(["--host", host])
+
+        # `talky daemon` is now ensure-and-return — it spawns the
+        # detached server itself and exits. We just wait for the port.
+        subprocess.run(daemon_args, capture_output=True)
+
+        time.sleep(1)
+
         try:
             result = subprocess.run(["lsof", "-ti:9090"], capture_output=True, text=True)
             if result.stdout.strip():
-                logger.info("MCP server started successfully")
+                logger.info("talky daemon started successfully")
                 return True
             else:
-                logger.error("MCP server failed to start")
+                logger.error("talky daemon failed to start")
                 return False
         except (FileNotFoundError, subprocess.SubprocessError):
-            logger.error("Could not verify MCP server startup")
+            logger.error("Could not verify talky daemon startup")
             return False
-    
+
     async def stop(self):
-        """MCP server is left running as a service - no cleanup needed."""
-        logger.info("MCP server left running as background service")
+        """The talky daemon is left running as a background service."""
+        logger.info("talky daemon left running as background service")
