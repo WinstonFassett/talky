@@ -160,15 +160,18 @@ class VoiceChannel:
         self._voice_switcher: Optional[Any] = None  # VoiceProfileSwitcher
 
         # LLM switcher + profile → service map (populated by attach()).
-        # _llm_switcher is the ServiceSwitcher wrapping all LLM services.
-        # _llm_services maps a profile name (or MCP_DRIVER_PROFILE) to the
-        # LLMService instance inside the switcher. Used by switch_to_profile
-        # to look up the target service by name.
         self._llm_switcher: Optional[Any] = None  # LLMSwitcher
         self._llm_services: dict[str, Any] = {}  # profile name → LLMService
         self._active_profile: Optional[str] = None
 
-        # Speech buffer — written by the turn-stopped handler, drained by listen()
+        # Room membership (ticket 3f12 phase 1). The set of agent identifiers
+        # currently "joined" to the room. Agents call join_convo / leave_convo
+        # to manage membership. Currently advisory — not enforced by
+        # convo_speak / convo_listen yet. One-at-a-time limit enforced by
+        # join_convo raising if someone else is already joined.
+        self._joined_agents: set[str] = set()
+
+        # Speech buffer — written by MCPDriverLLMService, drained by listen()
         self._user_speech_queue: asyncio.Queue[Any] = asyncio.Queue()
 
         # Disconnect sentinel — signals listen() callers when the peer goes away
@@ -238,9 +241,39 @@ class VoiceChannel:
             "voice_profile": self._warm_profile_name,
             "active_llm_profile": self._active_profile,
             "available_llm_profiles": sorted(self._llm_services.keys()) if self._llm_services else [],
+            "joined_agents": sorted(self._joined_agents),
             "queue_depth": self._user_speech_queue.qsize(),
             "disconnected": self._disconnected.is_set(),
         }
+
+    # ── room membership (3f12 phase 1) ──────────────────────────────────────
+
+    def join_convo(self, agent_id: str) -> dict:
+        """Register an agent as a driver of the room.
+
+        Only one agent may be joined at a time (hard concurrency limit,
+        per ticket 3f12). If another agent is already joined and a
+        different agent_id tries to join, raises.
+
+        Re-joining with the same agent_id is idempotent.
+        """
+        if self._joined_agents and agent_id not in self._joined_agents:
+            current = next(iter(self._joined_agents))
+            raise RuntimeError(
+                f"room is busy: agent {current!r} is currently joined"
+            )
+        self._joined_agents.add(agent_id)
+        logger.info(f"VoiceChannel: agent {agent_id!r} joined (members: {sorted(self._joined_agents)})")
+        return self.status()
+
+    def leave_convo(self, agent_id: str) -> dict:
+        """Unregister an agent. Idempotent on not-joined."""
+        if agent_id in self._joined_agents:
+            self._joined_agents.remove(agent_id)
+            logger.info(f"VoiceChannel: agent {agent_id!r} left (members: {sorted(self._joined_agents)})")
+        else:
+            logger.debug(f"VoiceChannel: leave_convo no-op for {agent_id!r} (not joined)")
+        return self.status()
 
     async def switch_to_profile(self, profile_name: str) -> None:
         """Flip the active LLM in the LLMSwitcher to ``profile_name``."""

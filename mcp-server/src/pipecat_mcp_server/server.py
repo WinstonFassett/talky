@@ -199,6 +199,31 @@ async def end_convo() -> bool:
     return True
 
 
+@mcp.tool()
+async def join_convo(agent_id: str = "default") -> dict:
+    """Register an agent as the active driver of the voice conversation.
+
+    Only one agent at a time. Call this before `convo_speak` / `convo_listen`
+    to claim the room. Re-joining with the same agent_id is a no-op.
+
+    Returns the channel status dict.
+    """
+    return voice_channel.join_convo(agent_id)
+
+
+@mcp.tool()
+async def leave_convo(agent_id: str = "default") -> dict:
+    """Unregister an agent from the voice conversation.
+
+    Does not tear down the pipeline. Pipeline stays live and the room
+    is available for another agent to join. Idempotent if the agent
+    isn't currently joined.
+
+    Returns the channel status dict.
+    """
+    return voice_channel.leave_convo(agent_id)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Signal / port management (ticket 727e)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -381,6 +406,21 @@ def _build_webrtc_routes():
             "available": st.get("available_llm_profiles", []),
         })
 
+    async def handle_join(request: Request):
+        """POST /api/join?agent=NAME — register an agent as room driver."""
+        agent_id = request.query_params.get("agent", "default")
+        try:
+            state = voice_channel.join_convo(agent_id)
+        except RuntimeError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse({"status": "ok", "channel": state})
+
+    async def handle_leave(request: Request):
+        """POST /api/leave?agent=NAME — unregister an agent."""
+        agent_id = request.query_params.get("agent", "default")
+        state = voice_channel.leave_convo(agent_id)
+        return JSONResponse({"status": "ok", "channel": state})
+
     async def handle_set_profile(request: Request):
         """POST /api/profile — switch active LLM profile."""
         profile: Optional[str] = request.query_params.get("profile")
@@ -426,6 +466,8 @@ def _build_webrtc_routes():
         Route("/status", handle_status, methods=["GET"]),
         Route("/api/profile", handle_get_profile, methods=["GET"]),
         Route("/api/profile", handle_set_profile, methods=["POST"]),
+        Route("/api/join", handle_join, methods=["POST"]),
+        Route("/api/leave", handle_leave, methods=["POST"]),
     ]
     return routes, webrtc_handler
 
