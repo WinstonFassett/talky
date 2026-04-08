@@ -269,15 +269,57 @@ class VoiceChannel:
             logger.debug(f"VoiceChannel: leave_convo no-op for {agent_id!r} (not joined)")
         return self.status()
 
+    def available_profiles(self) -> list[str]:
+        """List of profile names the channel will accept for ``switch_to_profile``.
+
+        Works whether or not a pipeline is live — reads from the profile
+        manager directly so a user can preselect a profile before the
+        browser is open.
+        """
+        from shared.profile_manager import get_profile_manager
+
+        try:
+            backends = list(get_profile_manager().list_llm_backends().keys())
+        except Exception:  # noqa: BLE001
+            backends = []
+        return [self.MCP_DRIVER_PROFILE, *backends]
+
     async def switch_to_profile(self, profile_name: str) -> None:
-        """Flip the active LLM in the LLMSwitcher to ``profile_name``."""
+        """Flip the active LLM profile.
+
+        If a pipeline is live, queues a ``ManuallySwitchServiceFrame`` to
+        flip routing inside the LLMSwitcher. If no pipeline is live yet,
+        just stores the desired profile on the channel; the next pipeline
+        build will auto-apply it (Phase 2 restore path). Either way,
+        ``_active_profile`` is updated.
+
+        Raises ``ValueError`` if the profile isn't known.
+        """
+        if profile_name not in self.available_profiles():
+            raise ValueError(
+                f"unknown profile {profile_name!r}; available: {self.available_profiles()}"
+            )
+
         if not self.is_live() or self._pipeline_task is None:
-            raise RuntimeError("no live pipeline")
+            # Soft path: no live pipeline. Store the desired profile and
+            # let the next build apply it.
+            self._active_profile = profile_name
+            logger.info(
+                f"VoiceChannel: profile {profile_name!r} stored as desired "
+                "(no live pipeline — will apply on next browser connect)"
+            )
+            return
+
+        # Live path: queue the switch frame.
         service = self._llm_services.get(profile_name)
         if service is None:
-            raise ValueError(f"unknown profile {profile_name!r}; available: {sorted(self._llm_services)}")
+            # Shouldn't happen given the validation above, but be defensive.
+            raise ValueError(
+                f"profile {profile_name!r} valid but not in active switcher"
+            )
 
         from pipecat.frames.frames import ManuallySwitchServiceFrame
+
         await self._pipeline_task.queue_frames([ManuallySwitchServiceFrame(service=service)])
         self._active_profile = profile_name
         logger.info(f"VoiceChannel: active profile → {profile_name!r}")

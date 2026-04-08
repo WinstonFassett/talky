@@ -721,7 +721,24 @@ def cmd_profile(args):
         print(f"❌ could not reach daemon at {base_url}: {e}")
         sys.exit(1)
 
-    print(f"✅ switched to profile: {data.get('active', name)}")
+    print(f"✅ profile: {data.get('active', name)}")
+
+    # If the pipeline isn't live yet, open the browser so the user can
+    # get into the convo. The daemon's already stored the desired profile
+    # — the next pipeline build will auto-apply it.
+    status_url = f"{base_url}/status"
+    try:
+        with urllib.request.urlopen(status_url, timeout=2) as resp:
+            st = json.loads(resp.read().decode("utf-8"))
+        live = st.get("channel", {}).get("live", False)
+    except Exception:  # noqa: BLE001
+        live = True  # assume live if we can't tell
+
+    if not live:
+        import webbrowser
+        client_url = f"{base_url}?autoconnect=true"
+        print(f"   no live pipeline — opening {client_url}")
+        webbrowser.open(client_url)
 
 
 def cmd_mcp(args):

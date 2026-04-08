@@ -401,9 +401,13 @@ def _build_webrtc_routes():
     async def handle_get_profile(request: Request):  # noqa: ARG001
         """GET /api/profile — return current active profile + available list."""
         st = voice_channel.status()
+        # Fall back to the full list from the profile manager if no
+        # pipeline is live (status's available_llm_profiles is pipeline-bound).
+        available = st.get("available_llm_profiles") or voice_channel.available_profiles()
         return JSONResponse({
             "active": st.get("active_llm_profile"),
-            "available": st.get("available_llm_profiles", []),
+            "available": available,
+            "live": st.get("live", False),
         })
 
     async def handle_join(request: Request):
