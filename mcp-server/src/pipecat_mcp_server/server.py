@@ -339,10 +339,15 @@ def _build_webrtc_routes():
         return JSONResponse({"error": "No WebRTC answer produced"}, status_code=500)
 
     async def handle_session_offer(request: Request):
-        """Pipecat Cloud compat: /sessions/{session_id}/api/offer POST."""
-        session_id = request.path_params["session_id"]
-        if session_id not in active_sessions:
-            return JSONResponse({"error": "Invalid session"}, status_code=404)
+        """Pipecat Cloud compat: /sessions/{session_id}/api/offer POST.
+
+        Note: we deliberately do NOT require the session_id to be in
+        active_sessions. The underlying SmallWebRTCRequestHandler tracks
+        its own pc_id map, and the session_id is just a Pipecat Cloud
+        compat token. Rejecting unknown session_ids causes false 404s
+        when the browser retries a stale session from a previous mcp
+        instance — which is normal on hot reload.
+        """
         return await handle_offer(request)
 
     async def handle_ice(request: Request):
@@ -356,9 +361,7 @@ def _build_webrtc_routes():
         return JSONResponse({"status": "ok"})
 
     async def handle_session_ice(request: Request):
-        session_id = request.path_params["session_id"]
-        if session_id not in active_sessions:
-            return JSONResponse({"error": "Invalid session"}, status_code=404)
+        """Same rationale as handle_session_offer — don't gate on session_id."""
         return await handle_ice(request)
 
     async def handle_status(request: Request):  # noqa: ARG001

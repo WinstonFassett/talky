@@ -69,10 +69,26 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
+import sys
 import time
 from typing import Any, Optional
 
-from loguru import logger
+# The talky project root needs to be on sys.path so we can `import server.*`
+# and `import shared.*`. When talky is installed via `uv tool install
+# --editable .` and invoked as `talky mcp`, the mcp-server package is on
+# sys.path via its entry point, but the project root containing `server/`
+# and `shared/` is not. Add it here, once at import time, before any of
+# the runtime imports below reach for those modules.
+# Layout: <talky_root>/mcp-server/src/pipecat_mcp_server/channel.py
+# Walk: dirname(__file__) → src → mcp-server → talky_root  (three `..`)
+_TALKY_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..")
+)
+if _TALKY_ROOT not in sys.path:
+    sys.path.insert(0, _TALKY_ROOT)
+
+from loguru import logger  # noqa: E402
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     EndFrame,
