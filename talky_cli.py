@@ -671,6 +671,9 @@ def cmd_profile(args):
     import urllib.error
     import urllib.request
 
+    if not ensure_mcp_daemon():
+        sys.exit(1)
+
     host = os.environ.get("TALKY_MCP_HOST", "localhost")
     port = int(os.environ.get("TALKY_MCP_PORT", "9090"))
     base_url = f"http://{host}:{port}"
@@ -828,23 +831,76 @@ def _daemon_is_running() -> bool:
         return False
 
 
+def ensure_mcp_daemon(wait_secs: float = 12.0, verbose: bool = True) -> bool:
+    """Ensure `talky mcp` is running on 9090. Spawn it if not.
+
+    Mirrors the voice daemon auto-start pattern: any talky subcommand
+    that needs the daemon can call this first, and the daemon will be
+    lazy-started on first use. Subsequent calls see the daemon already
+    running and return immediately.
+
+    Returns True on success. Prints an error and returns False if the
+    spawn fails or the daemon doesn't come up within wait_secs.
+    """
+    if _daemon_is_running():
+        return True
+
+    if verbose:
+        print("⚙️  starting talky mcp daemon...", file=sys.stderr)
+
+    log_dir = Path.home() / ".talky" / "run"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "mcp-daemon.log"
+
+    try:
+        log_fh = open(log_path, "a")
+        subprocess.Popen(
+            ["talky", "mcp"],
+            stdout=log_fh,
+            stderr=log_fh,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,  # detach so the daemon outlives this CLI
+            close_fds=True,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError) as e:
+        print(f"❌ could not spawn `talky mcp`: {e}", file=sys.stderr)
+        return False
+
+    # Poll for the daemon to come up.
+    deadline = time.monotonic() + wait_secs
+    while time.monotonic() < deadline:
+        if _daemon_is_running():
+            if verbose:
+                print(f"✅ daemon up on 9090 (log: {log_path})", file=sys.stderr)
+            return True
+        time.sleep(0.2)
+
+    print(
+        f"❌ daemon failed to come up within {wait_secs:.0f}s. "
+        f"Check {log_path} for details.",
+        file=sys.stderr,
+    )
+    return False
+
+
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as a profile name.
-    # If the daemon is running, route the shortcut to `talky profile NAME`
-    # (switches the active LLM inside the running daemon). Otherwise fall
-    # back to the legacy `talky --profile NAME` standalone path.
-    # See ticket a1d4.
+    # Route to `talky profile NAME` by default, which auto-spawns the
+    # daemon if it isn't running. Set TALKY_FORCE_STANDALONE=1 to force
+    # the legacy `talky --profile NAME` standalone path instead (for
+    # offline / no-daemon dev). See tickets a1d4 and 9d02.
     known_commands = {"config", "say", "ask", "mcp", "ls", "auth", "pi", "claude", "transcribe", "end-convo", "kill", "profile"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
-        if _daemon_is_running() and not os.environ.get("TALKY_FORCE_STANDALONE"):
-            # Route to the daemon profile-switch subcommand.
-            sys.argv.insert(1, "profile")
+        if os.environ.get("TALKY_FORCE_STANDALONE"):
+            # Explicit opt-out: run the legacy standalone path.
+            sys.argv.insert(1, "--profile")
             sys.argv.insert(2, profile_name)
         else:
-            # Legacy standalone path (no daemon running, or explicit override).
-            sys.argv.insert(1, "--profile")
+            # Default: route to the daemon profile-switch subcommand.
+            # `cmd_profile` will auto-spawn the daemon if it isn't running.
+            sys.argv.insert(1, "profile")
             sys.argv.insert(2, profile_name)
 
     parser = argparse.ArgumentParser(description="Talky Voice Bot CLI")
