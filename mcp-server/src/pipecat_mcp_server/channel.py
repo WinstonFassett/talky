@@ -91,10 +91,8 @@ if _TALKY_ROOT not in sys.path:
 from loguru import logger  # noqa: E402
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
-    EndFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
-    LLMRunFrame,
     LLMTextFrame,
     OutputAudioRawFrame,
 )
