@@ -48,22 +48,17 @@ claude mcp list
 
 ### 4. Install Talky Skill
 
-The Talky skill provides voice conversation capabilities:
+The Talky skill provides voice conversation capabilities. The canonical skill lives at `skills/talky-skill/` in this repo. Install it into Claude Code using `npx skills`:
 
-**Automatic Installation (Recommended):**
 ```bash
-# Skill is installed automatically when you run talky claude
-talky claude
+npx skills install ./skills/talky-skill
 ```
 
-**Manual Installation:**
-```bash
-# Run the installation script
-./scripts/install-claude-skill.sh
+Or symlink it manually if you prefer local edits to apply immediately:
 
-# Or manually copy the skill file
-mkdir -p ~/.claude/skills/talky
-cp docs/integrations/claude-skill.md ~/.claude/skills/talky/SKILL.md
+```bash
+mkdir -p ~/.claude/skills
+ln -s "$(pwd)/skills/talky-skill" ~/.claude/skills/talky
 ```
 
 ## Usage
@@ -71,7 +66,7 @@ cp docs/integrations/claude-skill.md ~/.claude/skills/talky/SKILL.md
 ### Quick Start (One Command)
 
 ```bash
-# This handles everything: MCP server, skill installation, and Claude
+# This handles MCP server + Claude. Install the skill once via `npx skills` (see step 4 above).
 talky claude
 ```
 
@@ -87,7 +82,7 @@ I want to have a voice conversation
 If you prefer manual setup:
 
 1. **Start MCP server**: `talky daemon`
-2. **Install skill**: `./scripts/install-claude-skill.sh`
+2. **Install skill**: `npx skills install ./skills/talky-skill` (one-time)
 3. **Connect Claude**: `claude mcp add --transport http talky http://localhost:9090/mcp`
 4. **Run Claude**: `claude`
 5. **Start voice**: "I want to have a voice conversation"
