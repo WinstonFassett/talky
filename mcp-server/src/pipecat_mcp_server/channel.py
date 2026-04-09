@@ -144,7 +144,17 @@ class VoiceChannel:
     # can't collide with user-configured LLM backend names.
     MCP_DRIVER_PROFILE = "__mcp__"
 
-    def __init__(self) -> None:
+    def __init__(self, idle_ttl_seconds: Optional[float] = None) -> None:
+        """Construct an unwarmed channel.
+
+        Args:
+            idle_ttl_seconds: Teardown delay once the room transitions
+                to empty (no browser peer AND no joined agents). ``None``
+                means infinity — preserve legacy behavior. Ticket 0c5d.
+        """
+        self._idle_ttl_seconds: Optional[float] = idle_ttl_seconds
+        self._ttl_task: Optional[asyncio.Task] = None
+
         # Pre-warmed state (populated by warmup())
         self._warm = False
         self._warm_profile_name: Optional[str] = None
@@ -233,6 +243,7 @@ class VoiceChannel:
 
     def status(self) -> dict:
         """Return channel state for debugging / introspection."""
+        ttl_pending = self._ttl_task is not None and not self._ttl_task.done()
         return {
             "warm": self._warm,
             "live": self.is_live(),
@@ -242,9 +253,68 @@ class VoiceChannel:
             "joined_agents": sorted(self._joined_agents),
             "queue_depth": self._user_speech_queue.qsize(),
             "disconnected": self._disconnected.is_set(),
+            "idle_ttl_seconds": self._idle_ttl_seconds,
+            "idle_ttl_pending": ttl_pending,
+            "is_empty": self._is_empty(),
         }
 
     # ── room membership (3f12 phase 1) ──────────────────────────────────────
+
+    def _is_empty(self) -> bool:
+        """Room occupancy check: no browser peer AND no joined agents.
+
+        Used to drive idle-TTL scheduling (ticket 0c5d).
+        """
+        return not self.is_live() and len(self._joined_agents) == 0
+
+    def _schedule_ttl_if_empty(self) -> None:
+        """Start the idle teardown timer if the room is empty and TTL is set.
+
+        No-op if:
+          - TTL is disabled (``_idle_ttl_seconds`` is None — infinity)
+          - a timer is already scheduled
+          - the room is not empty
+
+        Safe to call repeatedly.
+        """
+        if self._idle_ttl_seconds is None:
+            return
+        if self._ttl_task is not None and not self._ttl_task.done():
+            return
+        if not self._is_empty():
+            return
+        self._ttl_task = asyncio.create_task(self._ttl_countdown())
+
+    def _cancel_ttl(self) -> None:
+        """Cancel any pending idle TTL timer. Safe to call repeatedly."""
+        if self._ttl_task is not None and not self._ttl_task.done():
+            self._ttl_task.cancel()
+        self._ttl_task = None
+
+    async def _ttl_countdown(self) -> None:
+        """Sleep for the TTL interval, then tear down the room.
+
+        Cancelled by ``_cancel_ttl`` (e.g. on rejoin or browser attach)
+        before it fires.
+        """
+        try:
+            assert self._idle_ttl_seconds is not None  # checked by caller
+            await asyncio.sleep(self._idle_ttl_seconds)
+            # Re-check occupancy before tearing down — the room could
+            # have filled up during the sleep window if _cancel_ttl
+            # raced us.
+            if not self._is_empty():
+                logger.debug(
+                    "VoiceChannel: idle TTL fired but room is no longer empty — skipping teardown"
+                )
+                return
+            logger.info(
+                f"VoiceChannel: idle TTL fired after {self._idle_ttl_seconds}s — tearing down empty room"
+            )
+            await self.detach()
+        except asyncio.CancelledError:
+            logger.debug("VoiceChannel: idle TTL cancelled before fire")
+            raise
 
     def join_convo(self, agent_id: str) -> dict:
         """Register an agent as a driver of the room.
@@ -254,17 +324,27 @@ class VoiceChannel:
         here enforces that. Agents who want exclusive access should
         coordinate out of band.
 
-        Re-joining with the same agent_id is idempotent.
+        Re-joining with the same agent_id is idempotent. Any pending
+        idle-TTL timer is cancelled as a side effect (room is no longer
+        empty).
         """
         self._joined_agents.add(agent_id)
+        self._cancel_ttl()
         logger.info(f"VoiceChannel: agent {agent_id!r} joined (members: {sorted(self._joined_agents)})")
         return self.status()
 
     def leave_convo(self, agent_id: str) -> dict:
-        """Unregister an agent. Idempotent on not-joined."""
+        """Unregister an agent. Idempotent on not-joined.
+
+        If the room becomes empty as a result of this leave, schedules
+        the idle-TTL teardown (ticket 0c5d). A no-op leave on a room
+        that was already empty does NOT schedule a timer — TTL is only
+        started on *transitions* into the empty state.
+        """
         if agent_id in self._joined_agents:
             self._joined_agents.remove(agent_id)
             logger.info(f"VoiceChannel: agent {agent_id!r} left (members: {sorted(self._joined_agents)})")
+            self._schedule_ttl_if_empty()
         else:
             logger.debug(f"VoiceChannel: leave_convo no-op for {agent_id!r} (not joined)")
         return self.status()
@@ -334,6 +414,10 @@ class VoiceChannel:
         already running, it's torn down first (last-writer-wins).
         """
         async with self._attach_lock:
+            # A browser peer is arriving — cancel any pending idle TTL
+            # from the empty state we're leaving (ticket 0c5d).
+            self._cancel_ttl()
+
             if self.is_live():
                 logger.info("VoiceChannel.attach: tearing down previous pipeline first")
                 await self._teardown_locked()
@@ -353,6 +437,9 @@ class VoiceChannel:
         browser-disconnect path, which keeps room state so the next
         browser connection can pick up where it left off.
         """
+        # Cancel any pending idle-TTL timer first so it can't race with
+        # the teardown (and can't try to call detach() recursively).
+        self._cancel_ttl()
         async with self._attach_lock:
             await self._teardown_locked(preserve_room_state=False)
 
@@ -362,9 +449,14 @@ class VoiceChannel:
         Triggered by the transport's ``on_client_disconnected`` event
         when the browser peer goes away. The next ``attach()`` will
         rebuild a fresh pipeline and restore the saved profile.
+
+        If no agents are joined, the room becomes empty as a result —
+        schedule the idle-TTL teardown (ticket 0c5d).
         """
         async with self._attach_lock:
             await self._teardown_locked(preserve_room_state=True)
+        # Outside the lock: the room may be empty now. Schedule TTL if so.
+        self._schedule_ttl_if_empty()
 
     async def _restore_profile_on_startup(self, profile_name: str) -> None:
         """Switch the active LLM to ``profile_name`` shortly after a

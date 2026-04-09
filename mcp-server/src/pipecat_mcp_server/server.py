@@ -57,10 +57,53 @@ mcp_host = os.getenv("MCP_HOST", "localhost")
 mcp_port = int(os.getenv("MCP_PORT", "9090"))
 mcp = FastMCP(name="pipecat-mcp-server", host=mcp_host, port=mcp_port)
 
+def _read_idle_ttl_seconds() -> Optional[float]:
+    """Load the idle-room TTL (ticket 0c5d).
+
+    Precedence:
+      1. ``TALKY_ROOM_IDLE_TTL_SECS`` env var (float or ``"infinity"``).
+      2. ``room.idle_ttl_seconds`` in ``~/.talky/settings.yaml``
+         (float or ``"infinity"``).
+      3. None (infinity / preserve legacy behavior).
+
+    Returns ``None`` for infinity, or a positive float in seconds.
+    """
+    raw: Optional[str] = os.getenv("TALKY_ROOM_IDLE_TTL_SECS")
+    if raw is None:
+        try:
+            from shared.profile_manager import get_profile_manager
+
+            settings = getattr(get_profile_manager(), "settings", {}) or {}
+            yaml_raw = settings.get("room", {}).get("idle_ttl_seconds")
+            if yaml_raw is not None:
+                raw = str(yaml_raw)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Could not read room.idle_ttl_seconds from settings: {e}")
+            raw = None
+
+    if raw is None:
+        return None
+    if str(raw).strip().lower() in ("infinity", "inf", "none", ""):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid TALKY_ROOM_IDLE_TTL_SECS / room.idle_ttl_seconds={raw!r}; using infinity")
+        return None
+    if value <= 0:
+        logger.warning(f"Non-positive room idle TTL {value!r}; using infinity")
+        return None
+    return value
+
+
+_idle_ttl_seconds = _read_idle_ttl_seconds()
+
 # The single in-process voice channel. Created eagerly so the MCP tools can
 # reference it during module import, but warmup is deferred to the Starlette
 # lifespan startup hook (see _build_app).
-voice_channel = VoiceChannel()
+voice_channel = VoiceChannel(idle_ttl_seconds=_idle_ttl_seconds)
+if _idle_ttl_seconds is not None:
+    logger.info(f"VoiceChannel: idle TTL set to {_idle_ttl_seconds}s (empty rooms will auto-tear-down)")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
