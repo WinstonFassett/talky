@@ -1,6 +1,6 @@
 """
-Simple Moltis LLM Service for Pipecat
-Just override _process_context like Anthropic does
+Simple Moltis LLM Service for Pipecat.
+Consumes UserTurnTextFrame from the talky turn detector (ticket 76a3).
 """
 
 import asyncio
@@ -14,15 +14,13 @@ import websockets
 from loguru import logger
 from pipecat.frames.frames import (
     Frame,
-    LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     TextFrame,
 )
-from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
-
+from pipecat_mcp_server.talky_turn import UserTurnTextFrame
 from server.config.voice_prompts import format_voice_message
 from shared.profile_manager import get_profile_manager
 
@@ -207,19 +205,18 @@ class MoltisLLMService(LLMService):
             self._connected = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
-        """Process frames - handle LLMContextFrame like Gemini does"""
+        """Process frames - handle UserTurnTextFrame (ticket 76a3)."""
         await super().process_frame(frame, direction)
 
-        # Handle LLMContextFrame - don't push it, just process it
-        if isinstance(frame, LLMContextFrame):
-            context = frame.context
-            await self._process_context(context)
-        # For all other frames, push them along
-        elif not isinstance(frame, LLMContextFrame):
-            await self.push_frame(frame, direction)
+        if isinstance(frame, UserTurnTextFrame):
+            await self._process_user_text(frame.text)
+            return
 
-    async def _process_context(self, context: LLMContext):
-        """Process LLM context - this is called by the base LLMService"""
+        # Everything else flows through unchanged.
+        await self.push_frame(frame, direction)
+
+    async def _process_user_text(self, user_text: str):
+        """Send a single user turn's text to the Moltis remote session."""
         try:
             # Ensure connected
             if not self._connected:
@@ -227,32 +224,15 @@ class MoltisLLMService(LLMService):
 
             await self.push_frame(LLMFullResponseStartFrame())
 
-            # Get messages from context
-            messages = context.get_messages()
-
-            # Find last user message
-            last_user_message = None
-            for msg in reversed(messages):
-                if msg.get("role") == "user":
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        for item in content:
-                            if item.get("type") == "text":
-                                last_user_message = item.get("text", "")
-                                break
-                    else:
-                        last_user_message = content
-                    break
-
-            if not last_user_message:
-                logger.warning("No user message found")
+            if not user_text:
+                logger.warning("No user message text")
                 await self.push_frame(LLMFullResponseEndFrame())
                 return
 
             # Format message with voice conversation guidance
-            full_message = format_voice_message(last_user_message)
-            
-            logger.info(f"🗣️  User: {last_user_message[:100]}...")
+            full_message = format_voice_message(user_text)
+
+            logger.info(f"🗣️  User: {user_text[:100]}...")
 
             # Clear queue
             while not self._response_queue.empty():
@@ -287,7 +267,7 @@ class MoltisLLMService(LLMService):
             await self.push_frame(LLMFullResponseEndFrame())
 
         except Exception as e:
-            logger.error(f"Error in _process_context: {e}", exc_info=True)
+            logger.error(f"Error in _process_user_text: {e}", exc_info=True)
             await self.push_frame(LLMFullResponseEndFrame())
 
     async def switch_session(self, session_key: str):

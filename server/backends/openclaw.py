@@ -12,6 +12,7 @@ import ssl
 import time
 from pathlib import Path
 from typing import Optional
+
 import websockets
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -19,16 +20,13 @@ from loguru import logger
 from pipecat.frames.frames import (
     Frame,
     InterruptionFrame,
-    LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
-    LLMRunFrame,
     TextFrame,
 )
-from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
-
+from pipecat_mcp_server.talky_turn import UserTurnTextFrame
 from server.config.voice_prompts import format_voice_message
 
 
@@ -493,7 +491,7 @@ class OpenClawLLMService(LLMService):
             self._connected = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
-        """Process frames - handle LLMContextFrame and InterruptionFrame"""
+        """Process frames - handle UserTurnTextFrame and InterruptionFrame."""
         await super().process_frame(frame, direction)
 
         # Handle interruption - clear pending responses
@@ -502,16 +500,16 @@ class OpenClawLLMService(LLMService):
             await self.push_frame(frame, direction)
             return
 
-        # Handle LLMContextFrame - don't push it, just process it
-        if isinstance(frame, LLMContextFrame):
-            context = frame.context
-            await self._process_context(context)
-        # For all other frames, push them along
-        elif not isinstance(frame, LLMContextFrame):
-            await self.push_frame(frame, direction)
+        # Handle UserTurnTextFrame - consume it, send to remote, emit response
+        if isinstance(frame, UserTurnTextFrame):
+            await self._process_user_text(frame.text)
+            return
 
-    async def _process_context(self, context: LLMContext):
-        """Process LLM context - this is called by the base LLMService"""
+        # Everything else flows through unchanged.
+        await self.push_frame(frame, direction)
+
+    async def _process_user_text(self, user_text: str):
+        """Send a single user turn's text to the OpenClaw remote session."""
         try:
             # Ensure connected
             if not self._connected:
@@ -519,27 +517,12 @@ class OpenClawLLMService(LLMService):
 
             await self.push_frame(LLMFullResponseStartFrame())
 
-            # Get messages from context
-            messages = context.get_messages()
-
-            # Find last user message
-            last_user_message = None
-            for msg in reversed(messages):
-                if msg.get("role") == "user":
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        for item in content:
-                            if item.get("type") == "text":
-                                last_user_message = item.get("text", "")
-                                break
-                    else:
-                        last_user_message = content
-                    break
-
-            if not last_user_message:
-                logger.warning("No user message found")
+            if not user_text:
+                logger.warning("No user message text")
                 await self.push_frame(LLMFullResponseEndFrame())
                 return
+
+            last_user_message = user_text
 
             # Format message with voice conversation guidance
             full_message = format_voice_message(last_user_message)
@@ -586,5 +569,5 @@ class OpenClawLLMService(LLMService):
                 await self.push_frame(LLMFullResponseEndFrame())
 
         except Exception as e:
-            logger.error(f"Error in _process_context: {e}", exc_info=True)
+            logger.error(f"Error in _process_user_text: {e}", exc_info=True)
             await self.push_frame(LLMFullResponseEndFrame())

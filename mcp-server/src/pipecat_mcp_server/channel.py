@@ -100,9 +100,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyManual
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
-    LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
 from pipecat.transports.base_transport import TransportParams
@@ -114,6 +112,7 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from pipecat_mcp_server.mcp_driver_llm_service import MCPDriverLLMService
+from pipecat_mcp_server.talky_turn import TalkyUserTurnDetector
 
 
 def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
@@ -684,12 +683,14 @@ class VoiceChannel:
         voice_switcher = VoiceProfileSwitcher(profile_name, pm, task=None)
         tts_switcher = voice_switcher.get_service_switcher()
 
-        # Aggregator with c1a2 fix (SpeechTimeoutUserTurnStopStrategy instead
-        # of the default smart-turn ML analyzer that cuts users off mid-sentence).
-        context = LLMContext([])
-        user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-            context,
-            user_params=LLMUserAggregatorParams(
+        # Turn detector — ticket 76a3. Reuses LLMUserAggregator's VAD +
+        # turn controller + transcription aggregation machinery, but
+        # emits a lightweight UserTurnTextFrame instead of accumulating
+        # an LLMContext. Carries the c1a2 fix (SpeechTimeoutUserTurnStop
+        # instead of the smart-turn ML analyzer). No assistant aggregator
+        # — talky's backends don't consume bot response history.
+        turn_detector = TalkyUserTurnDetector(
+            params=LLMUserAggregatorParams(
                 user_turn_strategies=UserTurnStrategies(
                     stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=1.0)]
                 ),
@@ -701,11 +702,10 @@ class VoiceChannel:
             [
                 transport.input(),
                 stt,
-                user_aggregator,
+                turn_detector,
                 llm_switcher,
                 tts_switcher,
                 transport.output(),
-                assistant_aggregator,
             ]
         )
 
@@ -723,12 +723,11 @@ class VoiceChannel:
         @pipeline_task.rtvi.event_handler("on_client_ready")
         async def on_client_ready(rtvi):  # noqa: ANN001
             logger.info("VoiceChannel: RTVI client ready")
-            if self._warm_voice_prompt:
-                context.messages.append(
-                    {"role": "system", "content": self._warm_voice_prompt}
-                )
-            # Optional: queue a greeting frame here if desired. Leaving it off
-            # so `convo_speak` is the explicit trigger.
+            # NB: no system prompt injection — talky's backends
+            # (openclaw/moltis) own their own system prompts remotely
+            # and read only the latest user message from anything the
+            # pipeline hands them. With 76a3 the pipeline no longer
+            # carries an LLMContext at all.
 
         @pipeline_task.rtvi.event_handler("on_client_message")
         async def on_client_message(rtvi, msg):  # noqa: ANN001
@@ -754,8 +753,9 @@ class VoiceChannel:
 
         # NB: No on_user_turn_stopped handler here.
         # Speech queue writes are handled by MCPDriverLLMService via
-        # LLMContextFrame. Audio cues on turn-stop were removed per ticket
-        # b5ee — they're only wanted in the walkie-talkie `ask` path.
+        # UserTurnTextFrame (ticket 76a3). Audio cues on turn-stop were
+        # removed per ticket b5ee — they're only wanted in the
+        # walkie-talkie `ask` path.
 
         # Remember the profile the room had before (possibly from a
         # previous pipeline that got torn down on disconnect). Default
