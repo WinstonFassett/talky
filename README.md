@@ -25,7 +25,7 @@ talky say "Hello world"           # Test voice output
 - `talky openclaw` - OpenClaw assistant
 - `talky moltis` - Moltis assistant  
 - `talky pi` - Pi coding assistant
-- Opens browser at `localhost:7860/client` for voice chat
+- Opens browser at `localhost:9090` for voice chat
 
 **Change Voice**
 - `talky moltis -v kokoro-uk-george` - Use different voice
@@ -34,9 +34,9 @@ talky say "Hello world"           # Test voice output
 **List Options**
 - `talky ls` - See all available voices and profiles
 
-**MCP Server** (for Claude Desktop/Claude Code)
-- `talky mcp` - Voice integration for Claude
-- `talky mcp -v google-puck` - Use specific voice
+**Daemon / MCP** (for Claude Desktop/Claude Code)
+- `talky daemon` - Start the talky daemon (listens on 9090, serves browser UI + MCP tools)
+- Any daemon-dependent command (e.g. `talky openclaw`) auto-spawns the daemon if it isn't running
 
 ## Documentation
 

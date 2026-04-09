@@ -533,7 +533,7 @@ def _build_app():
             Mount("/", app=StaticFiles(directory=str(client_dist), html=True)),
         )
     elif dev_mode:
-        logger.info("Dev mode: skipping static frontend (run Vite at :5173 for HMR)")
+        logger.info("Dev mode: skipping static frontend (run Vite dev server for HMR)")
     else:
         logger.warning(
             f"No built frontend at {client_dist} — run 'npm run build' in client/"

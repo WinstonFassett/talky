@@ -2,7 +2,7 @@
 
 ## Overview
 
-Pi is a coding agent with an extension system. This integration adds voice conversation capabilities to Pi via a **Pi extension** that connects to the **Talky MCP server**. Pi is the main application; Talky provides voice I/O as a service.
+Pi is a coding agent with an extension system. This integration adds voice conversation capabilities to Pi via a **Pi extension** that connects to the **talky daemon**. Pi is the main application; Talky provides voice I/O as a service.
 
 This is the reverse of most Talky integrations: instead of Talky starting an LLM subprocess, Pi starts Talky and uses it for voice.
 
@@ -10,17 +10,18 @@ This is the reverse of most Talky integrations: instead of Talky starting an LLM
 
 ```mermaid
 graph TB
-    Pi[Pi Agent + Talky Extension] -->|MCP over HTTP| MCP[MCP Server port 9090]
-    MCP -->|IPC| Pipeline[Voice Pipeline WebRTC port 7860]
-    Browser[WebRTC Audio Client] <-->|WebRTC| Pipeline
+    Pi[Pi Agent + Talky Extension] -->|MCP over HTTP| Daemon[Talky Daemon :9090]
+    Browser[WebRTC Audio Client] <-->|WebRTC| Daemon
 ```
+
+The talky daemon is a single process on :9090 that embeds the WebRTC handler, serves the browser UI from `client/dist/`, hosts FastMCP tools, and owns the in-process voice pipeline. One port, one process.
 
 **Components:**
 - **Pi extension** (`pi-extension/index.ts`) — Registers voice tools, manages MCP client
-- **Talky MCP server** (`talky mcp`) — Runs voice pipeline, exposes `start/speak/listen/stop` tools
-- **Browser** — Connects to WebRTC endpoint for audio I/O
+- **Talky daemon** (`talky daemon`) — Runs the voice pipeline + WebRTC + FastMCP tools
+- **Browser** — Connects to the daemon for WebRTC audio I/O (served at `http://localhost:9090`)
 
-**Protocol:** The extension speaks MCP streamable-HTTP (JSON-RPC 2.0 over HTTP POST) to the Talky MCP server on port 9090. Responses can be JSON or SSE. The `listen()` call is long-polling — it blocks until the user speaks.
+**Protocol:** The extension speaks MCP streamable-HTTP (JSON-RPC 2.0 over HTTP POST) to the talky daemon on port 9090. Responses can be JSON or SSE. The `convo_listen()` call is long-polling — it blocks until the user speaks.
 
 ## Installation
 
@@ -43,7 +44,7 @@ Or add to `~/.pi/agent/settings.json`:
 ```
 
 ### Prerequisites
-- `talky` CLI installed and in PATH (runs the MCP server)
+- `talky` CLI installed and in PATH (runs the talky daemon)
 - A browser (for WebRTC audio connection)
 
 ## Usage
@@ -63,9 +64,9 @@ start voice
 ```
 
 ### What happens
-1. Extension checks if Talky MCP server is running, starts it if not (`talky mcp`)
-2. Calls MCP `start()` to initialize the voice pipeline
-3. Opens your browser to `http://localhost:7860` for WebRTC audio
+1. Extension checks if the talky daemon is running, starts it if not (`talky daemon`)
+2. Calls MCP `start_convo()` to initialize the voice pipeline
+3. Opens your browser to `http://localhost:9090` for WebRTC audio
 4. Injects voice system prompt so Pi uses speak/listen tools
 5. Pi greets you and starts the conversation loop
 
@@ -87,8 +88,9 @@ Say "goodbye" or "stop" during the conversation. Pi will confirm, then call `voi
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TALKY_MCP_PORT` | `9090` | Port for Talky MCP server |
-| `TALKY_WEBRTC_PORT` | `7860` | Port for WebRTC audio endpoint |
+| `TALKY_MCP_PORT` | `9090` | Port for the talky daemon (MCP + WebRTC + browser UI, all one port) |
+
+> Note: pre-5098 there was a separate `TALKY_WEBRTC_PORT` for the legacy pipecat standalone. That port is gone. `pi-extension/index.ts` still has a stale default — tracked in ticket `f9d2`.
 
 ## Extension Details
 
@@ -151,7 +153,7 @@ Tests verify:
 
 ### Voice never connects
 **Symptom:** Browser opens but no audio
-**Fix:** Check that `talky mcp` started correctly. Look for errors in the terminal where Pi is running.
+**Fix:** Check that `talky daemon` started correctly. Look for errors in the terminal where Pi is running, or tail `~/.talky/run/mcp-daemon.log`.
 
 ### Extension not loading
 **Symptom:** No `/voice` command available
@@ -165,4 +167,4 @@ Tests verify:
 
 - [Pi Extension Docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
 - [MCP Streamable HTTP Spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http)
-- [Talky MCP Server](../mcp-server/)
+- [Talky Daemon](../mcp-server/)

@@ -1,14 +1,16 @@
 # Claude Code Integration with Talky
 
-This guide shows how to set up Claude Code to work with Talky's voice capabilities through the Talky MCP server.
+This guide shows how to set up Claude Code to work with Talky's voice capabilities through the talky daemon.
 
 ## Architecture
 
 ```
-Claude Code ──MCP over HTTP──► Talky MCP Server ──IPC──► Voice Pipeline (WebRTC)
-                                                    ▲
-                                            Browser connects for audio
+Claude Code ──MCP over HTTP──► Talky Daemon (:9090) ──► Voice Pipeline (WebRTC, in-process)
+                                        ▲
+                                Browser connects for audio at http://localhost:9090
 ```
+
+The talky daemon is a single process: WebRTC, voice pipeline, browser UI, FastMCP tools — all on :9090. One port, one process.
 
 ## Setup Steps
 
@@ -24,17 +26,17 @@ npm install -g @anthropic-ai/claude-code
 claude --version
 ```
 
-### 2. Start Talky MCP Server
+### 2. Start the Talky Daemon
 
 ```bash
-# Start the MCP server (runs in background)
-talky mcp
+# Start the daemon (listens on :9090)
+talky daemon
 
 # Or let talky claude start it automatically
 talky claude
 ```
 
-### 3. Connect Claude to Talky MCP Server
+### 3. Connect Claude to the Talky Daemon
 
 ```bash
 # Connect Claude to Talky MCP server
@@ -84,7 +86,7 @@ I want to have a voice conversation
 
 If you prefer manual setup:
 
-1. **Start MCP server**: `talky mcp`
+1. **Start MCP server**: `talky daemon`
 2. **Install skill**: `./scripts/install-claude-skill.sh`
 3. **Connect Claude**: `claude mcp add --transport http talky http://localhost:9090/mcp`
 4. **Run Claude**: `claude`
@@ -128,12 +130,13 @@ voice_listen()
 
 ## Configuration
 
-### MCP Server Settings
+### Daemon settings
 
-The Talky MCP server runs on:
+The talky daemon runs on:
 - **Port**: 9090
-- **Endpoint**: `/mcp`
-- **Transport**: HTTP
+- **MCP endpoint**: `/mcp`
+- **Browser UI**: `/` (served from `client/dist/`)
+- **Transport**: HTTP (streamable)
 
 ### Voice Profile
 
@@ -164,26 +167,25 @@ talky claude --dir /path/to/project
 
 If you see "Voice agent process has stopped":
 
-1. Check if MCP server is running: `lsof -i :9090`
-2. Check if WebRTC server is running: `lsof -i :7860`
-3. Restart MCP server: `talky mcp`
-4. Try again: `talky claude`
+1. Check if the talky daemon is running: `lsof -i :9090`
+2. Restart the daemon: `talky kill && talky daemon`
+3. Try again: `talky claude`
 
 ### MCP Connection Issues
 
-If Claude can't connect to the MCP server:
+If Claude can't connect to the daemon:
 
-1. Verify server is running: `curl http://localhost:9090/mcp`
+1. Verify the daemon is running: `curl http://localhost:9090/mcp`
 2. Check MCP configuration: `claude mcp list`
 3. Remove and re-add: `claude mcp remove talky && claude mcp add --transport http talky http://localhost:9090/mcp`
 
 ### Audio Not Working
 
-If you can't hear audio or microphone isn't working:
+If you can't hear audio or the microphone isn't working:
 
 1. Check browser permissions for microphone
-2. Ensure WebRTC server is running on port 7860
-3. Check terminal for error messages from MCP server
+2. Ensure the talky daemon is running on port 9090
+3. Tail `~/.talky/run/mcp-daemon.log` for errors
 4. Try refreshing the browser window
 
 ### Skill Not Found
@@ -205,15 +207,15 @@ You can modify the Talky skill at `~/.claude/skills/talky/SKILL.md` to customize
 
 ### Multiple Projects
 
-Each project can have its own MCP configuration. The Talky MCP server will work across all projects once connected.
+Each project can have its own MCP configuration. The talky daemon will work across all projects once connected.
 
-### Manual MCP Server Management
+### Manual daemon management
 
-If you prefer to manage the MCP server separately:
+If you prefer to manage the daemon separately:
 
 ```bash
 # Start server manually
-talky mcp &
+talky daemon &
 
 # Connect Claude
 claude mcp add --transport http talky http://localhost:9090/mcp
@@ -221,8 +223,8 @@ claude mcp add --transport http talky http://localhost:9090/mcp
 # Use Claude normally
 claude
 
-# Stop server when done
-pkill -f "talky mcp"
+# Stop the daemon when done
+talky kill
 ```
 
 ## Architecture Details
@@ -230,21 +232,20 @@ pkill -f "talky mcp"
 ### Components
 
 1. **Claude Code**: AI coding assistant with MCP support
-2. **Talky MCP Server**: Exposes voice tools via MCP protocol
-3. **Voice Pipeline**: WebRTC-based audio processing (TTS/STT)
-4. **Browser**: WebRTC client for audio I/O
+2. **Talky Daemon**: Single process on :9090 — MCP tools, voice pipeline, WebRTC, browser UI
+3. **Browser**: WebRTC client for audio I/O
 
 ### Data Flow
 
-1. User speaks → Browser captures audio → WebRTC → Voice Pipeline
-2. Voice Pipeline transcribes → MCP Server → Claude Code
-3. Claude Code responds → MCP Server → Voice Pipeline
-4. Voice Pipeline synthesizes → WebRTC → Browser plays audio
+1. User speaks → Browser captures audio → WebRTC → in-process voice pipeline
+2. Pipeline transcribes → FastMCP tool result → Claude Code
+3. Claude Code responds → `convo_speak` → pipeline → TTS
+4. TTS → WebRTC → Browser plays audio
 
 ### Security
 
-- MCP server runs locally (localhost:9090)
-- WebRTC connection is peer-to-peer
+- Daemon runs locally (localhost:9090)
+- WebRTC connection is peer-to-peer within your machine
 - No audio data leaves your local network
 - MCP tools require explicit permission in Claude Code
 
