@@ -1,8 +1,11 @@
-# LLM Backends — each needs service_class (dotted import path), config
+# LLM Backends — each needs service_class (dotted import path), config.
+# Optional `greeting` is a fixed TTS line spoken when this backend becomes
+# the active profile (ticket 8c9d). Omit for silent switch-in.
 llm_backends:
   openclaw:
     description: "OpenClaw - OpenAI-compatible LLM"
     service_class: "server.backends.openclaw.OpenClawLLMService"
+    greeting: "Hey, OpenClaw here. Ready when you are."
     config:
       model: "gpt-4o"
       api_key: ""  # Will be loaded from credentials
@@ -10,6 +13,7 @@ llm_backends:
   moltis:
     description: "Moltis - Anthropic Claude"
     service_class: "server.backends.moltis.MoltisLLMService"
+    greeting: "Moltis here, what's up?"
     config:
       model: "claude-3-5-sonnet-20241022"
       api_key: ""  # Will be loaded from credentials
@@ -17,6 +21,7 @@ llm_backends:
   pi:
     description: "Pi - Coding Agent"
     service_class: "server.backends.pi.PiLLMService"
+    greeting: "Pi online."
     config:
       model: "claude-3-5-sonnet-20241022"
       api_key: ""  # Will be loaded from credentials

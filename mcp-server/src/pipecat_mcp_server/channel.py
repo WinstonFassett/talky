@@ -404,6 +404,38 @@ class VoiceChannel:
         self._active_profile = profile_name
         logger.info(f"VoiceChannel: active profile → {profile_name!r}")
 
+        # Auto-greeting (ticket 8c9d). If the newly active backend has a
+        # ``greeting`` configured, speak it so the user hears a presence
+        # signal instead of silence. MCPDriver is always silent — the
+        # joining agent is responsible for its own hello.
+        greeting = self._greeting_for_profile(profile_name)
+        if greeting:
+            try:
+                await self.speak(greeting)
+                logger.info(f"VoiceChannel: greeted with {greeting!r}")
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"VoiceChannel: greeting failed for {profile_name!r}: {e}")
+
+    def _greeting_for_profile(self, profile_name: str) -> Optional[str]:
+        """Look up the optional fixed-string greeting for a profile.
+
+        Returns ``None`` for the MCP driver profile (agent-driven), for
+        unknown profiles, or for profiles without a ``greeting`` field.
+        Ticket 8c9d.
+        """
+        if profile_name == self.MCP_DRIVER_PROFILE:
+            return None
+        try:
+            from shared.profile_manager import get_profile_manager
+
+            backend = get_profile_manager().get_llm_backend(profile_name)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"VoiceChannel: could not read backend for greeting lookup: {e}")
+            return None
+        if backend is None:
+            return None
+        return getattr(backend, "greeting", None)
+
     # ── attach / detach ─────────────────────────────────────────────────────
 
     async def attach(self, connection: SmallWebRTCConnection) -> None:

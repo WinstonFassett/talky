@@ -25,6 +25,10 @@ class LLMBackend:
     description: str
     service_class: str
     config: Dict[str, Any]
+    # Optional fixed-string greeting spoken via TTS when this backend
+    # becomes the active profile. ``None`` means silent — the previous
+    # behavior. Ticket 8c9d.
+    greeting: Optional[str] = None
 
 
 @dataclass
@@ -147,6 +151,7 @@ class ProfileManager:
                                 **core_backends[name]["config"],
                                 **user_config.get("config", {})
                             },
+                            greeting=user_config.get("greeting", core_backends[name].get("greeting")),
                         )
                     else:
                         # Add new user-defined backend
@@ -155,6 +160,7 @@ class ProfileManager:
                             description=user_config.get("description", ""),
                             service_class=user_config.get("service_class", ""),
                             config=user_config.get("config", {}),
+                            greeting=user_config.get("greeting"),
                         )
             else:
                 # No user extensions - use core (+ defaults) backends
@@ -164,8 +170,9 @@ class ProfileManager:
                         description=config["description"],
                         service_class=config["service_class"],
                         config=config["config"],
+                        greeting=config.get("greeting"),
                     )
-                        
+
         except FileNotFoundError:
             # No user extensions file - use core (+ defaults) backends
             for name, config in core_backends.items():
@@ -174,6 +181,7 @@ class ProfileManager:
                     description=config["description"],
                     service_class=config["service_class"],
                     config=config["config"],
+                    greeting=config.get("greeting"),
                 )
         except Exception as e:
             logger.warning(f"Error loading user LLM backends: {e}. Using core backends only.")
@@ -184,6 +192,7 @@ class ProfileManager:
                     description=config["description"],
                     service_class=config["service_class"],
                     config=config["config"],
+                    greeting=config.get("greeting"),
                 )
 
     def _load_voice_backends(self):
