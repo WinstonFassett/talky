@@ -12,6 +12,7 @@ import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 import type { TransportType } from '../config';
 import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
+import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 
 // Pre-load the drop cue so it plays instantly on unexpected disconnect.
@@ -111,7 +112,7 @@ export const App = ({
   useEffect(() => {
     if (transportState !== 'connected' && transportState !== 'ready') return;
 
-    let cleanup: (() => void) | null = null;
+    let cleanupFn: (() => void) | null = null;
     let cancelled = false;
 
     const attach = () => {
@@ -126,21 +127,25 @@ export const App = ({
         }
       };
       dc.addEventListener('message', handler);
-      cleanup = () => dc.removeEventListener('message', handler);
+      cleanupFn = () => dc.removeEventListener('message', handler);
       return true;
     };
 
     // Try immediately, then poll briefly if not ready yet.
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
     if (!attach() && !cancelled) {
-      const poll = setInterval(() => {
-        if (cancelled || attach()) clearInterval(poll);
+      pollInterval = setInterval(() => {
+        if (cancelled || attach()) {
+          if (pollInterval) clearInterval(pollInterval);
+        }
       }, 200);
-      const pollCleanup = () => clearInterval(poll);
-      const origCleanup = cleanup;
-      cleanup = () => { pollCleanup(); origCleanup?.(); };
     }
 
-    return () => { cancelled = true; cleanup?.(); };
+    return () => {
+      cancelled = true;
+      if (pollInterval) clearInterval(pollInterval);
+      cleanupFn?.();
+    };
   }, [client, transportState]);
 
   useEffect(() => {
@@ -193,6 +198,7 @@ export const App = ({
       <div className="flex items-center justify-between gap-4 p-4">
         <div className="flex items-center gap-4">
           <BotVisualizer client={client} />
+          <LLMProfileSelect />
           <VoiceProfileSelect client={client} />
           {showTransportSelector ? (
             <TransportSelect

@@ -198,6 +198,10 @@ class VoiceChannel:
         # a pipeline on top of each other.
         self._attach_lock: asyncio.Lock = asyncio.Lock()
 
+        # Health state per backend — populated by _health_poll_loop.
+        self._health: dict[str, bool] = {}
+        self._health_task: Optional[asyncio.Task] = None
+
     # ── warmup ──────────────────────────────────────────────────────────────
 
     def warmup(self) -> None:
@@ -499,6 +503,7 @@ class VoiceChannel:
                 f"VoiceChannel: profile {profile_name!r} stored as desired "
                 "(no live pipeline — will apply on next browser connect)"
             )
+            await self._emit_profile_changed(profile_name)
             return
 
         # Live path: queue the switch frame.
@@ -514,6 +519,7 @@ class VoiceChannel:
         await self._pipeline_task.queue_frames([ManuallySwitchServiceFrame(service=service)])
         self._active_profile = profile_name
         logger.info(f"VoiceChannel: active profile → {profile_name!r}")
+        await self._emit_profile_changed(profile_name)
 
         # Auto-greeting (ticket 8c9d). If the newly active backend has a
         # ``greeting`` configured, speak it so the user hears a presence
@@ -526,6 +532,131 @@ class VoiceChannel:
                 logger.info(f"VoiceChannel: greeted with {greeting!r}")
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"VoiceChannel: greeting failed for {profile_name!r}: {e}")
+
+    async def _emit_profile_changed(self, profile_name: str) -> None:
+        """Push a profileChanged event to the SSE bus."""
+        from pipecat_mcp_server.event_bus import event_bus
+
+        await event_bus.emit("profileChanged", {
+            "type": "llm",
+            "profile": profile_name,
+        })
+
+    def profiles_info(self) -> list[dict]:
+        """Return configured LLM profiles with metadata + health.
+
+        Works without a live pipeline — reads from config. Each entry:
+        ``{"name": str, "label": str, "description": str, "active": bool,
+        "healthy": bool | None}``.
+        """
+        from shared.profile_manager import get_profile_manager
+
+        active = self._active_profile
+        profiles: list[dict] = [
+            {
+                "name": self.MCP_DRIVER_PROFILE,
+                "label": "MCP Mode",
+                "description": "External agent drives the conversation",
+                "active": active == self.MCP_DRIVER_PROFILE,
+                "healthy": self._health.get(self.MCP_DRIVER_PROFILE),
+            }
+        ]
+        try:
+            pm = get_profile_manager()
+            for name, desc in pm.list_llm_backends().items():
+                profiles.append({
+                    "name": name,
+                    "label": name,
+                    "description": desc,
+                    "active": active == name,
+                    "healthy": self._health.get(name),
+                })
+        except Exception:  # noqa: BLE001
+            pass
+        return profiles
+
+    # ── health polling ──────────────────────────────────────────────────────
+
+    def start_health_polling(self, interval: float = 30.0) -> None:
+        """Launch background health polling. Call once at lifespan startup."""
+        if self._health_task is not None:
+            return
+        self._health_task = asyncio.ensure_future(self._health_poll_loop(interval))
+
+    async def _health_poll_loop(self, interval: float) -> None:
+        """Periodically probe each configured backend and emit healthChanged."""
+        from pipecat_mcp_server.event_bus import event_bus
+
+        while True:
+            try:
+                for name in self.available_profiles():
+                    healthy = await self._check_backend_health(name)
+                    prev = self._health.get(name)
+                    self._health[name] = healthy
+                    if prev != healthy:
+                        await event_bus.emit("healthChanged", {
+                            "backend": name,
+                            "healthy": healthy,
+                        })
+            except asyncio.CancelledError:
+                break
+            except Exception:  # noqa: BLE001
+                logger.debug("Health poll iteration failed", exc_info=True)
+            await asyncio.sleep(interval)
+
+    async def _check_backend_health(self, name: str) -> bool:
+        """Probe a single backend. Returns True if reachable."""
+        if name == self.MCP_DRIVER_PROFILE:
+            # MCP driver is always "healthy" — it's a local passthrough.
+            return True
+
+        from shared.profile_manager import get_profile_manager
+
+        try:
+            pm = get_profile_manager()
+            backend = pm.get_llm_backend(name)
+            if backend is None:
+                return False
+
+            # Quick TCP connect check to the backend's gateway/endpoint.
+            url = self._backend_url(name, backend)
+            if url is None:
+                return True  # No URL to check — assume healthy.
+
+            return await self._tcp_probe(url)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _backend_url(self, name: str, backend: Any) -> Optional[str]:
+        """Extract the gateway/endpoint URL from a backend config."""
+        config = getattr(backend, "config", {}) or {}
+        # Backends store their URL under various keys.
+        for key in ("gateway_url", "endpoint", "url", "base_url"):
+            if key in config and config[key]:
+                return config[key]
+        return None
+
+    @staticmethod
+    async def _tcp_probe(url: str, timeout: float = 3.0) -> bool:
+        """Try a TCP connect to the host:port in a URL."""
+        import urllib.parse
+
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port
+        if port is None:
+            port = 443 if parsed.scheme in ("https", "wss") else 80
+
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port),
+                timeout=timeout,
+            )
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def _greeting_for_profile(self, profile_name: str) -> Optional[str]:
         """Look up the optional fixed-string greeting for a profile.

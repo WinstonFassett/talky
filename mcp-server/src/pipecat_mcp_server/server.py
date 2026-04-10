@@ -494,19 +494,36 @@ def _build_webrtc_routes():
         )
 
     async def handle_get_profile(request: Request):  # noqa: ARG001
-        """GET /api/profile — return current active profile + available list."""
-        st = voice_channel.status()
-        # Fall back to the full list from the profile manager if no
-        # pipeline is live (status's available_llm_profiles is pipeline-bound).
-        available = st.get("available_llm_profiles") or voice_channel.available_profiles()
+        """GET /api/profile — legacy compat for CLI (old shape)."""
+        info = voice_channel.profiles_info()
+        active = next((p["name"] for p in info if p["active"]), None)
+        available = [p["name"] for p in info]
         return JSONResponse({
-            "active": st.get("active_llm_profile"),
+            "active": active,
             "available": available,
-            "live": st.get("live", False),
+            "live": voice_channel.is_live(),
         })
 
     async def handle_set_profile(request: Request):
-        """POST /api/profile — switch active LLM profile."""
+        """POST /api/profile — legacy compat, delegates to switch handler."""
+        return await handle_switch_profile(request)
+
+    async def handle_get_profiles(request: Request):  # noqa: ARG001
+        """GET /api/profiles — list configured LLM profiles + active + live status.
+
+        Works pre-connect (reads from config). Ticket 73b9.
+        """
+        return JSONResponse({
+            "profiles": voice_channel.profiles_info(),
+            "live": voice_channel.is_live(),
+        })
+
+    async def handle_switch_profile(request: Request):
+        """POST /api/profiles/switch — switch active LLM profile.
+
+        Accepts ``?profile=NAME`` or JSON ``{"profile": "NAME"}``.
+        Ticket 73b9.
+        """
         profile: Optional[str] = request.query_params.get("profile")
         if profile is None:
             try:
@@ -533,6 +550,48 @@ def _build_webrtc_routes():
             "active": profile,
         })
 
+    async def handle_events(request: Request):
+        """GET /api/events — SSE stream of daemon state changes.
+
+        Typed events: profileChanged, healthChanged.
+        Single channel for all consumers. Ticket 73b9 / 2ed2.
+        """
+        from starlette.responses import StreamingResponse
+
+        from pipecat_mcp_server.event_bus import event_bus
+
+        async def event_generator():
+            async with event_bus.subscribe() as queue:
+                # Send initial state as a synthetic event so clients
+                # don't need a separate REST call on connect.
+                from pipecat_mcp_server.event_bus import Event
+
+                init = Event(
+                    type="init",
+                    data={
+                        "profiles": voice_channel.profiles_info(),
+                        "live": voice_channel.is_live(),
+                    },
+                )
+                yield init.sse()
+
+                while True:
+                    try:
+                        event = await queue.get()
+                        yield event.sse()
+                    except asyncio.CancelledError:
+                        break
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     routes = [
         Route("/start", handle_start, methods=["POST"]),
         Route("/api/offer", handle_offer, methods=["POST"]),
@@ -548,6 +607,10 @@ def _build_webrtc_routes():
             methods=["PATCH"],
         ),
         Route("/status", handle_status, methods=["GET"]),
+        Route("/api/profiles", handle_get_profiles, methods=["GET"]),
+        Route("/api/profiles/switch", handle_switch_profile, methods=["POST"]),
+        Route("/api/events", handle_events, methods=["GET"]),
+        # Legacy compat — old CLI may still hit /api/profile.
         Route("/api/profile", handle_get_profile, methods=["GET"]),
         Route("/api/profile", handle_set_profile, methods=["POST"]),
     ]
@@ -588,6 +651,9 @@ def _build_app():
             # from starting — log and continue. Convo tools will fail with a
             # clear error if the channel isn't warm.
             logger.error(f"VoiceChannel warmup failed: {e}")
+
+        # Start background health polling (ticket 73b9).
+        voice_channel.start_health_polling(interval=30.0)
 
         async with _original_lifespan(app):
             try:
