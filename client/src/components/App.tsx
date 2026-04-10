@@ -41,6 +41,11 @@ export const App = ({
 
   const [devicesReady, setDevicesReady] = useState(false);
 
+  // Track whether we've ever been connected — the initial state is
+  // "disconnected" before the user connects, and we must not fire
+  // the drop cue for that initial state.
+  const hasBeenConnected = useRef(false);
+
   const transportState = usePipecatClientTransportState();
 
   // Wrap handleDisconnect to flag user-initiated disconnects so the
@@ -51,21 +56,61 @@ export const App = ({
   }, [handleDisconnect]);
 
   // Play drop cue on unexpected disconnect (ticket 6b60 problem B).
-  // "Unexpected" = transport went to disconnected/error without the
-  // user clicking the disconnect button.
+  // Two detection paths:
+  //   1. Transport state → disconnected/error (pipecat SDK, can be slow)
+  //   2. HTTP heartbeat to the daemon (fast, 2s detection)
+  // Either one fires the cue if the user didn't click disconnect.
+  const cuePlayedForThisSession = useRef(false);
+
+  const playDropCue = useCallback(() => {
+    if (cuePlayedForThisSession.current || userInitiatedDisconnect.current) return;
+    if (!hasBeenConnected.current) return;
+    cuePlayedForThisSession.current = true;
+    dropCueAudio.currentTime = 0;
+    dropCueAudio.play().catch((err) => {
+      console.warn('Drop cue play failed (autoplay policy?):', err);
+    });
+  }, []);
+
+  // Path 1: transport state change (slow but authoritative).
   useEffect(() => {
+    if (transportState === 'connected' || transportState === 'ready') {
+      hasBeenConnected.current = true;
+      userInitiatedDisconnect.current = false;
+      cuePlayedForThisSession.current = false;
+    }
     if (
+      hasBeenConnected.current &&
       (transportState === 'disconnected' || transportState === 'error') &&
       !userInitiatedDisconnect.current
     ) {
-      dropCueAudio.currentTime = 0;
-      dropCueAudio.play().catch(() => {});
+      playDropCue();
     }
-    // Reset the flag when we're back to a non-terminal state.
-    if (transportState === 'connected' || transportState === 'ready') {
-      userInitiatedDisconnect.current = false;
-    }
-  }, [transportState]);
+  }, [transportState, playDropCue]);
+
+  // Path 2: HTTP heartbeat (fast). While connected, ping the daemon
+  // every 2s. Two consecutive failures → fire the cue immediately
+  // instead of waiting for ICE to notice.
+  useEffect(() => {
+    if (transportState !== 'connected' && transportState !== 'ready') return;
+
+    let failures = 0;
+    let alive = true;
+    const interval = setInterval(async () => {
+      if (!alive) return;
+      try {
+        const r = await fetch('/status', { method: 'HEAD', signal: AbortSignal.timeout(1500) });
+        if (r.ok) { failures = 0; return; }
+      } catch { /* network error or timeout */ }
+      failures++;
+      if (failures >= 2 && alive) {
+        alive = false;
+        playDropCue();
+      }
+    }, 2000);
+
+    return () => { alive = false; clearInterval(interval); };
+  }, [transportState, playDropCue]);
 
   useEffect(() => {
     if (client) {
