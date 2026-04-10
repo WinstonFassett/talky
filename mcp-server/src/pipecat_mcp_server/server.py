@@ -320,6 +320,64 @@ async def request_leave() -> dict:
     return await voice_channel.request_leave()
 
 
+@mcp.tool()
+async def list_profiles() -> dict:
+    """List available talky profiles with health and active status.
+
+    Returns the same data as GET /api/profiles — profile names,
+    descriptions, health status, and which is currently active.
+    """
+    return {
+        "profiles": voice_channel.profiles_info(),
+        "live": voice_channel.is_live(),
+    }
+
+
+@mcp.tool()
+async def switch_profile(profile: str) -> dict:
+    """Switch the active talky profile.
+
+    Args:
+        profile: The profile name to switch to (e.g. 'openclaw', 'moltis', '__mcp__').
+
+    Returns:
+        Dict with status and active profile name.
+    """
+    try:
+        await voice_channel.switch_to_profile(profile)
+    except (RuntimeError, ValueError) as e:
+        return {"error": str(e)}
+    return {"status": "ok", "active": profile}
+
+
+@mcp.tool()
+async def list_voices() -> dict:
+    """List available voice profiles with active status.
+
+    Returns the same data as GET /api/voices.
+    """
+    return {"voices": voice_channel.voices_info()}
+
+
+@mcp.tool()
+async def switch_voice(voice: str) -> dict:
+    """Switch the active voice profile.
+
+    Requires a live pipeline (browser connected).
+
+    Args:
+        voice: The voice profile name to switch to.
+
+    Returns:
+        Dict with status and active voice name.
+    """
+    try:
+        await voice_channel.switch_voice(voice)
+    except (RuntimeError, ValueError) as e:
+        return {"error": str(e)}
+    return {"status": "ok", "active": voice}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Signal / port management (ticket 727e)
 # ──────────────────────────────────────────────────────────────────────────────

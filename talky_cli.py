@@ -426,6 +426,105 @@ def cmd_profile(args):
         webbrowser.open(client_url)
 
 
+def cmd_voice(args):
+    """Show or switch the active voice profile in the running talky server."""
+    import urllib.error
+    import urllib.request
+
+    if not ensure_daemon():
+        sys.exit(1)
+
+    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
+    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
+    base_url = f"http://{host}:{port}"
+
+    name = getattr(args, "name", None)
+
+    if name is None:
+        # GET mode: list available + show active
+        url = f"{base_url}/api/voices"
+        try:
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.URLError as e:
+            print(f"❌ could not reach talky daemon at {base_url}: {e}")
+            sys.exit(1)
+
+        voices = data.get("voices") or []
+        active = next((v["name"] for v in voices if v.get("active")), None)
+        print(f"active voice: {active or '(none)'}")
+        if voices:
+            print("available voices:")
+            for v in voices:
+                marker = "*" if v.get("active") else " "
+                print(f"  {marker} {v['name']}  — {v.get('description', '')}")
+        else:
+            print("no voices available")
+        return
+
+    # POST mode: switch voice
+    url = f"{base_url}/api/voices/switch"
+    body = json.dumps({"profile": name}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body, method="POST",
+        headers={"content-type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode("utf-8"))
+            print(f"❌ {err.get('error', e.reason)}")
+        except Exception:
+            print(f"❌ HTTP {e.code}: {e.reason}")
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"❌ could not reach talky daemon at {base_url}: {e}")
+        sys.exit(1)
+
+    print(f"✅ voice: {data.get('active', name)}")
+
+
+def cmd_talkystatus(args):  # noqa: ARG001
+    """Show daemon status — active profile, voice, health."""
+    import urllib.error
+    import urllib.request
+
+    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
+    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
+    base_url = f"http://{host}:{port}"
+
+    # Fetch profiles + voices
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/profiles", timeout=3) as resp:
+            profiles_data = json.loads(resp.read().decode("utf-8"))
+        with urllib.request.urlopen(f"{base_url}/api/voices", timeout=3) as resp:
+            voices_data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        print(f"❌ daemon not reachable at {base_url}: {e}")
+        sys.exit(1)
+
+    live = profiles_data.get("live", False)
+    profiles = profiles_data.get("profiles", [])
+    voices = voices_data.get("voices", [])
+
+    active_profile = next((p["name"] for p in profiles if p.get("active")), None)
+    active_voice = next((v["name"] for v in voices if v.get("active")), None)
+
+    print(f"pipeline: {'live' if live else 'not live'}")
+    print(f"active profile: {active_profile or '(none)'}")
+    print(f"active voice: {active_voice or '(none)'}")
+    print()
+    print("profiles:")
+    for p in profiles:
+        marker = "*" if p.get("active") else " "
+        health = "●" if p.get("healthy") else ("○" if p.get("healthy") is False else "?")
+        print(f"  {marker} {health} {p['name']}  — {p.get('description', '')}")
+    print()
+    print(f"voices: {len(voices)} available")
+
+
 def cmd_daemon(args):
     """Ensure the talky daemon is running, or run it in foreground with --foreground.
 
@@ -544,7 +643,7 @@ def main():
     # Shortcut: treat first non-option, non-command arg as a profile name.
     # `talky openclaw` → `talky profile openclaw`. `cmd_profile` ensures
     # the daemon is up.
-    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "pi", "claude", "transcribe", "kill", "profile"}
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "pi", "claude", "transcribe", "kill", "profile", "voice", "status"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "profile")
@@ -619,6 +718,25 @@ def main():
         help="Profile name to switch to (e.g. openclaw, moltis, __mcp__). Omit to list.",
     )
     profile_parser.set_defaults(func=cmd_profile)
+
+    # === voice subcommand ===
+    voice_parser = subparsers.add_parser(
+        "voice",
+        help="Show or switch the active voice profile in the running daemon",
+    )
+    voice_parser.add_argument(
+        "name",
+        nargs="?",
+        help="Voice profile name to switch to. Omit to list.",
+    )
+    voice_parser.set_defaults(func=cmd_voice)
+
+    # === status subcommand ===
+    status_parser = subparsers.add_parser(
+        "status",
+        help="Show daemon status — profile, voice, health",
+    )
+    status_parser.set_defaults(func=cmd_talkystatus)
 
     # === ls subcommand ===
     ls_parser = subparsers.add_parser("ls", help="List profiles")
