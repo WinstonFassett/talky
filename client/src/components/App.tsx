@@ -14,6 +14,7 @@ import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
+import { TranscriptExport } from './TranscriptExport';
 
 // Pre-load the drop cue so it plays instantly on unexpected disconnect.
 // The WAV is generated from shared/audio_cues.stop_cue_pcm (three
@@ -200,6 +201,7 @@ export const App = ({
           <BotVisualizer client={client} />
           <LLMProfileSelect />
           <VoiceProfileSelect />
+          <TranscriptExport />
           {showTransportSelector ? (
             <TransportSelect
               transportType={transportType}
