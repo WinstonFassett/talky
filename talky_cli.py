@@ -26,10 +26,18 @@ sys.path.insert(0, str(server_dir))
 
 
 def _kill_pids_on_port(port: int) -> bool:
-    """Kill anything bound to the given TCP port. Returns True if anything was killed."""
+    """Kill the process LISTENING on the given TCP port.
+
+    Uses ``-sTCP:LISTEN`` so we only hit the server, not any connected
+    clients (e.g. the Claude Code MCP HTTP transport). Without this
+    filter, ``lsof -ti :PORT`` returns both the server AND every client
+    with an open connection, and ``kill -9`` on the client PID kills
+    the agent harness that invoked ``talky kill`` — causing the Bash
+    tool to hang indefinitely. Ticket a96c.
+    """
     try:
         result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
+            ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
         )
@@ -213,7 +221,7 @@ def cmd_kill(args):
 
     # Verify nothing snuck back in.
     time.sleep(0.3)
-    result = subprocess.run(["lsof", "-ti", ":9090"], capture_output=True, text=True)
+    result = subprocess.run(["lsof", "-ti", ":9090", "-sTCP:LISTEN"], capture_output=True, text=True)
     if result.returncode == 0 and result.stdout.strip():
         print("port 9090: STILL HELD after kill -9", file=sys.stderr)
         return 1
