@@ -824,6 +824,36 @@ class VoiceChannel:
             f"active={self.MCP_DRIVER_PROFILE}"
         )
 
+        # Pong responder — echo a JSON pong on the data channel whenever
+        # the client sends a "ping". The client tracks pong arrival to
+        # detect server death faster than ICE can. Sent as JSON so the
+        # client's handleMessage doesn't error on parse. Ticket 6b60.
+        #
+        # We can't register a second @_pc.on("datachannel") handler
+        # because pipecat's connection already consumed that event by
+        # the time _build_and_start_pipeline runs. Instead, add a
+        # second on("message") listener to the data channel after it's
+        # been assigned by the connection's own datachannel handler.
+        # Poll briefly for _data_channel to appear (it's set async
+        # when the browser creates the channel).
+        async def _setup_pong_responder():
+            for _ in range(50):  # wait up to 5s
+                dc = getattr(connection, "_data_channel", None)
+                if dc is not None:
+                    @dc.on("message")
+                    def _reply_pong(message):
+                        if isinstance(message, str) and message.startswith("ping"):
+                            try:
+                                dc.send('{"type":"pong"}')
+                            except Exception:  # noqa: BLE001
+                                pass
+                    logger.info("VoiceChannel: pong responder attached to data channel")
+                    return
+                await asyncio.sleep(0.1)
+            logger.warning("VoiceChannel: pong responder timed out waiting for data channel")
+
+        asyncio.create_task(_setup_pong_responder())
+
         # Transport bound to the browser's WebRTC connection.
         transport = SmallWebRTCTransport(
             webrtc_connection=connection,
