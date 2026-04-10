@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
 import {
@@ -7,11 +7,18 @@ import {
   // EventsPanel,
   UserAudioControl,
 } from '@pipecat-ai/voice-ui-kit';
+import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
 import type { TransportType } from '../config';
 import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
+
+// Pre-load the drop cue so it plays instantly on unexpected disconnect.
+// The WAV is generated from shared/audio_cues.stop_cue_pcm (three
+// descending beeps). Ticket 6b60 problem B.
+const dropCueAudio = new Audio('/cues/drop.wav');
+dropCueAudio.volume = 0.7;
 
 interface AppProps extends PipecatBaseChildProps {
   transportType: TransportType;
@@ -30,8 +37,35 @@ export const App = ({
   autoconnect = false,
 }: AppProps) => {
   const autoconnectAttempted = useRef(false);
+  const userInitiatedDisconnect = useRef(false);
 
   const [devicesReady, setDevicesReady] = useState(false);
+
+  const transportState = usePipecatClientTransportState();
+
+  // Wrap handleDisconnect to flag user-initiated disconnects so the
+  // drop-cue logic can distinguish them from unexpected drops.
+  const wrappedDisconnect = useCallback(() => {
+    userInitiatedDisconnect.current = true;
+    handleDisconnect?.();
+  }, [handleDisconnect]);
+
+  // Play drop cue on unexpected disconnect (ticket 6b60 problem B).
+  // "Unexpected" = transport went to disconnected/error without the
+  // user clicking the disconnect button.
+  useEffect(() => {
+    if (
+      (transportState === 'disconnected' || transportState === 'error') &&
+      !userInitiatedDisconnect.current
+    ) {
+      dropCueAudio.currentTime = 0;
+      dropCueAudio.play().catch(() => {});
+    }
+    // Reset the flag when we're back to a non-terminal state.
+    if (transportState === 'connected' || transportState === 'ready') {
+      userInitiatedDisconnect.current = false;
+    }
+  }, [transportState]);
 
   useEffect(() => {
     if (client) {
@@ -72,7 +106,7 @@ export const App = ({
           <ConnectButton
             size="lg"
             onConnect={handleConnect}
-            onDisconnect={handleDisconnect}
+            onDisconnect={wrappedDisconnect}
           />
         </div>
       </div>
