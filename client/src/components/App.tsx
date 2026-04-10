@@ -199,7 +199,7 @@ export const App = ({
         <div className="flex items-center gap-4">
           <BotVisualizer client={client} />
           <LLMProfileSelect />
-          <VoiceProfileSelect client={client} />
+          <VoiceProfileSelect />
           {showTransportSelector ? (
             <TransportSelect
               transportType={transportType}

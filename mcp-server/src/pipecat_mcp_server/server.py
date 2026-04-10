@@ -550,6 +550,40 @@ def _build_webrtc_routes():
             "active": profile,
         })
 
+    async def handle_get_voices(request: Request):  # noqa: ARG001
+        """GET /api/voices — list voice profiles + active. Ticket 2ed2."""
+        return JSONResponse({
+            "voices": voice_channel.voices_info(),
+        })
+
+    async def handle_switch_voice(request: Request):
+        """POST /api/voices/switch — switch active voice profile. Ticket 2ed2."""
+        profile: Optional[str] = request.query_params.get("profile")
+        if profile is None:
+            try:
+                body = await request.json()
+                profile = body.get("profile") if isinstance(body, dict) else None
+            except Exception:
+                profile = None
+
+        if not profile:
+            return JSONResponse(
+                {"error": "missing 'profile' — provide ?profile=NAME or JSON body"},
+                status_code=400,
+            )
+
+        try:
+            await voice_channel.switch_voice(profile)
+        except RuntimeError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+
+        return JSONResponse({
+            "status": "ok",
+            "active": profile,
+        })
+
     async def handle_events(request: Request):
         """GET /api/events — SSE stream of daemon state changes.
 
@@ -570,6 +604,7 @@ def _build_webrtc_routes():
                     type="init",
                     data={
                         "profiles": voice_channel.profiles_info(),
+                        "voices": voice_channel.voices_info(),
                         "live": voice_channel.is_live(),
                     },
                 )
@@ -609,6 +644,8 @@ def _build_webrtc_routes():
         Route("/status", handle_status, methods=["GET"]),
         Route("/api/profiles", handle_get_profiles, methods=["GET"]),
         Route("/api/profiles/switch", handle_switch_profile, methods=["POST"]),
+        Route("/api/voices", handle_get_voices, methods=["GET"]),
+        Route("/api/voices/switch", handle_switch_voice, methods=["POST"]),
         Route("/api/events", handle_events, methods=["GET"]),
         # Legacy compat — old CLI may still hit /api/profile.
         Route("/api/profile", handle_get_profile, methods=["GET"]),

@@ -545,6 +545,79 @@ class VoiceChannel:
             "profile": profile_name,
         })
 
+    # ── voice profiles ───────────────────────────────────────────────────────
+
+    def voices_info(self) -> list[dict]:
+        """Return available voice profiles with current selection.
+
+        Works without a live pipeline — reads from config.
+        """
+        from shared.profile_manager import get_profile_manager
+
+        try:
+            pm = get_profile_manager()
+            current = self._voice_switcher.get_current_profile() if self._voice_switcher else None
+            return [
+                {
+                    "name": name,
+                    "description": desc,
+                    "active": name == current,
+                }
+                for name, desc in pm.list_voice_profiles().items()
+            ]
+        except Exception:  # noqa: BLE001
+            return []
+
+    async def switch_voice(self, profile_name: str) -> None:
+        """Switch the active voice profile.
+
+        Delegates to the VoiceProfileSwitcher. Requires a live pipeline.
+        Raises ``RuntimeError`` if no pipeline, ``ValueError`` if unknown.
+        """
+        if not self.is_live() or self._voice_switcher is None:
+            raise RuntimeError("no live pipeline — connect a browser first")
+
+        from shared.profile_manager import get_profile_manager
+
+        pm = get_profile_manager()
+        profile = pm.get_voice_profile(profile_name)
+        if profile is None:
+            raise ValueError(
+                f"unknown voice profile {profile_name!r}"
+            )
+
+        current = pm.get_voice_profile(self._voice_switcher.current_profile)
+        if current is None:
+            raise RuntimeError("current voice profile not found")
+
+        if profile.tts_provider == current.tts_provider:
+            # Same provider — just change voice on existing service.
+            svc = self._voice_switcher.tts_service_map.get(current.tts_provider)
+            if svc and hasattr(svc, "set_voice"):
+                svc.set_voice(profile.tts_voice)
+            else:
+                raise RuntimeError(f"TTS service for {current.tts_provider} doesn't support set_voice")
+        else:
+            # Cross-provider — switch via ServiceSwitcher frame.
+            new_svc = self._voice_switcher.tts_service_map.get(profile.tts_provider)
+            if new_svc is None:
+                raise ValueError(f"TTS service for {profile.tts_provider} not available")
+            if hasattr(new_svc, "set_voice"):
+                new_svc.set_voice(profile.tts_voice)
+            from pipecat.frames.frames import ManuallySwitchServiceFrame
+            assert self._pipeline_task is not None  # guarded by is_live() above
+            await self._pipeline_task.queue_frames([ManuallySwitchServiceFrame(service=new_svc)])
+
+        self._voice_switcher.current_profile = profile_name
+        logger.info(f"VoiceChannel: voice profile → {profile_name!r}")
+
+        from pipecat_mcp_server.event_bus import event_bus
+        await event_bus.emit("voiceChanged", {
+            "profile": profile_name,
+        })
+
+    # ── talky profiles ──────────────────────────────────────────────────────
+
     def profiles_info(self) -> list[dict]:
         """Return talky profiles with metadata + health.
 
@@ -1047,20 +1120,10 @@ class VoiceChannel:
         )
         voice_switcher.set_task(pipeline_task)
 
-        # Voice profile switcher RTVI handlers.
-        @pipeline_task.rtvi.event_handler("on_client_ready")
-        async def on_client_ready(rtvi):  # noqa: ANN001
-            logger.info("VoiceChannel: RTVI client ready")
-            # NB: no system prompt injection — talky's backends
-            # (openclaw/moltis) own their own system prompts remotely
-            # and read only the latest user message from anything the
-            # pipeline hands them. With 76a3 the pipeline no longer
-            # carries an LLMContext at all.
-
-        @pipeline_task.rtvi.event_handler("on_client_message")
-        async def on_client_message(rtvi, msg):  # noqa: ANN001
-            """Route voice-switcher RTVI messages from the browser."""
-            await voice_switcher.handle_message(rtvi, msg)
+        # RTVI voice-switcher handlers removed — voice profile switching
+        # is now REST+SSE (ticket 2ed2). The VoiceProfileSwitcher instance
+        # is still used for its TTS ServiceSwitcher and profile tracking;
+        # the channel's switch_voice() method drives it via REST.
 
         # Transport lifecycle → channel lifecycle.
         @transport.event_handler("on_client_connected")
