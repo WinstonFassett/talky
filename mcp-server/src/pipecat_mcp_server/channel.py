@@ -44,7 +44,7 @@ app state. It owns:
 | ``convo_listen()``             | :meth:`listen` awaits the speech queue      |
 | Browser disconnect / reload    | Transport event → :meth:`detach`            |
 | ``detach()``                   | Cancel pipeline task, clear refs            |
-| ``end_convo``                  | :meth:`end` — alias for detach              |
+| ``request_leave`` (agent exit) | :meth:`request_leave` — signoff + grace     |
 | Lifespan shutdown              | :meth:`shutdown` — drain any pending work   |
 
 ## Intentional differences from the old ``PipecatMCPAgent``
@@ -94,6 +94,7 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
+    OutputAudioRawFrame,
 )
 from pipecat.pipeline.llm_switcher import LLMSwitcher
 from pipecat.pipeline.pipeline import Pipeline
@@ -335,6 +336,11 @@ class VoiceChannel:
     def leave_convo(self, agent_id: str) -> dict:
         """Unregister an agent. Idempotent on not-joined.
 
+        Internal method — no longer exposed as an MCP tool. Agents leave
+        via ``request_leave`` (ticket 0b80), which wraps this with a
+        signoff cue and grace window. Still used by ``request_leave`` itself
+        and by tests / idle-TTL logic.
+
         If the room becomes empty as a result of this leave, schedules
         the idle-TTL teardown (ticket 0c5d). A no-op leave on a room
         that was already empty does NOT schedule a timer — TTL is only
@@ -347,6 +353,89 @@ class VoiceChannel:
         else:
             logger.debug(f"VoiceChannel: leave_convo no-op for {agent_id!r} (not joined)")
         return self.status()
+
+    async def request_leave(
+        self,
+        agent_id: str = "default",
+        grace_seconds: float = 4.0,
+    ) -> dict:
+        """Politely request to leave the convo. Ticket 0b80.
+
+        Flow:
+            1. Play the active profile's signoff phrase via TTS (if any).
+            2. Play the descending-beep audio cue (ticket 6b60 problem A).
+            3. Wait ``grace_seconds`` for the user to speak. If they do,
+               the leave is cancelled and the return dict reflects it.
+            4. Otherwise, remove the agent from the room and return
+               ``{"left": True, ...}``.
+
+        Pass ``grace_seconds=0`` for an immediate hard leave (no signoff,
+        no beep, no wait). This is the "must-go" case that the old
+        ``leave_convo`` MCP tool covered before 0b80 folded everything
+        into this one tool.
+        """
+        if not self.is_live():
+            # No live pipeline to play a cue through — just update room
+            # membership and return.
+            self.leave_convo(agent_id)
+            return {
+                "left": True,
+                "user_interrupted": False,
+                "reason": "pipeline not live",
+            }
+
+        if grace_seconds <= 0:
+            # Hard leave — no ceremony.
+            self.leave_convo(agent_id)
+            return {
+                "left": True,
+                "user_interrupted": False,
+                "reason": "hard leave (grace=0)",
+            }
+
+        # 1. Signoff phrase (skipped for MCP driver — agent supplies its own voice).
+        signoff = self._signoff_for_profile(self._active_profile)
+        if signoff:
+            try:
+                await self.speak(signoff)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"VoiceChannel.request_leave: signoff speak failed: {e}")
+
+        # 2. Descending-beep cue. Always played, even for MCP driver
+        #    (the beep is the cue that tells the user somebody is leaving).
+        try:
+            from shared.audio_cues import stop_cue_pcm
+
+            await self._inject_cue(stop_cue_pcm())
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"VoiceChannel.request_leave: cue inject failed: {e}")
+
+        # 3. Grace window — race user speech against the timeout.
+        try:
+            spoken = await asyncio.wait_for(self.listen(), timeout=grace_seconds)
+            # User objected — cancel the leave.
+            logger.info(
+                f"VoiceChannel.request_leave: user interrupted ({spoken.get('text', '')!r}) — staying"
+            )
+            return {
+                "left": False,
+                "user_interrupted": True,
+                "text": spoken.get("text", ""),
+            }
+        except asyncio.TimeoutError:
+            pass
+        except RuntimeError as e:
+            # listen() raises RuntimeError on peer disconnect; treat that
+            # as "gone, nothing more to do" and leave.
+            logger.debug(f"VoiceChannel.request_leave: listen raised during grace: {e}")
+
+        # 4. Actually leave.
+        self.leave_convo(agent_id)
+        return {
+            "left": True,
+            "user_interrupted": False,
+            "grace_seconds": grace_seconds,
+        }
 
     def available_profiles(self) -> list[str]:
         """List of profile names the channel will accept for ``switch_to_profile``.
@@ -435,6 +524,46 @@ class VoiceChannel:
             return None
         return getattr(backend, "greeting", None)
 
+    def _signoff_for_profile(self, profile_name: Optional[str]) -> Optional[str]:
+        """Look up the optional fixed-string signoff phrase for a profile.
+
+        Returns ``None`` for the MCP driver profile (agent-driven — the
+        agent supplies its own voice), for unknown profiles, or for
+        profiles without a ``signoff`` field. Ticket 0b80.
+        """
+        if profile_name is None or profile_name == self.MCP_DRIVER_PROFILE:
+            return None
+        try:
+            from shared.profile_manager import get_profile_manager
+
+            backend = get_profile_manager().get_llm_backend(profile_name)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"VoiceChannel: could not read backend for signoff lookup: {e}")
+            return None
+        if backend is None:
+            return None
+        return getattr(backend, "signoff", None)
+
+    async def _inject_cue(self, pcm: bytes, sample_rate: int = 16000) -> None:
+        """Queue a raw-PCM audio cue into the live pipeline and wait for it.
+
+        Used by request_leave to play a descending-beep cue before the
+        agent actually departs. No-op if the pipeline isn't live. Ticket 6b60.
+        """
+        if not self.is_live() or self._pipeline_task is None:
+            return
+        frame = OutputAudioRawFrame(
+            audio=pcm,
+            sample_rate=sample_rate,
+            num_channels=1,
+        )
+        await self._pipeline_task.queue_frames([frame])
+        # Let the frame actually play out before the caller tears anything
+        # down. Duration of the cue plus a small buffer for transport latency.
+        from shared.audio_cues import cue_duration_s
+
+        await asyncio.sleep(cue_duration_s() + 0.1)
+
     # ── attach / detach ─────────────────────────────────────────────────────
 
     async def attach(self, connection: SmallWebRTCConnection) -> None:
@@ -463,10 +592,14 @@ class VoiceChannel:
     async def detach(self) -> None:
         """Tear down the active pipeline and clear room state.
 
-        Explicit detach (e.g. from `end_convo`) clears everything:
-        pipeline, joined agents, active profile. Contrast with the
-        browser-disconnect path, which keeps room state so the next
-        browser connection can pick up where it left off.
+        Explicit detach clears everything: pipeline, joined agents,
+        active profile. Contrast with the browser-disconnect path, which
+        keeps room state so the next browser connection can pick up
+        where it left off.
+
+        No longer exposed as an MCP tool (the old ``end_convo`` was
+        removed in ticket 0b80). Still called by the lifespan shutdown
+        hook and the idle-TTL countdown.
         """
         # Cancel any pending idle-TTL timer first so it can't race with
         # the teardown (and can't try to call detach() recursively).

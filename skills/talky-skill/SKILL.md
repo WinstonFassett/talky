@@ -60,15 +60,17 @@ Full-duplex, open-channel audio via browser. Echo cancellation, interruptions, v
 **Tools:**
 
 - `start_convo` — starts the Pipecat pipeline and browser UI.
+- `join_convo(agent_id)` — claim the room as a driver before speaking or listening.
 - `convo_speak(text)` — say something.
 - `convo_listen()` — blocks until the user speaks, returns transcript.
-- `end_convo` — shut it down.
+- `request_leave(agent_id, grace_seconds=4)` — polite exit. Plays a signoff cue, waits a grace window for the user to object, then leaves. Returns `{left, user_interrupted, text?}`. If `user_interrupted` is true, the user spoke up — resume the conversation, do **not** leave.
 
 **Constraints specific to this mode:**
 
 - **After every `convo_speak`, call `convo_listen` immediately.** Forgetting is the single most common way to break a conversation — the user is still standing there and you've silently dropped out of voice. Keep the channel alive.
-- **If the pipeline dies ("voice agent process has stopped"), restart it.** Call `end_convo` best-effort, then `start_convo` again, acknowledge the blip in one sentence, continue.
-- **End on signal.** When the user says "that's all," "we're done," etc., call `end_convo` and drop back to text. Don't linger.
+- **If the pipeline dies ("voice agent process has stopped"), restart it.** Call `start_convo` again, acknowledge the blip in one sentence, continue. (There is no longer a teardown tool — the pipeline rebuilds on reconnect automatically.)
+- **End on signal.** When the user says "that's all," "we're done," etc., call `request_leave` (default grace is fine), honor `user_interrupted` if it comes back true, otherwise drop back to text. Don't linger and don't use `grace_seconds=0` except in genuine must-go scenarios.
+- **Never tear down the pipeline unilaterally.** There is no agent-facing tool to do this on purpose. If the human wants the whole session killed, they'll use the CLI.
 - **Executive Assistant posture applies to every `convo_speak` string.**
 
 ## Ambient awareness (how to listen, always on)

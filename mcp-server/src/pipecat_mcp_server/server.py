@@ -232,17 +232,6 @@ async def convo_listen() -> dict:
 
 
 @mcp.tool()
-async def end_convo() -> bool:
-    """End the active browser voice conversation and detach the pipeline.
-
-    Tears down the active pipeline task but leaves the MCP server and
-    pre-warmed config in place — the next browser connection will be fast.
-    """
-    await voice_channel.detach()
-    return True
-
-
-@mcp.tool()
 async def join_convo(agent_id: str = "default") -> dict:
     """Register an agent as the active driver of the voice conversation.
 
@@ -255,16 +244,35 @@ async def join_convo(agent_id: str = "default") -> dict:
 
 
 @mcp.tool()
-async def leave_convo(agent_id: str = "default") -> dict:
-    """Unregister an agent from the voice conversation.
+async def request_leave(
+    agent_id: str = "default",
+    grace_seconds: float = 4.0,
+) -> dict:
+    """Politely request to leave the convo (ticket 0b80).
 
-    Does not tear down the pipeline. Pipeline stays live and the room
-    is available for another agent to join. Idempotent if the agent
-    isn't currently joined.
+    Plays the active profile's signoff phrase (if configured) followed
+    by a descending-beep audio cue, then waits ``grace_seconds`` for the
+    user to object. If the user speaks within the window, the leave is
+    cancelled and the return dict carries ``user_interrupted: True`` plus
+    the transcribed text — the agent should treat that as "resume the
+    conversation".
 
-    Returns the channel status dict.
+    Pass ``grace_seconds=0`` for an immediate hard leave with no signoff
+    and no beep. Use sparingly — the whole point of ``request_leave`` is
+    to avoid silent disappearances.
+
+    This replaces the old ``leave_convo`` and ``end_convo`` MCP tools.
+    Agents no longer have a path to tear down the whole pipeline
+    unilaterally; use the CLI (``talky kill``) or close the browser tab
+    for that.
+
+    Returns a dict with at least ``left`` (bool) and ``user_interrupted``
+    (bool). On an interrupted leave, also includes ``text``.
     """
-    return voice_channel.leave_convo(agent_id)
+    return await voice_channel.request_leave(
+        agent_id=agent_id,
+        grace_seconds=grace_seconds,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

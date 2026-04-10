@@ -29,6 +29,10 @@ class LLMBackend:
     # becomes the active profile. ``None`` means silent — the previous
     # behavior. Ticket 8c9d.
     greeting: Optional[str] = None
+    # Optional fixed-string signoff spoken via TTS when an agent using
+    # this backend calls ``request_leave``. ``None`` means no phrase —
+    # the descending-beep cue is still played. Ticket 0b80.
+    signoff: Optional[str] = None
 
 
 @dataclass
@@ -152,6 +156,7 @@ class ProfileManager:
                                 **user_config.get("config", {})
                             },
                             greeting=user_config.get("greeting", core_backends[name].get("greeting")),
+                            signoff=user_config.get("signoff", core_backends[name].get("signoff")),
                         )
                     else:
                         # Add new user-defined backend
@@ -161,6 +166,7 @@ class ProfileManager:
                             service_class=user_config.get("service_class", ""),
                             config=user_config.get("config", {}),
                             greeting=user_config.get("greeting"),
+                            signoff=user_config.get("signoff"),
                         )
             else:
                 # No user extensions - use core (+ defaults) backends
@@ -171,6 +177,7 @@ class ProfileManager:
                         service_class=config["service_class"],
                         config=config["config"],
                         greeting=config.get("greeting"),
+                        signoff=config.get("signoff"),
                     )
 
         except FileNotFoundError:
@@ -182,6 +189,7 @@ class ProfileManager:
                     service_class=config["service_class"],
                     config=config["config"],
                     greeting=config.get("greeting"),
+                    signoff=config.get("signoff"),
                 )
         except Exception as e:
             logger.warning(f"Error loading user LLM backends: {e}. Using core backends only.")
@@ -193,6 +201,7 @@ class ProfileManager:
                     service_class=config["service_class"],
                     config=config["config"],
                     greeting=config.get("greeting"),
+                    signoff=config.get("signoff"),
                 )
 
     def _load_voice_backends(self):

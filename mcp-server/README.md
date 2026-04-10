@@ -7,7 +7,7 @@ The talky daemon on `:9090` is the unified server: embedded WebRTC handler, stat
 - **In-process voice pipeline** — `Mic → VAD → STT → LLMSwitcher → TTS → Speaker` on uvicorn's event loop (58db).
 - **LLMSwitcher** — one persistent pipeline with `MCPDriverLLMService` + configured backends as peers. Switching is a single `ManuallySwitchServiceFrame`; transport stays connected (ea77 / c3a1).
 - **Voice profile switching** — dynamic TTS provider/voice swap via RTVI.
-- **Room persistence** — pipeline survives browser disconnect / reconnect (3f12 phase 2); `join_convo` / `leave_convo` for explicit agent membership (3f12 phase 1).
+- **Room persistence** — pipeline survives browser disconnect / reconnect (3f12 phase 2); `join_convo` / `request_leave` for explicit agent membership (3f12 phase 1, 0b80).
 - **Profile switching across the CLI + browser boundary** — `talky openclaw` from the terminal swaps the active LLM in a live browser session.
 
 ## Run
@@ -25,11 +25,13 @@ Any daemon-dependent CLI (`talky profile`, `talky openclaw`, etc.) auto-spawns t
 | Tool | Description |
 |------|-------------|
 | `start_convo()` | Start a voice conversation session |
-| `end_convo()` | End the current voice conversation |
 | `convo_speak(text)` | Inject assistant text into the conversation |
 | `convo_listen()` | Wait for user speech, return transcript |
-| `join_convo()` / `leave_convo()` | Explicit agent room membership |
+| `join_convo(agent_id)` | Claim the room as a driver before speaking / listening |
+| `request_leave(agent_id, grace_seconds=4)` | Polite exit: signoff cue + grace window; returns `user_interrupted: true` if the user speaks up during the window (ticket 0b80) |
 | `say_local_audio(text)` / `ask_local_audio(text)` | Local-audio walkie-talkie path (routes to the separate voice daemon) |
+
+There is intentionally no agent-facing tool to tear down the pipeline. Use `talky kill` from the CLI or close the browser tab if a full reset is needed.
 
 ## Claude Desktop config
 

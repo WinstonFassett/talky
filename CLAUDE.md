@@ -58,9 +58,10 @@ Ports: 9090 is the only port. 7860 and 5173 are dead (ripped in 5098).
 
 ## Debugging
 
-- Voice daemon: run with `--foreground` to see logs
-- Talky daemon: `talky daemon > /tmp/talky_daemon.log 2>&1 &` to capture logs (run directly — not via `uv run`)
-- Check logs first before forming hypotheses
+- Voice daemon: run with `--foreground` to see logs.
+- Talky daemon logs are in `~/.talky/run/talky-daemon.log` (persistent across restarts, already captures everything). **Read that file** — don't redirect a fresh daemon's output to a side file unless you have a reason.
+- If you're restarting the daemon from an agent's Bash tool, use `run_in_background=true` with a plain `talky daemon` command. **Do not** try to manually background it with `&` plus a redirect, especially not inside a compound chain like `talky kill && talky daemon > log 2>&1 &`. That shape hangs the Bash tool: `&` backgrounds the whole chain into a subshell, but `> log 2>&1` is scoped only to `talky daemon` — the subshell itself still holds the inherited stdout/stderr pipes open, so the tool never sees EOF and waits forever. The symptom from a voice session is total silence for minutes, because the agent is stuck in the Bash call. If you genuinely need manual backgrounding from one shell line, wrap the group so the redirect covers the subshell too: `(talky kill && sleep 1 && talky daemon) > /tmp/talky_daemon.log 2>&1 &`. But prefer `run_in_background=true`.
+- Check logs first before forming hypotheses.
 
 ## Conventions
 
