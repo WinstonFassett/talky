@@ -23,5 +23,12 @@ export default defineConfig({
     host: getHost(),
     port: 5173,
     allowedHosts: getAllowedHosts(),
+    proxy: {
+      // Forward all API/WebRTC/SSE calls to the talky daemon on :9090.
+      '/api': 'http://localhost:9090',
+      '/start': 'http://localhost:9090',
+      '/status': 'http://localhost:9090',
+      '/sessions': 'http://localhost:9090',
+    },
   },
 });
