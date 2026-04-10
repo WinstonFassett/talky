@@ -201,7 +201,6 @@ export const App = ({
           <BotVisualizer client={client} />
           <LLMProfileSelect />
           <VoiceProfileSelect />
-          <TranscriptExport />
           {showTransportSelector ? (
             <TransportSelect
               transportType={transportType}
@@ -211,6 +210,7 @@ export const App = ({
           ) : null}
         </div>
         <div className="flex items-center gap-4">
+          <TranscriptExport />
           <UserAudioControl size="lg" />
           <ConnectButton
             size="lg"
