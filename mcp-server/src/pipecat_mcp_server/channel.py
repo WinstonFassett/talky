@@ -911,9 +911,17 @@ class VoiceChannel:
         # the user started talking. Used by request_leave to detect
         # speech during the grace window without waiting for a full
         # transcribed utterance. Ticket 0b80 bug fix.
-        @transport.event_handler("on_user_started_speaking")
-        async def on_user_speaking(transport, *args):  # noqa: ANN001, ARG001
-            self._user_speaking.set()
+        #
+        # UserStartedSpeakingFrame is a pipeline frame, not a transport
+        # event — must be caught via the pipeline task's upstream filter,
+        # not via transport.event_handler (which silently ignores unknown
+        # event names).
+        pipeline_task.add_reached_upstream_filter((UserStartedSpeakingFrame,))
+
+        @pipeline_task.event_handler("on_frame_reached_upstream")
+        async def on_user_speaking(task, frame):  # noqa: ANN001, ARG001
+            if isinstance(frame, UserStartedSpeakingFrame):
+                self._user_speaking.set()
 
         # NB: No on_user_turn_stopped handler here.
         # Speech queue writes are handled by MCPDriverLLMService via
