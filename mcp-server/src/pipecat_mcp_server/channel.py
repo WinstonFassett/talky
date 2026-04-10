@@ -962,6 +962,11 @@ class VoiceChannel:
         (b) the WebRTC peer disconnects (raises ``RuntimeError``). After the
         first utterance, drains any additional already-buffered utterances.
 
+        If MCP mode is not currently active (another profile is driving),
+        blocks until MCP mode is restored before listening. This lets an
+        MCP agent call listen() after handing off to another profile and
+        automatically resume when it gets control back.
+
         Returns a dict with ``text`` (combined string) and ``segments`` (list
         of per-utterance dicts with ``text`` and ``timestamp``).
         """
@@ -970,6 +975,30 @@ class VoiceChannel:
                 "VoiceChannel.listen called with no active pipeline. "
                 "Call start_convo() first and connect the browser."
             )
+
+        # If another profile is active, wait for MCP mode to come back.
+        if self._active_profile != self.MCP_DRIVER_PROFILE:
+            logger.info(
+                f"VoiceChannel.listen: waiting for MCP mode "
+                f"(currently {self._active_profile!r})"
+            )
+            from pipecat_mcp_server.event_bus import event_bus
+
+            async with event_bus.subscribe() as queue:
+                while self._active_profile != self.MCP_DRIVER_PROFILE:
+                    try:
+                        await asyncio.wait_for(queue.get(), timeout=2.0)
+                        # profileChanged events update _active_profile via
+                        # switch_to_profile, so just re-check the loop condition.
+                    except asyncio.TimeoutError:
+                        # Check disconnect while waiting.
+                        if self._disconnected.is_set():
+                            raise RuntimeError(
+                                "WebRTC peer disconnected while waiting for MCP mode"
+                            )
+                        continue
+
+            logger.info("VoiceChannel.listen: MCP mode restored, listening")
 
         # Race the speech queue against the disconnect event so a browser
         # reload doesn't leave us blocked forever (this is the d5e6 fix
