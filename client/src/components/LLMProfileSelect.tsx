@@ -61,6 +61,11 @@ export const LLMProfileSelect = () => {
       }
     });
 
+    eventSource.addEventListener('peerConnected', (e: MessageEvent) => {
+      if (!mounted) return;
+      applyProfiles(JSON.parse(e.data));
+    });
+
     eventSource.addEventListener('healthChanged', (e: MessageEvent) => {
       if (!mounted) return;
       const data = JSON.parse(e.data);
@@ -117,16 +122,6 @@ export const LLMProfileSelect = () => {
     );
   }
 
-  const healthDot = (healthy: boolean | null) => {
-    if (healthy === null) return null; // No health data yet.
-    return (
-      <span
-        className={`inline-block w-2 h-2 rounded-full ${healthy ? 'bg-green-500' : 'bg-red-400'}`}
-        title={healthy ? 'Healthy' : 'Unreachable'}
-      />
-    );
-  };
-
   return (
     <div className="flex items-center gap-2">
       <label htmlFor="llm-profile-select" className="text-sm font-medium text-gray-700">
@@ -138,7 +133,7 @@ export const LLMProfileSelect = () => {
         disabled={switching}
       >
         <SelectTrigger className="w-48" id="llm-profile-select">
-          <SelectValue placeholder="Select LLM backend" />
+          <SelectValue placeholder="Select profile" />
         </SelectTrigger>
         <SelectContent>
           {profiles.map((profile) => (
@@ -146,13 +141,11 @@ export const LLMProfileSelect = () => {
               key={profile.name}
               value={profile.name}
               disabled={profile.healthy === false}
+              textValue={profile.label}
             >
-              <div className="flex items-center gap-2">
-                {healthDot(profile.healthy)}
-                <div className="flex flex-col">
-                  <span className="font-medium">{profile.label}</span>
-                  <span className="text-xs text-gray-500">{profile.description}</span>
-                </div>
+              <div className="flex flex-col">
+                <span className="font-medium">{profile.label}</span>
+                <span className="text-xs text-gray-500">{profile.description}</span>
               </div>
             </SelectItem>
           ))}

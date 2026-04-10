@@ -556,7 +556,11 @@ class VoiceChannel:
 
         try:
             pm = get_profile_manager()
-            current = self._voice_switcher.get_current_profile() if self._voice_switcher else None
+            current = (
+                self._voice_switcher.get_current_profile()
+                if self._voice_switcher
+                else pm.get_default_voice_profile() or None
+            )
             return [
                 {
                     "name": name,
@@ -826,6 +830,20 @@ class VoiceChannel:
             self._user_speech_queue = asyncio.Queue()
 
             await self._build_and_start_pipeline(connection)
+
+            # Notify SSE clients that the pipeline is now live so
+            # pickers can re-fetch (voice active flag only resolves
+            # once the VoiceProfileSwitcher exists).
+            try:
+                from pipecat_mcp_server.event_bus import event_bus
+
+                await event_bus.emit("peerConnected", {
+                    "profiles": self.profiles_info(),
+                    "voices": self.voices_info(),
+                    "live": True,
+                })
+            except Exception:  # noqa: BLE001
+                pass
 
     async def detach(self) -> None:
         """Tear down the active pipeline and clear profile state.

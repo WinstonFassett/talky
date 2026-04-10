@@ -43,6 +43,12 @@ export const VoiceProfileSelect = () => {
       setError('');
     });
 
+    eventSource.addEventListener('peerConnected', (e: MessageEvent) => {
+      if (!mounted) return;
+      const data = JSON.parse(e.data);
+      if (data.voices) applyVoices(data.voices);
+    });
+
     eventSource.addEventListener('voiceChanged', (e: MessageEvent) => {
       if (!mounted) return;
       const data = JSON.parse(e.data);
@@ -112,7 +118,7 @@ export const VoiceProfileSelect = () => {
         </SelectTrigger>
         <SelectContent>
           {voices.map((voice) => (
-            <SelectItem key={voice.name} value={voice.name}>
+            <SelectItem key={voice.name} value={voice.name} textValue={voice.name}>
               <div className="flex flex-col">
                 <span className="font-medium">{voice.name}</span>
                 <span className="text-xs text-gray-500">{voice.description}</span>
