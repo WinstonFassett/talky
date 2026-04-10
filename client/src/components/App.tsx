@@ -158,6 +158,16 @@ export const App = ({
     return () => clearInterval(interval);
   }, [transportState, playDropCue]);
 
+  // Pipecat SDK log level. Default WARN to suppress per-second
+  // "received message" noise. Override with VITE_PIPECAT_LOG_LEVEL
+  // (none/error/warn/info/debug) for troubleshooting.
+  useEffect(() => {
+    if (!client) return;
+    const levels: Record<string, number> = { none: 0, error: 1, warn: 2, info: 3, debug: 4 };
+    const level = levels[(import.meta.env.VITE_PIPECAT_LOG_LEVEL || 'warn').toLowerCase()] ?? 2;
+    try { client.setLogLevel(level); } catch { /* older SDK */ }
+  }, [client]);
+
   useEffect(() => {
     if (client) {
       client?.initDevices().then(() => {
