@@ -1,12 +1,16 @@
 """Tests for VoiceChannel.request_leave (ticket 0b80).
 
 Scope: the request_leave state machine — grace-window race between
-user speech and timeout, hard-leave shortcut, and the non-live no-op
+user speech and timeout, grace=0 shortcut, and the non-live no-op
 path. Does NOT exercise real TTS, audio-cue playback, or WebRTC.
 
 The live-pipeline paths are exercised via monkeypatched ``is_live``,
 ``speak``, ``_inject_cue``, and ``listen`` so the tests can observe
 which steps ran and drive the grace-window timing deterministically.
+
+request_leave takes no arguments — the grace window is set at
+channel-construction time from server config (env var + YAML),
+not per-call. Tests set it directly on the channel instance.
 """
 
 from __future__ import annotations
@@ -26,9 +30,12 @@ if str(_MCP_SRC) not in sys.path:
 from pipecat_mcp_server.channel import VoiceChannel  # noqa: E402
 
 
-def _live_channel(monkeypatch: pytest.MonkeyPatch) -> VoiceChannel:
+def _live_channel(
+    monkeypatch: pytest.MonkeyPatch,
+    grace_seconds: float = 4.0,
+) -> VoiceChannel:
     """Build a channel that reports itself as live without a real pipeline."""
-    ch = VoiceChannel(idle_ttl_seconds=None)
+    ch = VoiceChannel(request_leave_grace_seconds=grace_seconds)
     monkeypatch.setattr(ch, "is_live", lambda: True)
     # Stub out the pieces that would need a real pipeline.
     ch.speak = AsyncMock()  # type: ignore[method-assign]
@@ -40,35 +47,37 @@ def _live_channel(monkeypatch: pytest.MonkeyPatch) -> VoiceChannel:
 
 
 @pytest.mark.asyncio
-async def test_request_leave_no_pipeline_just_updates_membership():
-    """When the pipeline is not live, request_leave should skip all the
-    ceremony (no speak, no cue, no grace) and just remove the agent."""
-    ch = VoiceChannel(idle_ttl_seconds=None)
-    ch.join_convo("alice")
+async def test_request_leave_no_pipeline_returns_immediately():
+    """Non-live pipeline skips all ceremony and returns immediately.
 
-    result = await ch.request_leave("alice")
+    No speak, no cue, no grace window.
+    """
+    ch = VoiceChannel()
+
+    result = await ch.request_leave()
 
     assert result["left"] is True
     assert result["user_interrupted"] is False
-    assert "alice" not in ch._joined_agents
+    assert "pipeline not live" in result.get("reason", "")
 
 
-# ── hard leave (grace=0) ─────────────────────────────────────────────────
+# ── grace disabled (grace_seconds <= 0) ──────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_request_leave_grace_zero_skips_signoff_and_cue(monkeypatch):
-    """grace_seconds=0 is the escape hatch: no signoff, no cue, no wait."""
-    ch = _live_channel(monkeypatch)
-    ch.join_convo("alice")
+    """User-configured grace_seconds=0 is the escape hatch.
 
-    result = await ch.request_leave("alice", grace_seconds=0)
+    No signoff, no cue, no wait.
+    """
+    ch = _live_channel(monkeypatch, grace_seconds=0.0)
+
+    result = await ch.request_leave()
 
     assert result["left"] is True
     assert result["user_interrupted"] is False
     ch.speak.assert_not_awaited()  # type: ignore[attr-defined]
     ch._inject_cue.assert_not_awaited()  # type: ignore[attr-defined]
-    assert "alice" not in ch._joined_agents
 
 
 # ── signoff phrase + cue are played ──────────────────────────────────────
@@ -76,10 +85,11 @@ async def test_request_leave_grace_zero_skips_signoff_and_cue(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_request_leave_plays_signoff_then_cue(monkeypatch):
-    """When a signoff is configured for the active profile, it's spoken
-    first, then the descending-beep cue is injected."""
-    ch = _live_channel(monkeypatch)
-    ch.join_convo("alice")
+    """Configured signoff is spoken, then the descending-beep cue plays.
+
+    Order matters: signoff phrase first, cue second.
+    """
+    ch = _live_channel(monkeypatch, grace_seconds=0.05)
     ch._active_profile = "openclaw"
 
     # Fake the signoff lookup so we don't depend on real config.
@@ -87,20 +97,19 @@ async def test_request_leave_plays_signoff_then_cue(monkeypatch):
         ch, "_signoff_for_profile", lambda name: "openclaw signing off"
     )
 
-    # listen() should time out (no user speech). Use a very short grace.
+    # listen() should time out (no user speech).
     async def _slow_listen() -> dict[str, Any]:
         await asyncio.sleep(1.0)  # longer than grace → caller hits timeout
         return {"text": "never runs"}
 
     monkeypatch.setattr(ch, "listen", _slow_listen)
 
-    result = await ch.request_leave("alice", grace_seconds=0.05)
+    result = await ch.request_leave()
 
     assert result["left"] is True
     assert result["user_interrupted"] is False
     ch.speak.assert_awaited_once_with("openclaw signing off")  # type: ignore[attr-defined]
     ch._inject_cue.assert_awaited_once()  # type: ignore[attr-defined]
-    assert "alice" not in ch._joined_agents
 
 
 # ── user interrupts the grace window ─────────────────────────────────────
@@ -108,10 +117,11 @@ async def test_request_leave_plays_signoff_then_cue(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_request_leave_user_interrupts_grace(monkeypatch):
-    """If the user speaks during the grace window, the leave is cancelled
-    and the return dict carries user_interrupted=True plus the text."""
-    ch = _live_channel(monkeypatch)
-    ch.join_convo("alice")
+    """User speech during grace window cancels the leave.
+
+    Return dict carries user_interrupted=True plus the text.
+    """
+    ch = _live_channel(monkeypatch, grace_seconds=2.0)
 
     monkeypatch.setattr(ch, "_signoff_for_profile", lambda name: None)
 
@@ -122,13 +132,11 @@ async def test_request_leave_user_interrupts_grace(monkeypatch):
 
     monkeypatch.setattr(ch, "listen", _fast_listen)
 
-    result = await ch.request_leave("alice", grace_seconds=2.0)
+    result = await ch.request_leave()
 
     assert result["left"] is False
     assert result["user_interrupted"] is True
     assert result["text"] == "wait, one more thing"
-    # Still joined — the interruption cancelled the leave.
-    assert "alice" in ch._joined_agents
 
 
 # ── MCP driver profile: no signoff phrase, cue still plays ───────────────
@@ -136,14 +144,15 @@ async def test_request_leave_user_interrupts_grace(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_request_leave_mcp_driver_skips_signoff_plays_cue(monkeypatch):
-    """MCPDriver has no intrinsic voice. request_leave should skip the
-    signoff phrase but still play the descending-beep cue."""
-    ch = _live_channel(monkeypatch)
-    ch.join_convo("alice")
+    """MCPDriver skips the signoff phrase but still plays the cue.
+
+    MCPDriver has no intrinsic voice; the agent supplies its own.
+    """
+    ch = _live_channel(monkeypatch, grace_seconds=0.05)
     ch._active_profile = VoiceChannel.MCP_DRIVER_PROFILE
 
     # _signoff_for_profile returns None for MCP driver by design —
-    # we're not stubbing it here, relying on the real implementation.
+    # we rely on the real implementation here.
 
     async def _slow_listen() -> dict[str, Any]:
         await asyncio.sleep(1.0)
@@ -151,7 +160,7 @@ async def test_request_leave_mcp_driver_skips_signoff_plays_cue(monkeypatch):
 
     monkeypatch.setattr(ch, "listen", _slow_listen)
 
-    result = await ch.request_leave("alice", grace_seconds=0.05)
+    result = await ch.request_leave()
 
     assert result["left"] is True
     assert result["user_interrupted"] is False
@@ -164,11 +173,12 @@ async def test_request_leave_mcp_driver_skips_signoff_plays_cue(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_request_leave_peer_disconnect_during_grace(monkeypatch):
-    """If the browser peer drops while we're waiting in the grace window,
-    listen() raises RuntimeError. request_leave should swallow that and
-    proceed with the leave."""
-    ch = _live_channel(monkeypatch)
-    ch.join_convo("alice")
+    """Peer disconnect during grace window is treated as a clean leave.
+
+    listen() raises RuntimeError on disconnect; request_leave swallows
+    that and proceeds.
+    """
+    ch = _live_channel(monkeypatch, grace_seconds=1.0)
 
     monkeypatch.setattr(ch, "_signoff_for_profile", lambda name: None)
 
@@ -177,8 +187,7 @@ async def test_request_leave_peer_disconnect_during_grace(monkeypatch):
 
     monkeypatch.setattr(ch, "listen", _dead_listen)
 
-    result = await ch.request_leave("alice", grace_seconds=1.0)
+    result = await ch.request_leave()
 
     assert result["left"] is True
     assert result["user_interrupted"] is False
-    assert "alice" not in ch._joined_agents

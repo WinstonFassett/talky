@@ -98,12 +98,60 @@ def _read_idle_ttl_seconds() -> Optional[float]:
 
 _idle_ttl_seconds = _read_idle_ttl_seconds()
 
+
+def _read_request_leave_grace_seconds() -> float:
+    """Load the request_leave grace window (ticket 0b80 follow-up rip).
+
+    Precedence:
+      1. ``TALKY_REQUEST_LEAVE_GRACE_SECS`` env var (float).
+      2. ``room.request_leave_grace_seconds`` in ``~/.talky/settings.yaml``.
+      3. ``4.0`` (default).
+
+    Returns a non-negative float in seconds. Negative values are
+    clamped to 0 (disables the ceremony entirely).
+    """
+    default = 4.0
+    raw: Optional[str] = os.getenv("TALKY_REQUEST_LEAVE_GRACE_SECS")
+    if raw is None:
+        try:
+            from shared.profile_manager import get_profile_manager
+
+            settings = getattr(get_profile_manager(), "settings", {}) or {}
+            yaml_raw = settings.get("room", {}).get("request_leave_grace_seconds")
+            if yaml_raw is not None:
+                raw = str(yaml_raw)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Could not read room.request_leave_grace_seconds from settings: {e}")
+            raw = None
+
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"Invalid TALKY_REQUEST_LEAVE_GRACE_SECS / room.request_leave_grace_seconds={raw!r}; "
+            f"using default {default}s"
+        )
+        return default
+    if value < 0:
+        logger.warning(f"Negative request_leave grace {value!r}; clamping to 0")
+        return 0.0
+    return value
+
+
+_request_leave_grace_seconds = _read_request_leave_grace_seconds()
+
 # The single in-process voice channel. Created eagerly so the MCP tools can
 # reference it during module import, but warmup is deferred to the Starlette
 # lifespan startup hook (see _build_app).
-voice_channel = VoiceChannel(idle_ttl_seconds=_idle_ttl_seconds)
+voice_channel = VoiceChannel(
+    idle_ttl_seconds=_idle_ttl_seconds,
+    request_leave_grace_seconds=_request_leave_grace_seconds,
+)
 if _idle_ttl_seconds is not None:
     logger.info(f"VoiceChannel: idle TTL set to {_idle_ttl_seconds}s (empty rooms will auto-tear-down)")
+logger.info(f"VoiceChannel: request_leave grace window = {_request_leave_grace_seconds}s")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -232,34 +280,33 @@ async def convo_listen() -> dict:
 
 
 @mcp.tool()
-async def join_convo(agent_id: str = "default") -> dict:
-    """Register an agent as the active driver of the voice conversation.
+async def join_convo() -> dict:
+    """Check in to the voice conversation.
 
-    Only one agent at a time. Call this before `convo_speak` / `convo_listen`
-    to claim the room. Re-joining with the same agent_id is a no-op.
-
-    Returns the channel status dict.
+    Returns the channel status dict so the caller can verify the
+    pipeline is live and inspect the active profile. This is a
+    lightweight "I'm here" ritual with no state mutation — call it
+    before driving the conversation so you know what you're walking
+    into.
     """
-    return voice_channel.join_convo(agent_id)
+    return voice_channel.join_convo()
 
 
 @mcp.tool()
-async def request_leave(
-    agent_id: str = "default",
-    grace_seconds: float = 4.0,
-) -> dict:
-    """Politely request to leave the convo (ticket 0b80).
+async def request_leave() -> dict:
+    """Politely announce intent to leave the convo (ticket 0b80).
 
     Plays the active profile's signoff phrase (if configured) followed
-    by a descending-beep audio cue, then waits ``grace_seconds`` for the
-    user to object. If the user speaks within the window, the leave is
-    cancelled and the return dict carries ``user_interrupted: True`` plus
-    the transcribed text — the agent should treat that as "resume the
-    conversation".
+    by a descending-beep audio cue, then waits for the configured grace
+    window for the user to object. If the user speaks within the window,
+    the return dict carries ``user_interrupted: True`` plus the
+    transcribed text — the agent should resume the conversation and
+    **not** leave.
 
-    Pass ``grace_seconds=0`` for an immediate hard leave with no signoff
-    and no beep. Use sparingly — the whole point of ``request_leave`` is
-    to avoid silent disappearances.
+    The grace window is set by the user via the
+    ``TALKY_REQUEST_LEAVE_GRACE_SECS`` env var or
+    ``room.request_leave_grace_seconds`` in ``~/.talky/settings.yaml``
+    (default 4.0s). Agents do not control it.
 
     This replaces the old ``leave_convo`` and ``end_convo`` MCP tools.
     Agents no longer have a path to tear down the whole pipeline
@@ -269,10 +316,7 @@ async def request_leave(
     Returns a dict with at least ``left`` (bool) and ``user_interrupted``
     (bool). On an interrupted leave, also includes ``text``.
     """
-    return await voice_channel.request_leave(
-        agent_id=agent_id,
-        grace_seconds=grace_seconds,
-    )
+    return await voice_channel.request_leave()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -460,18 +504,6 @@ def _build_webrtc_routes():
             "live": st.get("live", False),
         })
 
-    async def handle_join(request: Request):
-        """POST /api/join?agent=NAME — register an agent as room driver."""
-        agent_id = request.query_params.get("agent", "default")
-        state = voice_channel.join_convo(agent_id)
-        return JSONResponse({"status": "ok", "channel": state})
-
-    async def handle_leave(request: Request):
-        """POST /api/leave?agent=NAME — unregister an agent."""
-        agent_id = request.query_params.get("agent", "default")
-        state = voice_channel.leave_convo(agent_id)
-        return JSONResponse({"status": "ok", "channel": state})
-
     async def handle_set_profile(request: Request):
         """POST /api/profile — switch active LLM profile."""
         profile: Optional[str] = request.query_params.get("profile")
@@ -517,8 +549,6 @@ def _build_webrtc_routes():
         Route("/status", handle_status, methods=["GET"]),
         Route("/api/profile", handle_get_profile, methods=["GET"]),
         Route("/api/profile", handle_set_profile, methods=["POST"]),
-        Route("/api/join", handle_join, methods=["POST"]),
-        Route("/api/leave", handle_leave, methods=["POST"]),
     ]
     return routes, webrtc_handler
 

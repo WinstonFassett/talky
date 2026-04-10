@@ -42,7 +42,7 @@ app state. It owns:
 | ``attach()``                   | Build fresh pipeline, start asyncio task    |
 | ``convo_speak(text)``          | :meth:`speak` queues ``LLMTextFrame``       |
 | ``convo_listen()``             | :meth:`listen` awaits the speech queue      |
-| Browser disconnect / reload    | Transport event → :meth:`detach`            |
+| Browser disconnect / reload    | Transport event → :meth:`_disconnect_cleanup` |
 | ``detach()``                   | Cancel pipeline task, clear refs            |
 | ``request_leave`` (agent exit) | :meth:`request_leave` — signoff + grace     |
 | Lifespan shutdown              | :meth:`shutdown` — drain any pending work   |
@@ -144,15 +144,24 @@ class VoiceChannel:
     # can't collide with user-configured LLM backend names.
     MCP_DRIVER_PROFILE = "__mcp__"
 
-    def __init__(self, idle_ttl_seconds: Optional[float] = None) -> None:
+    def __init__(
+        self,
+        idle_ttl_seconds: Optional[float] = None,
+        request_leave_grace_seconds: float = 4.0,
+    ) -> None:
         """Construct an unwarmed channel.
 
         Args:
             idle_ttl_seconds: Teardown delay once the room transitions
-                to empty (no browser peer AND no joined agents). ``None``
-                means infinity — preserve legacy behavior. Ticket 0c5d.
+                to empty (no browser peer). ``None`` means infinity —
+                preserve legacy behavior. Ticket 0c5d.
+            request_leave_grace_seconds: Grace window for
+                ``request_leave`` to wait on user speech before actually
+                leaving. User-configured, not agent-controlled. Ticket
+                0b80 / follow-up rip.
         """
         self._idle_ttl_seconds: Optional[float] = idle_ttl_seconds
+        self._request_leave_grace_seconds: float = request_leave_grace_seconds
         self._ttl_task: Optional[asyncio.Task] = None
 
         # Pre-warmed state (populated by warmup())
@@ -171,13 +180,6 @@ class VoiceChannel:
         self._llm_switcher: Optional[Any] = None  # LLMSwitcher
         self._llm_services: dict[str, Any] = {}  # profile name → LLMService
         self._active_profile: Optional[str] = None
-
-        # Room membership (ticket 3f12 phase 1). The set of agent identifiers
-        # currently "joined" to the room. Agents call join_convo / leave_convo
-        # to manage membership. Currently advisory — not enforced by
-        # convo_speak / convo_listen yet. One-at-a-time limit enforced by
-        # join_convo raising if someone else is already joined.
-        self._joined_agents: set[str] = set()
 
         # Speech buffer — written by MCPDriverLLMService, drained by listen()
         self._user_speech_queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -250,7 +252,6 @@ class VoiceChannel:
             "voice_profile": self._warm_profile_name,
             "active_llm_profile": self._active_profile,
             "available_llm_profiles": sorted(self._llm_services.keys()) if self._llm_services else [],
-            "joined_agents": sorted(self._joined_agents),
             "queue_depth": self._user_speech_queue.qsize(),
             "disconnected": self._disconnected.is_set(),
             "idle_ttl_seconds": self._idle_ttl_seconds,
@@ -258,14 +259,18 @@ class VoiceChannel:
             "is_empty": self._is_empty(),
         }
 
-    # ── room membership (3f12 phase 1) ──────────────────────────────────────
+    # ── room occupancy & TTL ────────────────────────────────────────────────
 
     def _is_empty(self) -> bool:
-        """Room occupancy check: no browser peer AND no joined agents.
+        """Room occupancy check: empty iff no browser peer is attached.
 
-        Used to drive idle-TTL scheduling (ticket 0c5d).
+        Drives idle-TTL scheduling (ticket 0c5d). Previously also gated
+        on "joined agents" state (3f12 phase 1), but that data structure
+        was ripped because it had no user requirement behind it — the
+        TTL depends entirely on whether a user (browser peer) is in the
+        room.
         """
-        return not self.is_live() and len(self._joined_agents) == 0
+        return not self.is_live()
 
     def _schedule_ttl_if_empty(self) -> None:
         """Start the idle teardown timer if the room is empty and TTL is set.
@@ -316,81 +321,55 @@ class VoiceChannel:
             logger.debug("VoiceChannel: idle TTL cancelled before fire")
             raise
 
-    def join_convo(self, agent_id: str) -> dict:
-        """Register an agent as a driver of the room.
+    def join_convo(self) -> dict:
+        """Check in to the conversation.
 
-        Multiple agents may be joined simultaneously. The common case
-        is one at a time — clients swap between them — but nothing
-        here enforces that. Agents who want exclusive access should
-        coordinate out of band.
-
-        Re-joining with the same agent_id is idempotent. Any pending
-        idle-TTL timer is cancelled as a side effect (room is no longer
-        empty).
+        Returns channel status so the caller can verify the pipeline is
+        live, inspect the active profile, etc. No state mutation — the
+        old room-membership set was ripped because it had no user
+        requirement behind it (speculative 3f12 phase 1 data structure).
+        Kept as a tool because agents still want an explicit "I'm here"
+        ritual before they start driving the conversation.
         """
-        self._joined_agents.add(agent_id)
-        self._cancel_ttl()
-        logger.info(f"VoiceChannel: agent {agent_id!r} joined (members: {sorted(self._joined_agents)})")
         return self.status()
 
-    def leave_convo(self, agent_id: str) -> dict:
-        """Unregister an agent. Idempotent on not-joined.
-
-        Internal method — no longer exposed as an MCP tool. Agents leave
-        via ``request_leave`` (ticket 0b80), which wraps this with a
-        signoff cue and grace window. Still used by ``request_leave`` itself
-        and by tests / idle-TTL logic.
-
-        If the room becomes empty as a result of this leave, schedules
-        the idle-TTL teardown (ticket 0c5d). A no-op leave on a room
-        that was already empty does NOT schedule a timer — TTL is only
-        started on *transitions* into the empty state.
-        """
-        if agent_id in self._joined_agents:
-            self._joined_agents.remove(agent_id)
-            logger.info(f"VoiceChannel: agent {agent_id!r} left (members: {sorted(self._joined_agents)})")
-            self._schedule_ttl_if_empty()
-        else:
-            logger.debug(f"VoiceChannel: leave_convo no-op for {agent_id!r} (not joined)")
-        return self.status()
-
-    async def request_leave(
-        self,
-        agent_id: str = "default",
-        grace_seconds: float = 4.0,
-    ) -> dict:
-        """Politely request to leave the convo. Ticket 0b80.
+    async def request_leave(self) -> dict:
+        """Politely announce intent to leave the convo. Ticket 0b80.
 
         Flow:
             1. Play the active profile's signoff phrase via TTS (if any).
             2. Play the descending-beep audio cue (ticket 6b60 problem A).
-            3. Wait ``grace_seconds`` for the user to speak. If they do,
-               the leave is cancelled and the return dict reflects it.
-            4. Otherwise, remove the agent from the room and return
-               ``{"left": True, ...}``.
+            3. Wait for the configured grace window (user-controlled,
+               not agent-controlled — see ``_request_leave_grace_seconds``).
+            4. If the user speaks during the grace window, return
+               ``{"left": False, "user_interrupted": True, "text": ...}``
+               and the caller should resume the conversation.
+            5. Otherwise return ``{"left": True, ...}`` and the caller
+               is expected to stop driving.
 
-        Pass ``grace_seconds=0`` for an immediate hard leave (no signoff,
-        no beep, no wait). This is the "must-go" case that the old
-        ``leave_convo`` MCP tool covered before 0b80 folded everything
-        into this one tool.
+        No state is mutated on the channel — "leaving" is an agent-side
+        behavior (stop calling convo_speak / convo_listen). The channel
+        only orchestrates the signoff ritual and reports whether the
+        user objected.
+
+        Grace window is configured via
+        ``TALKY_REQUEST_LEAVE_GRACE_SECS`` env var /
+        ``room.request_leave_grace_seconds`` in ``~/.talky/settings.yaml``.
+        A value of ``0`` disables the ceremony entirely.
         """
         if not self.is_live():
-            # No live pipeline to play a cue through — just update room
-            # membership and return.
-            self.leave_convo(agent_id)
             return {
                 "left": True,
                 "user_interrupted": False,
                 "reason": "pipeline not live",
             }
 
-        if grace_seconds <= 0:
-            # Hard leave — no ceremony.
-            self.leave_convo(agent_id)
+        grace = self._request_leave_grace_seconds
+        if grace <= 0:
             return {
                 "left": True,
                 "user_interrupted": False,
-                "reason": "hard leave (grace=0)",
+                "reason": "grace disabled (grace_seconds <= 0)",
             }
 
         # 1. Signoff phrase (skipped for MCP driver — agent supplies its own voice).
@@ -412,8 +391,7 @@ class VoiceChannel:
 
         # 3. Grace window — race user speech against the timeout.
         try:
-            spoken = await asyncio.wait_for(self.listen(), timeout=grace_seconds)
-            # User objected — cancel the leave.
+            spoken = await asyncio.wait_for(self.listen(), timeout=grace)
             logger.info(
                 f"VoiceChannel.request_leave: user interrupted ({spoken.get('text', '')!r}) — staying"
             )
@@ -429,12 +407,10 @@ class VoiceChannel:
             # as "gone, nothing more to do" and leave.
             logger.debug(f"VoiceChannel.request_leave: listen raised during grace: {e}")
 
-        # 4. Actually leave.
-        self.leave_convo(agent_id)
         return {
             "left": True,
             "user_interrupted": False,
-            "grace_seconds": grace_seconds,
+            "grace_seconds": grace,
         }
 
     def available_profiles(self) -> list[str]:
@@ -590,12 +566,12 @@ class VoiceChannel:
             await self._build_and_start_pipeline(connection)
 
     async def detach(self) -> None:
-        """Tear down the active pipeline and clear room state.
+        """Tear down the active pipeline and clear profile state.
 
-        Explicit detach clears everything: pipeline, joined agents,
-        active profile. Contrast with the browser-disconnect path, which
-        keeps room state so the next browser connection can pick up
-        where it left off.
+        Explicit detach clears the pipeline and the saved active
+        profile. Contrast with the browser-disconnect path, which keeps
+        the active profile so the next browser connection can restore
+        it.
 
         No longer exposed as an MCP tool (the old ``end_convo`` was
         removed in ticket 0b80). Still called by the lifespan shutdown
@@ -605,20 +581,20 @@ class VoiceChannel:
         # the teardown (and can't try to call detach() recursively).
         self._cancel_ttl()
         async with self._attach_lock:
-            await self._teardown_locked(preserve_room_state=False)
+            await self._teardown_locked(preserve_active_profile=False)
 
     async def _disconnect_cleanup(self) -> None:
-        """Tear down the pipeline but preserve room state.
+        """Tear down the pipeline but preserve the active profile.
 
         Triggered by the transport's ``on_client_disconnected`` event
         when the browser peer goes away. The next ``attach()`` will
         rebuild a fresh pipeline and restore the saved profile.
 
-        If no agents are joined, the room becomes empty as a result —
-        schedule the idle-TTL teardown (ticket 0c5d).
+        The room is now empty (browser peer is gone) — schedule the
+        idle-TTL teardown (ticket 0c5d).
         """
         async with self._attach_lock:
-            await self._teardown_locked(preserve_room_state=True)
+            await self._teardown_locked(preserve_active_profile=True)
         # Outside the lock: the room may be empty now. Schedule TTL if so.
         self._schedule_ttl_if_empty()
 
@@ -637,15 +613,15 @@ class VoiceChannel:
         except Exception as e:  # noqa: BLE001
             logger.debug(f"VoiceChannel: could not restore profile {profile_name!r}: {e}")
 
-    async def _teardown_locked(self, preserve_room_state: bool = False) -> None:
+    async def _teardown_locked(self, preserve_active_profile: bool = False) -> None:
         """Cancel the pipeline task. Caller must hold ``_attach_lock``.
 
         Args:
-            preserve_room_state: If True, keep ``_joined_agents`` and
-                ``_active_profile`` so the next attach() can restore them.
-                Used when the browser peer disconnects but the room should
-                survive (ticket 3f12 phase 2). If False (explicit detach /
-                shutdown), all state is cleared.
+            preserve_active_profile: If True, keep ``_active_profile``
+                so the next ``attach()`` can restore it. Used when the
+                browser peer disconnects but the room should survive
+                (ticket 3f12 phase 2). If False (explicit detach /
+                shutdown), the profile is cleared too.
         """
         self._disconnected.set()
         task = self._pipeline_task
@@ -659,11 +635,10 @@ class VoiceChannel:
         # (pipecat services are pipeline-bound), so clear them regardless.
         self._llm_services = {}
 
-        if not preserve_room_state:
-            self._joined_agents = set()
+        if not preserve_active_profile:
             self._active_profile = None
-        # If preserving: joined_agents stays, and _active_profile stays as the
-        # "desired profile" that the next attach() will switch back to.
+        # If preserving: _active_profile stays as the "desired profile"
+        # that the next attach() will switch back to.
 
         if task is not None:
             try:
@@ -875,13 +850,13 @@ class VoiceChannel:
 
         @transport.event_handler("on_client_disconnected")
         async def on_disconnected(transport, client):  # noqa: ANN001, ARG001
-            logger.info("VoiceChannel: client disconnected — tearing down pipeline, preserving room state")
+            logger.info("VoiceChannel: client disconnected — tearing down pipeline, preserving active profile")
             # Phase 2 (3f12): tear down the pipeline when the peer goes
-            # away, but preserve room state (joined_agents, active_profile)
-            # so the next attach() can restore it. Pipecat services can't
-            # be reused across pipeline rebuilds, so the pipeline itself
-            # has to be rebuilt — but from the user's perspective, closing
-            # and reopening the browser should feel seamless.
+            # away, but preserve the active profile so the next attach()
+            # can restore it. Pipecat services can't be reused across
+            # pipeline rebuilds, so the pipeline itself has to be rebuilt
+            # — but from the user's perspective, closing and reopening
+            # the browser should feel seamless.
             asyncio.create_task(self._disconnect_cleanup())
 
         # NB: No on_user_turn_stopped handler here.

@@ -60,16 +60,16 @@ Full-duplex, open-channel audio via browser. Echo cancellation, interruptions, v
 **Tools:**
 
 - `start_convo` — starts the Pipecat pipeline and browser UI.
-- `join_convo(agent_id)` — claim the room as a driver before speaking or listening.
+- `join_convo()` — check in to the conversation. Returns channel status so you can verify the pipeline is live and inspect the active profile. No arguments, no state mutation — it's an "I'm here" ritual.
 - `convo_speak(text)` — say something.
 - `convo_listen()` — blocks until the user speaks, returns transcript.
-- `request_leave(agent_id, grace_seconds=4)` — polite exit. Plays a signoff cue, waits a grace window for the user to object, then leaves. Returns `{left, user_interrupted, text?}`. If `user_interrupted` is true, the user spoke up — resume the conversation, do **not** leave.
+- `request_leave()` — polite exit. Plays the active profile's signoff phrase (if any) followed by a descending-beep cue, then waits a user-configured grace window for them to object. Returns `{left, user_interrupted, text?}`. If `user_interrupted` is true, the user spoke up — resume the conversation, do **not** leave. No arguments — the grace window is controlled by the user via config, not by you.
 
 **Constraints specific to this mode:**
 
 - **After every `convo_speak`, call `convo_listen` immediately.** Forgetting is the single most common way to break a conversation — the user is still standing there and you've silently dropped out of voice. Keep the channel alive.
-- **If the pipeline dies ("voice agent process has stopped"), restart it.** Call `start_convo` again, acknowledge the blip in one sentence, continue. (There is no longer a teardown tool — the pipeline rebuilds on reconnect automatically.)
-- **End on signal.** When the user says "that's all," "we're done," etc., call `request_leave` (default grace is fine), honor `user_interrupted` if it comes back true, otherwise drop back to text. Don't linger and don't use `grace_seconds=0` except in genuine must-go scenarios.
+- **If the pipeline dies ("voice agent process has stopped"), restart it.** Call `start_convo` again, acknowledge the blip in one sentence, continue. (There is no teardown tool — the pipeline rebuilds on reconnect automatically.)
+- **End on signal.** When the user says "that's all," "we're done," etc., call `request_leave()`. Honor `user_interrupted` if it comes back true; otherwise drop back to text. Don't linger.
 - **Never tear down the pipeline unilaterally.** There is no agent-facing tool to do this on purpose. If the human wants the whole session killed, they'll use the CLI.
 - **Executive Assistant posture applies to every `convo_speak` string.**
 
