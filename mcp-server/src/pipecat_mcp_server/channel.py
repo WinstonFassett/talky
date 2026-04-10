@@ -469,15 +469,18 @@ class VoiceChannel:
 
         Works whether or not a pipeline is live — reads from the profile
         manager directly so a user can preselect a profile before the
-        browser is open.
+        browser is open. Includes talky profile names (which may overlap
+        with LLM backend names).
         """
         from shared.profile_manager import get_profile_manager
 
         try:
-            backends = list(get_profile_manager().list_llm_backends().keys())
+            pm = get_profile_manager()
+            # Union of talky profile names and LLM backend names.
+            names = set(pm.list_talky_profiles().keys()) | set(pm.list_llm_backends().keys())
         except Exception:  # noqa: BLE001
-            backends = []
-        return [self.MCP_DRIVER_PROFILE, *backends]
+            names = set()
+        return [self.MCP_DRIVER_PROFILE, *sorted(names)]
 
     async def switch_to_profile(self, profile_name: str) -> None:
         """Flip the active LLM profile.
@@ -543,11 +546,14 @@ class VoiceChannel:
         })
 
     def profiles_info(self) -> list[dict]:
-        """Return configured LLM profiles with metadata + health.
+        """Return talky profiles with metadata + health.
 
         Works without a live pipeline — reads from config. Each entry:
         ``{"name": str, "label": str, "description": str, "active": bool,
         "healthy": bool | None}``.
+
+        MCP Mode is prepended as a synthetic entry (it's the raw
+        receiving state, not a talky profile).
         """
         from shared.profile_manager import get_profile_manager
 
@@ -563,13 +569,18 @@ class VoiceChannel:
         ]
         try:
             pm = get_profile_manager()
-            for name, desc in pm.list_llm_backends().items():
+            for name, desc in pm.list_talky_profiles().items():
+                # Health is keyed by the underlying LLM backend name,
+                # which may differ from the talky profile name. Fall
+                # back to the profile name itself for the lookup.
+                tp = pm.get_talky_profile(name)
+                backend_name = (tp.llm_backend if tp and tp.llm_backend else name)
                 profiles.append({
                     "name": name,
                     "label": name,
                     "description": desc,
                     "active": active == name,
-                    "healthy": self._health.get(name),
+                    "healthy": self._health.get(backend_name),
                 })
         except Exception:  # noqa: BLE001
             pass

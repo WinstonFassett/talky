@@ -130,7 +130,7 @@ export const LLMProfileSelect = () => {
   return (
     <div className="flex items-center gap-2">
       <label htmlFor="llm-profile-select" className="text-sm font-medium text-gray-700">
-        Backend:
+        Profile:
       </label>
       <Select
         value={activeProfile}
