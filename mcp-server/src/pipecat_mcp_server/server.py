@@ -18,7 +18,8 @@ Conversation tools (browser pipeline, WebRTC, in-process):
     start_convo: Open the browser to the voice UI.
     convo_speak: Speak text within an active conversation.
     convo_listen: Listen for user speech within an active conversation.
-    end_convo: Detach the active pipeline.
+    join_convo: Check in to the conversation (returns channel status).
+    request_leave: Polite exit with signoff cue + grace window.
 
 Architecture (ticket 58db — "hot voice channel"):
     The voice pipeline is in-process. `SmallWebRTCRequestHandler` is
