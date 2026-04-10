@@ -1,7 +1,7 @@
 """Tests for VoiceChannel.request_leave (ticket 0b80).
 
 Scope: the request_leave state machine — grace-window race between
-user speech and timeout, grace=0 shortcut, and the non-live no-op
+speech onset and timeout, grace=0 shortcut, and the non-live no-op
 path. Does NOT exercise real TTS, audio-cue playback, or WebRTC.
 
 The live-pipeline paths are exercised via monkeypatched ``is_live``,
@@ -11,6 +11,11 @@ which steps ran and drive the grace-window timing deterministically.
 request_leave takes no arguments — the grace window is set at
 channel-construction time from server config (env var + YAML),
 not per-call. Tests set it directly on the channel instance.
+
+The grace window detects speech ONSET (``_user_speaking`` event from
+VAD) rather than waiting for a full transcribed utterance. If speech
+onset is detected, request_leave then waits for the full utterance
+via listen() with no timeout.
 """
 
 from __future__ import annotations
@@ -80,29 +85,21 @@ async def test_request_leave_grace_zero_skips_signoff_and_cue(monkeypatch):
     ch._inject_cue.assert_not_awaited()  # type: ignore[attr-defined]
 
 
-# ── signoff phrase + cue are played ──────────────────────────────────────
+# ── signoff phrase + cue are played, silence during grace ────────────────
 
 
 @pytest.mark.asyncio
 async def test_request_leave_plays_signoff_then_cue(monkeypatch):
     """Configured signoff is spoken, then the descending-beep cue plays.
 
-    Order matters: signoff phrase first, cue second.
+    No speech onset during grace → left=True.
     """
-    ch = _live_channel(monkeypatch, grace_seconds=0.05)
+    ch = _live_channel(monkeypatch, grace_seconds=0.1)
     ch._active_profile = "openclaw"
 
-    # Fake the signoff lookup so we don't depend on real config.
     monkeypatch.setattr(
         ch, "_signoff_for_profile", lambda name: "openclaw signing off"
     )
-
-    # listen() should time out (no user speech).
-    async def _slow_listen() -> dict[str, Any]:
-        await asyncio.sleep(1.0)  # longer than grace → caller hits timeout
-        return {"text": "never runs"}
-
-    monkeypatch.setattr(ch, "listen", _slow_listen)
 
     result = await ch.request_leave()
 
@@ -112,31 +109,76 @@ async def test_request_leave_plays_signoff_then_cue(monkeypatch):
     ch._inject_cue.assert_awaited_once()  # type: ignore[attr-defined]
 
 
-# ── user interrupts the grace window ─────────────────────────────────────
+# ── user interrupts the grace window via speech onset ────────────────────
 
 
 @pytest.mark.asyncio
 async def test_request_leave_user_interrupts_grace(monkeypatch):
-    """User speech during grace window cancels the leave.
+    """Speech onset during grace window cancels the leave.
 
-    Return dict carries user_interrupted=True plus the text.
+    _user_speaking fires during the grace window. request_leave then
+    waits for the full utterance via listen() and returns
+    user_interrupted=True.
     """
     ch = _live_channel(monkeypatch, grace_seconds=2.0)
 
     monkeypatch.setattr(ch, "_signoff_for_profile", lambda name: None)
 
-    # listen() returns quickly with text.
+    # listen() returns the full utterance after onset is detected.
     async def _fast_listen() -> dict[str, Any]:
-        await asyncio.sleep(0.01)
         return {"text": "wait, one more thing", "segments": []}
 
     monkeypatch.setattr(ch, "listen", _fast_listen)
+
+    # Simulate speech onset shortly after grace window opens.
+    async def _fire_onset():
+        await asyncio.sleep(0.05)
+        ch._user_speaking.set()
+
+    asyncio.create_task(_fire_onset())
 
     result = await ch.request_leave()
 
     assert result["left"] is False
     assert result["user_interrupted"] is True
     assert result["text"] == "wait, one more thing"
+
+
+# ── the exact bug: speech onset near end of grace, slow transcription ────
+
+
+@pytest.mark.asyncio
+async def test_request_leave_late_onset_slow_transcription(monkeypatch):
+    """Reproduces the 2026-04-09 bug: user starts speaking at second 3
+    of a 4-second grace window, but the full utterance takes 2 more
+    seconds to transcribe. The old implementation would have timed out
+    and left while the user was mid-sentence. The new one detects onset
+    and waits.
+    """
+    ch = _live_channel(monkeypatch, grace_seconds=0.5)
+
+    monkeypatch.setattr(ch, "_signoff_for_profile", lambda name: None)
+
+    # listen() takes a while to return (simulating slow transcription).
+    async def _slow_listen() -> dict[str, Any]:
+        await asyncio.sleep(0.5)  # longer than grace window
+        return {"text": "no you cannot leave denied", "segments": []}
+
+    monkeypatch.setattr(ch, "listen", _slow_listen)
+
+    # Speech onset fires near the end of the grace window.
+    async def _late_onset():
+        await asyncio.sleep(0.4)  # just before grace expires
+        ch._user_speaking.set()
+
+    asyncio.create_task(_late_onset())
+
+    result = await ch.request_leave()
+
+    # Must NOT have left — speech was detected before grace expired.
+    assert result["left"] is False
+    assert result["user_interrupted"] is True
+    assert result["text"] == "no you cannot leave denied"
 
 
 # ── MCP driver profile: no signoff phrase, cue still plays ───────────────
@@ -148,17 +190,8 @@ async def test_request_leave_mcp_driver_skips_signoff_plays_cue(monkeypatch):
 
     MCPDriver has no intrinsic voice; the agent supplies its own.
     """
-    ch = _live_channel(monkeypatch, grace_seconds=0.05)
+    ch = _live_channel(monkeypatch, grace_seconds=0.1)
     ch._active_profile = VoiceChannel.MCP_DRIVER_PROFILE
-
-    # _signoff_for_profile returns None for MCP driver by design —
-    # we rely on the real implementation here.
-
-    async def _slow_listen() -> dict[str, Any]:
-        await asyncio.sleep(1.0)
-        return {"text": "never runs"}
-
-    monkeypatch.setattr(ch, "listen", _slow_listen)
 
     result = await ch.request_leave()
 
@@ -175,17 +208,19 @@ async def test_request_leave_mcp_driver_skips_signoff_plays_cue(monkeypatch):
 async def test_request_leave_peer_disconnect_during_grace(monkeypatch):
     """Peer disconnect during grace window is treated as a clean leave.
 
-    listen() raises RuntimeError on disconnect; request_leave swallows
-    that and proceeds.
+    _disconnected event fires during the grace window; request_leave
+    detects it and returns left=True without waiting for speech.
     """
-    ch = _live_channel(monkeypatch, grace_seconds=1.0)
+    ch = _live_channel(monkeypatch, grace_seconds=2.0)
 
     monkeypatch.setattr(ch, "_signoff_for_profile", lambda name: None)
 
-    async def _dead_listen() -> dict[str, Any]:
-        raise RuntimeError("WebRTC peer disconnected during listen()")
+    # Simulate disconnect during grace.
+    async def _fire_disconnect():
+        await asyncio.sleep(0.05)
+        ch._disconnected.set()
 
-    monkeypatch.setattr(ch, "listen", _dead_listen)
+    asyncio.create_task(_fire_disconnect())
 
     result = await ch.request_leave()
 

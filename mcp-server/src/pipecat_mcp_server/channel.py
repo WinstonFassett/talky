@@ -95,6 +95,7 @@ from pipecat.frames.frames import (
     LLMFullResponseStartFrame,
     LLMTextFrame,
     OutputAudioRawFrame,
+    UserStartedSpeakingFrame,
 )
 from pipecat.pipeline.llm_switcher import LLMSwitcher
 from pipecat.pipeline.pipeline import Pipeline
@@ -183,6 +184,12 @@ class VoiceChannel:
 
         # Speech buffer — written by MCPDriverLLMService, drained by listen()
         self._user_speech_queue: asyncio.Queue[Any] = asyncio.Queue()
+
+        # Speech-onset sentinel — set when VAD detects the user started
+        # speaking, cleared on pipeline teardown. Used by request_leave
+        # to detect speech ONSET during the grace window rather than
+        # waiting for a completed utterance. Ticket 0b80 bug fix.
+        self._user_speaking: asyncio.Event = asyncio.Event()
 
         # Disconnect sentinel — signals listen() callers when the peer goes away
         self._disconnected: asyncio.Event = asyncio.Event()
@@ -389,24 +396,64 @@ class VoiceChannel:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"VoiceChannel.request_leave: cue inject failed: {e}")
 
-        # 3. Grace window — race user speech against the timeout.
+        # 3. Grace window — detect speech ONSET, not a completed utterance.
+        #
+        # The old approach raced listen() (which waits for a full
+        # transcribed turn) against the grace timeout. If the user
+        # started speaking at second 3 of a 4-second window but the
+        # turn took 3 seconds to transcribe, the timeout won and the
+        # system left while the user was mid-sentence. Bug confirmed
+        # live on 2026-04-09.
+        #
+        # New approach: race _user_speaking (set on VAD speech onset)
+        # against the timeout. If the user makes ANY sound during the
+        # grace window, wait for their full utterance with no timeout.
+        self._user_speaking.clear()
+        onset_task = asyncio.create_task(self._user_speaking.wait())
+        disc_task = asyncio.create_task(self._disconnected.wait())
         try:
-            spoken = await asyncio.wait_for(self.listen(), timeout=grace)
-            logger.info(
-                f"VoiceChannel.request_leave: user interrupted ({spoken.get('text', '')!r}) — staying"
+            done, _ = await asyncio.wait(
+                {onset_task, disc_task},
+                timeout=grace,
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            return {
-                "left": False,
-                "user_interrupted": True,
-                "text": spoken.get("text", ""),
-            }
-        except asyncio.TimeoutError:
-            pass
-        except RuntimeError as e:
-            # listen() raises RuntimeError on peer disconnect; treat that
-            # as "gone, nothing more to do" and leave.
-            logger.debug(f"VoiceChannel.request_leave: listen raised during grace: {e}")
+        finally:
+            for t in (onset_task, disc_task):
+                if not t.done():
+                    t.cancel()
 
+        if disc_task in done:
+            # Peer disconnected during grace — nothing to do, leave.
+            logger.debug("VoiceChannel.request_leave: peer disconnected during grace")
+            return {
+                "left": True,
+                "user_interrupted": False,
+                "grace_seconds": grace,
+            }
+
+        if onset_task in done:
+            # User started speaking — wait for the full utterance,
+            # no timeout. They spoke up; we owe them the floor.
+            logger.info("VoiceChannel.request_leave: speech onset detected during grace — waiting for full utterance")
+            try:
+                spoken = await self.listen()
+                logger.info(
+                    f"VoiceChannel.request_leave: user interrupted ({spoken.get('text', '')!r}) — staying"
+                )
+                return {
+                    "left": False,
+                    "user_interrupted": True,
+                    "text": spoken.get("text", ""),
+                }
+            except RuntimeError as e:
+                logger.debug(f"VoiceChannel.request_leave: listen raised after onset: {e}")
+                return {
+                    "left": True,
+                    "user_interrupted": False,
+                    "grace_seconds": grace,
+                }
+
+        # Timeout — no speech onset at all. Leave.
         return {
             "left": True,
             "user_interrupted": False,
@@ -624,6 +671,7 @@ class VoiceChannel:
                 shutdown), the profile is cleared too.
         """
         self._disconnected.set()
+        self._user_speaking.clear()
         task = self._pipeline_task
         runner_task = self._runner_task
         self._pipeline_task = None
@@ -858,6 +906,14 @@ class VoiceChannel:
             # — but from the user's perspective, closing and reopening
             # the browser should feel seamless.
             asyncio.create_task(self._disconnect_cleanup())
+
+        # Speech-onset handler — sets _user_speaking when VAD detects
+        # the user started talking. Used by request_leave to detect
+        # speech during the grace window without waiting for a full
+        # transcribed utterance. Ticket 0b80 bug fix.
+        @transport.event_handler("on_user_started_speaking")
+        async def on_user_speaking(transport, *args):  # noqa: ANN001, ARG001
+            self._user_speaking.set()
 
         # NB: No on_user_turn_stopped handler here.
         # Speech queue writes are handled by MCPDriverLLMService via
