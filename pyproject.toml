@@ -9,6 +9,7 @@ dependencies = [
     "rich>=13.0.0",
     "loguru>=0.7.3",
     "pipecat-ai[google,kokoro,runner,silero,webrtc]==0.0.102",
+    "pyaudio",
     "InquirerPy>=0.3.4",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
