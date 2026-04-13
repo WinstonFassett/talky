@@ -9,9 +9,13 @@ dependencies = [
     "rich>=13.0.0",
     "loguru>=0.7.3",
     "pipecat-ai[runner,silero,webrtc]==0.0.102",
+    "pipecat-ai-mcp-server",
     "InquirerPy>=0.3.4",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
+
+[tool.uv.sources]
+pipecat-ai-mcp-server = { workspace = true }
 
 [tool.uv.workspace]
 members = ["server", "mcp-server"]
