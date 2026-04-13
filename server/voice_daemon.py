@@ -516,7 +516,7 @@ def start_daemon(wait: bool = True) -> bool:
     # Install provider deps before forking — the lazy installer may re-exec
     # the process, which only works while stdio is still connected.
     from shared.dependency_installer import ensure_dependencies
-    ensure_dependencies()
+    ensure_dependencies(for_cli=True)
 
     VOICE_SOCKET_PATH.unlink(missing_ok=True)
     VOICE_PID_FILE.unlink(missing_ok=True)
