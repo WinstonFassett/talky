@@ -3,14 +3,16 @@
 ## Commands
 
 ```bash
-uv tool install --editable .          # install/update tool
-uv sync                               # dev only (ruff/pyright)
+uv tool install --editable . --python 3.12   # install/update global `talky` binary
+uv sync                                      # sync project venv (dev + after dep changes)
 talky daemon                          # ensure the daemon is running (listens on 9090)
 talky <profile>                       # e.g. `talky openclaw` — ensures daemon and switches its active LLM
 talky profile [<name>]                # explicit daemon profile control (list / switch)
 talky kill                            # reclaim port 9090
 uv run ruff check . && uv run pyright
 ```
+
+After changing pyproject.toml deps: `uv sync && uv tool install --editable . --force --python 3.12`. Both venvs must stay in sync — the tool venv resolves independently from pyproject.toml, not from the lockfile. Pin critical deps with `==`.
 
 ## Architecture
 
