@@ -245,7 +245,7 @@ class OpenClawLLMService(LLMService):
     CLIENT_MODE = "cli"
     ROLE = "operator"
     SCOPES = ["operator.admin", "operator.approvals", "operator.pairing"]
-    SESSION_KEY = "voice-session"
+    SESSION_KEY = "agent:main:main"
 
     def __init__(self, *, gateway_url: str = None, agent_id: str = "main", session_key: str = None, **kwargs):
         super().__init__(**kwargs)

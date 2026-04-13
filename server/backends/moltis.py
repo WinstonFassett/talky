@@ -68,19 +68,19 @@ class MoltisLLMService(LLMService):
         from datetime import datetime
 
         if self.session_strategy == "persistent":
-            return f"agent:{self.agent_id}:voice"
+            return f"agent:{self.agent_id}:main"
         elif self.session_strategy == "per-connection":
             timestamp = int(time.time())
-            return f"agent:{self.agent_id}:voice-{timestamp}"
+            return f"agent:{self.agent_id}:main-{timestamp}"
         elif self.session_strategy == "daily":
             today = datetime.now().strftime("%Y-%m-%d")
-            return f"agent:{self.agent_id}:voice-{today}"
+            return f"agent:{self.agent_id}:main-{today}"
         elif self.session_strategy == "new":
             timestamp = int(time.time())
-            return f"agent:{self.agent_id}:voice-{timestamp}"
+            return f"agent:{self.agent_id}:main-{timestamp}"
         else:
             # Default to persistent
-            return f"agent:{self.agent_id}:voice"
+            return f"agent:{self.agent_id}:main"
 
     async def _connect(self):
         """Connect to Moltis gateway"""
