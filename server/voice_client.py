@@ -10,7 +10,7 @@ from typing import Optional
 
 from shared.daemon_protocol import (
     VOICE_SOCKET_PATH,
-    daemon_is_running,
+    voice_daemon_is_running,
     recv_message,
     send_message,
 )
@@ -96,14 +96,14 @@ def main():
 
     args = parser.parse_args()
 
-    if args.wait and not daemon_is_running():
+    if args.wait and not voice_daemon_is_running():
         deadline = time.time() + args.wait
         while time.time() < deadline:
-            if daemon_is_running():
+            if voice_daemon_is_running():
                 break
             time.sleep(0.5)
 
-    if not daemon_is_running():
+    if not voice_daemon_is_running():
         print("Voice daemon not running", file=sys.stderr)
         sys.exit(1)
 
