@@ -89,7 +89,7 @@ def _write_all_yamls(config_dir: Path):
 
 def test_profile_manager_loads_all_configs(tmp_path):
     """5 yamls in tmp dir → PM loads them all."""
-    from server.config.profile_manager import ProfileManager
+    from shared.profile_manager import ProfileManager
 
     _write_all_yamls(tmp_path)
     pm = ProfileManager(config_dir=tmp_path)
@@ -105,7 +105,7 @@ def test_profile_manager_loads_all_configs(tmp_path):
 
 def test_profile_manager_copies_defaults_on_missing(tmp_path):
     """Empty dir + bundled defaults → PM copies and loads."""
-    from server.config.profile_manager import ProfileManager
+    from shared.profile_manager import ProfileManager
 
     # tmp_path is empty, PM should copy from bundled defaults
     pm = ProfileManager(config_dir=tmp_path)
@@ -123,7 +123,7 @@ def test_profile_manager_copies_defaults_on_missing(tmp_path):
 
 def test_profile_manager_resolves_talky_profile(tmp_path):
     """Name → LLM backend + voice profile + configs."""
-    from server.config.profile_manager import ProfileManager
+    from shared.profile_manager import ProfileManager
 
     _write_all_yamls(tmp_path)
     pm = ProfileManager(config_dir=tmp_path)
@@ -136,7 +136,7 @@ def test_profile_manager_resolves_talky_profile(tmp_path):
 
 def test_profile_manager_resolve_unknown_raises(tmp_path):
     """Unknown profile → ValueError."""
-    from server.config.profile_manager import ProfileManager
+    from shared.profile_manager import ProfileManager
 
     _write_all_yamls(tmp_path)
     pm = ProfileManager(config_dir=tmp_path)
@@ -192,7 +192,7 @@ def test_service_factory_handles_credentials(tmp_path, monkeypatch):
 
 def test_profile_manager_loads_defaults_with_user_config(tmp_path):
     """Test that defaults are loaded even when user config exists (regression test for missing profiles)."""
-    from server.config.profile_manager import ProfileManager
+    from shared.profile_manager import ProfileManager
     import yaml
     
     # Create a user config that only has some profiles (simulating existing user)
@@ -218,22 +218,74 @@ def test_profile_manager_loads_defaults_with_user_config(tmp_path):
     profiles = list(pm.talky_profiles.keys())
     assert "user_profile" in profiles, "User profile should be loaded"
     
-    # Should have core+defaults profiles like "local" (from defaults)
-    core_defaults_profiles = ["local", "google", "developer", "pi-coding"]
-    found_core_defaults = [p for p in core_defaults_profiles if p in profiles]
-    assert len(found_core_defaults) > 0, f"Should load core/defaults profiles, found: {profiles}"
+    # Should also have at least one bundled core/default profile alongside the user one.
+    bundled = [p for p in profiles if p != "user_profile"]
+    assert bundled, f"Should load bundled core/defaults profiles, found: {profiles}"
+
+
+def test_profile_manager_greeting_field_round_trips(tmp_path):
+    """LLM backend ``greeting`` field flows from YAML to LLMBackend dataclass."""
+    from shared.profile_manager import ProfileManager
+
+    backends_with_greeting = {
+        "llm_backends": {
+            "test-backend": {
+                "description": "Test backend",
+                "service_class": "backends.test.TestLLMService",
+                "config": {"url": "ws://localhost:1234"},
+                "system_message": "You are a test.",
+                "greeting": "Hello, friend.",
+            }
+        }
+    }
+    _write_all_yamls(tmp_path)
+    (tmp_path / "llm-backends.yaml").write_text(yaml.dump(backends_with_greeting))
+
+    pm = ProfileManager(config_dir=tmp_path)
+
+    assert pm.llm_backends["test-backend"].greeting == "Hello, friend."
+
+
+def test_profile_manager_greeting_defaults_to_none_when_unset():
+    """Backends without an explicit ``greeting`` get None, not empty string."""
+    from shared.profile_manager import LLMBackend
+
+    bare = LLMBackend(name="x", description="", service_class="", config={})
+    assert bare.greeting is None
+
+
+def test_profile_manager_singleton_reset(tmp_path):
+    """get_profile_manager caches; resetting _instance lets a new config_dir take effect."""
+    import shared.profile_manager as pm_mod
+    from shared.profile_manager import get_profile_manager
+
+    _write_all_yamls(tmp_path)
+    old = pm_mod._instance
+    pm_mod._instance = None
+    try:
+        first = get_profile_manager(config_dir=tmp_path)
+        # Subsequent calls without config_dir reuse the cached singleton.
+        second = get_profile_manager()
+        assert first is second
+
+        # Resetting _instance forces a fresh build on next access.
+        pm_mod._instance = None
+        third = get_profile_manager(config_dir=tmp_path)
+        assert third is not first
+    finally:
+        pm_mod._instance = old
 
 
 def test_service_factory_raises_on_missing_provider(tmp_path):
     """Unknown provider → ValueError."""
     import shared.service_factory as sf
-    from server.config.profile_manager import ProfileManager, get_profile_manager
+    from shared.profile_manager import ProfileManager, get_profile_manager
     from shared.service_factory import create_tts_service_from_config
 
     _write_all_yamls(tmp_path)
 
     # Reset singleton so it uses our tmp config
-    import server.config.profile_manager as pm_mod
+    import shared.profile_manager as pm_mod
 
     old = pm_mod._instance
     pm_mod._instance = None

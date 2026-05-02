@@ -250,3 +250,5 @@ client/localhost-*.pem
 client/localhost-*.key
 server/server-*.pem
 server/server-*.key
+
+.desloppify/scorecard.png
