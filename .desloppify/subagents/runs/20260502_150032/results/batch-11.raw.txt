@@ -1,0 +1,109 @@
+{
+  "batch": "api_surface_coherence",
+  "batch_index": 11,
+  "assessments": {"api_surface_coherence": 76.0},
+  "dimension_notes": {
+    "api_surface_coherence": {
+      "evidence": [
+        "mcp-server/src/pipecat_mcp_server/server.py: 12 MCP tools all decorated `@mcp.tool()` and uniformly `async def` — consistent shape at the boundary",
+        "Return-type drift across MCP tools: `convo_speak -> bool` while siblings (`convo_listen`, `say_local_audio`, `start_convo`, etc.) all return `dict`. One sibling diverges from a strong dict-result convention",
+        "Error contracts diverge among similar tools: `switch_profile` and `switch_voice` swallow RuntimeError/ValueError and return `{'error': str(e)}`; `convo_speak`/`convo_listen` let exceptions propagate to the MCP layer; `say_local_audio` etc. delegate to daemon helpers that return `{'success': False, 'error': ...}`. Three different failure shapes for related ops",
+        "Result-shape drift: `say_local_audio`/voice daemon helpers use `{'success': bool, ...}`; `switch_profile` uses `{'status': 'ok', 'active': name}` on success and `{'error': str}` on failure (no `success` key, no `status` key on failure). A caller cannot use one predicate across these tools",
+        "Voice daemon clients (`server/voice_client.py:send_ask_request`, `server/voice_daemon.py:send_speak_request`) take 5–6 optional params each — at the >5 threshold but parameters are clearly named, defaulted, and homogeneous (all voice-routing options); borderline but acceptable",
+        "Two parallel transports exist for speak/listen: `say_local_audio`/`ask_local_audio` (local audio daemon) and `convo_speak`/`convo_listen` (browser pipeline). The verb pairs are intentionally distinct and individually documented, and `talk_local_audio` is an explicit alias for `ask_local_audio` with a docstring explaining why — coherent overall, though it doubles the surface",
+        "`request_leave` documentation is precise about its dict shape (`left`, `user_interrupted`, optional `text`), and `join_convo` returns `voice_channel.join_convo()` (status dict). Channel-layer return shapes documented",
+        "shared/daemon_protocol.py: small, uniform sync helpers (`send_message`/`recv_message`/`daemon_is_running`); no async/sync mixing here",
+        "shared/profile_manager.py public surface is fully sync `get_*`/`list_*` accessors plus a single resolver — consistent shape with no async leak",
+        "channel.VoiceChannel exposes a coherent async API (`speak`, `listen`, `switch_to_profile`, `switch_voice`, `attach`, `detach`, `request_leave`) plus sync queries (`is_live`, `status`, `join_convo`, `profiles_info`, `voices_info`). The async/sync split tracks I/O vs. inspection cleanly"
+      ],
+      "impact_scope": "module",
+      "fix_scope": "multi_file_refactor",
+      "confidence": "medium",
+      "issues_preventing_higher_score": "Inconsistent success/error shapes across MCP tools (`{success}` vs `{status,error}` vs raised exceptions vs `bool`); a caller cannot predict from one tool how its sibling reports failure."
+    }
+  },
+  "dimension_judgment": {
+    "api_surface_coherence": {
+      "dimension_character": "The public surfaces are mostly orderly: MCP tools share a uniform `@mcp.tool() async def` shape, the channel class has a clear async-for-IO / sync-for-query split, and shared protocol helpers are tight. The friction is concentrated in the result envelopes — sibling tools return `dict`, `bool`, `{success,...}`, `{status,...}`, or raise — so a developer cannot reuse one error/success predicate across the MCP surface and must read each tool to know what to expect.",
+      "score_rationale": "Strong shape consistency at the call-site level (decorator, async, naming, parameter ordering) keeps this above 70, but the recurring success/error envelope drift and one bool-returning outlier among dict-returning siblings is exactly the 'recurring irregularity' that the 80 anchor describes. Landing at 76 reflects a solid surface with a single but pervasive coherence gap that a developer will hit repeatedly when error-handling MCP tool calls."
+    }
+  },
+  "issues": [
+    {
+      "dimension": "api_surface_coherence",
+      "identifier": "mcp_result_envelope_drift",
+      "summary": "MCP tools use three incompatible success/error envelopes across siblings",
+      "related_files": ["mcp-server/src/pipecat_mcp_server/server.py"],
+      "evidence": [
+        "say_local_audio/ask_local_audio/talk_local_audio return daemon dicts shaped `{'success': bool, 'error'?: str, ...}`",
+        "switch_profile/switch_voice catch RuntimeError/ValueError and return `{'error': str(e)}` on failure but `{'status': 'ok', 'active': name}` on success — neither key is present in both branches",
+        "convo_speak/convo_listen let exceptions propagate (no error envelope) while their `_local_audio` siblings encode errors in the result"
+      ],
+      "suggestion": "Pick one failure contract for MCP tools (recommend: always return `{'success': bool, 'error'?: str, ...payload}` and let truly unexpected exceptions propagate). Update switch_profile/switch_voice to return `{'success': True, 'active': name}` / `{'success': False, 'error': str}` and document this envelope at the module top so new tools follow it.",
+      "confidence": "high",
+      "impact_scope": "module",
+      "fix_scope": "multi_file_refactor",
+      "root_cause_cluster": "mcp_envelope_drift"
+    },
+    {
+      "dimension": "api_surface_coherence",
+      "identifier": "convo_speak_returns_bool",
+      "summary": "convo_speak returns bool while every other convo_* tool returns dict",
+      "related_files": ["mcp-server/src/pipecat_mcp_server/server.py"],
+      "evidence": [
+        "Line 260: `async def convo_speak(text: str) -> bool: ... return True`",
+        "Sibling tools convo_listen, join_convo, request_leave, start_convo all return dict"
+      ],
+      "suggestion": "Change convo_speak to return `{'success': True}` (or richer payload like spoken text length) so callers can use one shape across the convo_* family.",
+      "confidence": "high",
+      "impact_scope": "local",
+      "fix_scope": "single_edit",
+      "root_cause_cluster": "mcp_envelope_drift"
+    },
+    {
+      "dimension": "api_surface_coherence",
+      "identifier": "switch_profile_silent_error",
+      "summary": "switch_profile/switch_voice silently catch errors, hiding failure mode from MCP layer",
+      "related_files": ["mcp-server/src/pipecat_mcp_server/server.py"],
+      "evidence": [
+        "Lines 351-355 / 379-383: `try: await voice_channel.switch_to_profile(profile) except (RuntimeError, ValueError) as e: return {'error': str(e)}`",
+        "No `success: False` flag — a caller checking `result.get('success')` sees None on failure and None-ish on success too (no success key on the OK path either)"
+      ],
+      "suggestion": "Either let the exception propagate (consistent with convo_speak) or return a uniform `{'success': bool, 'error'?: str, 'active'?: name}` envelope. Document the error contract in the docstring.",
+      "confidence": "high",
+      "impact_scope": "local",
+      "fix_scope": "single_edit",
+      "root_cause_cluster": "mcp_envelope_drift"
+    }
+  ],
+  "context_updates": {
+    "api_surface_coherence": {
+      "add": [
+        {
+          "header": "Uniform MCP tool decorator/async shape",
+          "description": "All 12 MCP tools in mcp-server/src/pipecat_mcp_server/server.py use `@mcp.tool() async def` with typed params and docstrings — call-site shape is predictable across the surface.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Channel class async/sync split tracks IO vs query",
+          "description": "VoiceChannel exposes async methods for IO-driven ops (speak, listen, switch_*, attach, request_leave) and sync methods for inspection (is_live, status, profiles_info). The split is principled, not accidental.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "MCP tool result envelopes drift across siblings",
+          "description": "Three incompatible shapes coexist: `{'success': bool, ...}` (local audio), `{'status': 'ok', 'active': name}` vs `{'error': str}` (switch_*), and raw `bool` (convo_speak). Callers cannot use a single predicate to detect failure, which is the dimension's primary friction.",
+          "settled": true,
+          "positive": false
+        },
+        {
+          "header": "Two transports for speak/listen are intentional, not duplication",
+          "description": "`*_local_audio` tools target the unix-socket voice daemon; `convo_*` tools target the in-process browser pipeline. Distinct verbs, distinct preconditions, individually documented — coherent design choice rather than API drift.",
+          "settled": true,
+          "positive": true
+        }
+      ]
+    }
+  }
+}

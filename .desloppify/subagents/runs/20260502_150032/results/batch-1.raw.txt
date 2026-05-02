@@ -1,0 +1,149 @@
+{
+  "batch": "cross_module_architecture",
+  "batch_index": 1,
+  "assessments": {"cross_module_architecture": 58.0},
+  "dimension_notes": {
+    "cross_module_architecture": {
+      "evidence": [
+        "mcp-server/src/pipecat_mcp_server/channel.py lines 85-89 mutates sys.path at import time to expose top-level shared/ and server/ packages to a workspace member that does not declare them as dependencies — comment explicitly admits 'project root containing server/ and shared/ is not [on path]'.",
+        "mcp-server/src/pipecat_mcp_server/services_factory.py lines 16 and 84 perform two more sys.path.insert() at import/function scope to reach shared/service_factory.py and a non-existent server/config/profile_manager (real path is shared/profile_manager.py) — mixes broken legacy import path with a working shim.",
+        "mcp-server/src/pipecat_mcp_server/services_factory.py is a thin pass-through wrapper around shared/service_factory.py functions of the same name; it duplicates the boundary instead of importing the canonical module — see line 17 'from service_factory import create_stt_service_from_config, create_tts_service_from_config'.",
+        "mcp-server/src/pipecat_mcp_server/channel.py contains 9 separate function-level 'from shared.profile_manager import get_profile_manager' imports; server.py adds 2 more — heavy deferred-import density signals cycle pressure or hub avoidance.",
+        "shared/profile_manager.py has 19 importers and shared/service_factory.py has 14 — concentrated hub modules drive blast radius on common changes.",
+        "talky_cli.py performs 4 sys.path.insert() calls (lines 24, 25, 222, 532) and conditionally inserts the mcp-server src path before importing daemon code — boot-order coupling baked into the CLI launcher.",
+        "Two parallel daemons coexist (server/voice_daemon.py 714 LOC for local audio; mcp-server channel/server for the WebRTC/MCP daemon) with no shared lifecycle layer — CLAUDE.md notes '9d02 unification deferred'.",
+        "Workspace structure: pyproject.toml lists workspace members 'server' and 'mcp-server', but the top-level shared/ directory is not a packaged member — it is reached only through sys.path tricks from mcp-server, while server/ imports it as a normal package via project root install.",
+        "mcp-server/src/pipecat_mcp_server/channel.py at 1252 LOC and server.py at 846 LOC act as hubs that re-import shared.profile_manager throughout because the package boundary is fuzzy.",
+        "shared/daemon_protocol.py keeps LEGACY_SOCKET_PATH/LEGACY_PID_FILE constants alongside VOICE_* — compatibility shim retained without active external need."
+      ],
+      "impact_scope": "codebase",
+      "fix_scope": "multi_file_refactor",
+      "confidence": "high"
+    }
+  },
+  "dimension_judgment": {
+    "cross_module_architecture": {
+      "dimension_character": "Architecture has a clear intended shape — workspace members server/ and mcp-server/ around a shared/ utilities layer with profile_manager as the config hub — but the boundary between mcp-server (a packaged distributable) and the top-level shared/+server/ tree is enforced by sys.path mutation rather than dependency declaration. The result is a working but fragile arrangement: hub modules concentrate change risk, function-level imports proliferate to dodge cycle issues, and a duplicate services_factory shim with a stale dead-path import sits at the boundary.",
+      "score_rationale": "Repeated sys.path manipulation across multiple modules, a one-implementation duplicate factory at the package seam, dense deferred-import patterns around the profile_manager hub, and two unmerged daemons together place this firmly in the 'significant drag' band where developers cannot trust boundaries without reading them. Domain decomposition is sensible and the hub itself is coherent, which keeps it above the severely problematic range, but the boundary debt is systemic rather than isolated."
+    }
+  },
+  "issues": [
+    {
+      "dimension": "cross_module_architecture",
+      "identifier": "mcp_server_syspath_boundary",
+      "summary": "mcp-server package reaches into top-level shared/ and server/ via sys.path.insert at import time",
+      "related_files": [
+        "mcp-server/src/pipecat_mcp_server/channel.py",
+        "mcp-server/src/pipecat_mcp_server/services_factory.py",
+        "talky_cli.py"
+      ],
+      "evidence": [
+        "channel.py lines 77-89 inject the talky project root onto sys.path so subsequent 'from shared.*' and 'from server.*' imports resolve.",
+        "services_factory.py line 16 inserts <root>/shared, line 84 inserts <root>/server before importing 'config.profile_manager' (which does not exist — the module lives at shared/profile_manager.py).",
+        "talky_cli.py lines 24-25 and 532 mutate sys.path before importing daemon code."
+      ],
+      "suggestion": "Promote shared/ to a proper workspace member (e.g. talky-shared package) listed in pyproject.toml's tool.uv.workspace.members and depended on by both server/ and mcp-server/. Then delete every sys.path.insert in production code and switch to plain 'from talky_shared.profile_manager import ...'. This removes the boundary fiction and makes dependency direction declarative.",
+      "confidence": "high",
+      "impact_scope": "codebase",
+      "fix_scope": "architectural_change",
+      "root_cause_cluster": "shared_not_a_package"
+    },
+    {
+      "dimension": "cross_module_architecture",
+      "identifier": "duplicate_services_factory_shim",
+      "summary": "mcp-server/services_factory.py duplicates shared/service_factory.py with a sys.path shim and a dead import path",
+      "related_files": [
+        "mcp-server/src/pipecat_mcp_server/services_factory.py",
+        "shared/service_factory.py"
+      ],
+      "evidence": [
+        "services_factory.py exposes create_stt_service / create_tts_service that simply forward to create_stt_service_from_config / create_tts_service_from_config in shared/service_factory.py.",
+        "Line 85 imports 'from config.profile_manager import get_profile_manager' — there is no config/profile_manager.py in server/config/; the real module is shared/profile_manager.py. This code path is broken.",
+        "Two services_factory modules exist (shared one and mcp-server one) with overlapping names — exactly the cross-package duplication the rubric flags as a missing shared boundary."
+      ],
+      "suggestion": "Delete mcp-server/src/pipecat_mcp_server/services_factory.py entirely and have mcp-server callers import shared/service_factory.py directly once shared/ is a real package. If a thin facade is needed for type-narrowed STT/TTS returns, keep one file with no sys.path tricks and remove create_services_from_profile (which references the non-existent config.profile_manager).",
+      "confidence": "high",
+      "impact_scope": "module",
+      "fix_scope": "multi_file_refactor",
+      "root_cause_cluster": "shared_not_a_package"
+    },
+    {
+      "dimension": "cross_module_architecture",
+      "identifier": "profile_manager_hub_function_imports",
+      "summary": "channel.py defers profile_manager imports 9 times inside methods, signaling hub/cycle pressure",
+      "related_files": [
+        "mcp-server/src/pipecat_mcp_server/channel.py",
+        "mcp-server/src/pipecat_mcp_server/server.py",
+        "shared/profile_manager.py"
+      ],
+      "evidence": [
+        "grep counts 9 'from shared.profile_manager import get_profile_manager' calls inside channel.py methods (lines 215, 475, 555, 584, 635, 701, 759, 779, 1054) and 2 in server.py (lines 80, 123).",
+        "shared/profile_manager.py is the most-imported module (19 importers) — a hub.",
+        "Deferred-import density across mcp_server pattern is flagged 18 files in scan evidence."
+      ],
+      "suggestion": "Hoist 'from shared.profile_manager import get_profile_manager' to module scope in channel.py and server.py once (after fixing the package boundary above). If a true import cycle exists, break it by extracting the small subset of profile_manager types these call sites need into a leaf module (e.g. profile_types.py with LLMBackend dataclass) and import that. Function-level imports should be the exception with a comment, not a 9x pattern.",
+      "confidence": "high",
+      "impact_scope": "subsystem",
+      "fix_scope": "multi_file_refactor",
+      "root_cause_cluster": "shared_not_a_package"
+    },
+    {
+      "dimension": "cross_module_architecture",
+      "identifier": "two_unmerged_daemons",
+      "summary": "voice_daemon (local audio) and talky daemon (mcp-server) are parallel subsystems with no shared lifecycle/boundary",
+      "related_files": [
+        "server/voice_daemon.py",
+        "mcp-server/src/pipecat_mcp_server/server.py",
+        "mcp-server/src/pipecat_mcp_server/channel.py",
+        "shared/daemon_protocol.py"
+      ],
+      "evidence": [
+        "server/voice_daemon.py is 714 LOC with its own unix-socket protocol; mcp-server runs an unrelated WebRTC/FastMCP daemon on tcp:9090.",
+        "shared/daemon_protocol.py defines VOICE_* and LEGACY_* socket/pid paths side-by-side, indicating an incomplete consolidation.",
+        "CLAUDE.md acknowledges 'two daemons, 9d02 unification deferred'."
+      ],
+      "suggestion": "Decide and document the boundary: either fold local-audio into the talky daemon as an in-process subsystem behind a stable interface in shared/, or document voice_daemon as an explicit, frozen sidecar with no further code sharing besides daemon_protocol. Then remove LEGACY_* constants in shared/daemon_protocol.py — they are unused-shim noise blurring the boundary.",
+      "confidence": "medium",
+      "impact_scope": "subsystem",
+      "fix_scope": "architectural_change"
+    }
+  ],
+  "retrospective": {
+    "root_causes": [
+      "shared/ exists logically as a third package but is not a packaged workspace member, forcing sys.path tricks at every cross-package call site.",
+      "mcp-server inherited a parallel services_factory shim that was never collapsed after shared/service_factory matured."
+    ],
+    "likely_symptoms": [
+      "profile_manager_hub_function_imports",
+      "duplicate_services_factory_shim"
+    ]
+  },
+  "context_updates": {
+    "cross_module_architecture": {
+      "add": [
+        {
+          "header": "shared/ reached via sys.path, not declared dep",
+          "description": "mcp-server and talky_cli rely on runtime sys.path injection to import shared/ and server/, because shared/ is not a workspace member. This is the structural source of multiple boundary defects (duplicate factories, deferred imports, broken legacy paths).",
+          "settled": true,
+          "positive": false
+        },
+        {
+          "header": "profile_manager is the config hub (19 importers)",
+          "description": "shared/profile_manager.py is the dominant import target across the codebase. Its hub role is intentional and the API is coherent, but it concentrates change blast radius and is reached through 11 deferred function-level imports in mcp-server.",
+          "settled": true,
+          "positive": false
+        },
+        {
+          "header": "Domain-aligned package decomposition",
+          "description": "Top-level packages (server/ for backends+local-audio, mcp-server/ for MCP+WebRTC daemon, shared/ for cross-cutting config) map cleanly to capabilities. The intended architecture is sensible — what undermines it is the boundary enforcement, not the partition.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Two parallel daemons coexist",
+          "description": "voice_daemon.py (unix socket, local audio) and the talky/mcp daemon (tcp:9090, WebRTC) run as siblings with separate lifecycles and protocols. CLAUDE.md flags the consolidation as deferred; daemon_protocol.py still carries LEGACY_* constants."
+        }
+      ]
+    }
+  }
+}

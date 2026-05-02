@@ -22,7 +22,7 @@ VOICE_SOCKET_PATH = Path("/tmp/talky_voice_daemon.sock")
 VOICE_PID_FILE = Path("/tmp/talky_voice_daemon.pid")
 
 
-def _daemon_is_running() -> bool:
+def talky_daemon_is_running() -> bool:
     """Check if voice daemon is running."""
     import os
 
@@ -61,7 +61,7 @@ def _find_voice_daemon_script() -> Optional[Path]:
 
 def ensure_daemon_running() -> bool:
     """Start the voice daemon if it's not already running."""
-    if _daemon_is_running():
+    if talky_daemon_is_running():
         return True
 
     import shutil

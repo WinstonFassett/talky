@@ -1,0 +1,146 @@
+{
+  "batch": "abstraction_fitness",
+  "batch_index": 6,
+  "assessments": {"abstraction_fitness": 76.0},
+  "dimension_notes": {
+    "abstraction_fitness": {
+      "evidence": [
+        "server/backends/base.py defines BaseLLMBackend (ABC), SimpleBackendMixin, DualPipelineMixin, BackendManager (147 LOC) but the only references are inside that file itself; MoltisLLMService and OpenClawLLMService extend pipecat.LLMService directly, PiLLMService is a plain class — none use these abstractions. Base detector also reports unused asyncio/AsyncGenerator/Frame imports.",
+        "server/backends/pi.py:116 create_pi_service() is a no-policy pass-through factory that just returns PiLLMService(config, work_dir); no callers in production tree.",
+        "shared/voice_config.py:44 create_vad_analyzer() is a one-line wrapper (return SileroVADAnalyzer()) with no policy.",
+        "shared/daemon_protocol.py:65/70 daemon_is_running and legacy_daemon_is_running each just call _check_daemon with constants — acceptable thin facades but border on pure forwarding.",
+        "server/tts_daemon.py is a 26-line re-export-only module ('backward-compatible wrapper around voice_daemon'); no in-tree importers.",
+        "server/backends/__init__.py is a pure re-export facade (defines 0 symbols, re-exports 3) — acceptable public-import facade.",
+        "Real domain modules are bounded and direct: server/backends/openclaw.py and moltis.py extend Pipecat LLMService inline; mcp_driver_llm_service.py is a documented Pipecat extension, not a generic helper.",
+        "shared/service_factory.py uses dotted-path importlib loading driven by voice-backends.yaml — config-driven plugin loading, not a generic indirection layer; small (149 LOC) and bounded to STT/TTS provider creation.",
+        "shared/profile_manager.py treats config as Dict[str, Any] (84 config_bag mentions) but those bags are deliberate YAML payloads with typed dataclass wrappers (LLMBackend, VoiceProfile, TalkyProfile) — not implicit parameter bags passed across functions.",
+        "Only one Dict[str, Any] function param flagged: event_bus.emit(data) — appropriate for a generic event payload bus."
+      ],
+      "impact_scope": "module",
+      "fix_scope": "multi_file_refactor",
+      "confidence": "high",
+      "sub_axes": {
+        "abstraction_leverage": 70.0,
+        "indirection_cost": 75.0,
+        "interface_honesty": 70.0,
+        "delegation_density": 88.0,
+        "definition_directness": 78.0,
+        "type_discipline": 90.0
+      }
+    }
+  },
+  "dimension_judgment": {
+    "abstraction_fitness": {
+      "dimension_character": "Most of the codebase favors direct, bounded modules — backends extend Pipecat's LLMService inline, profile_manager exposes typed dataclasses, and the MCPDriverLLMService is a clearly motivated Pipecat extension rather than an invented layer. The drag is a sizeable dead abstraction surface in server/backends/base.py (ABC + manager + mixins with zero callers) plus a few unused pass-through factories (create_pi_service, create_vad_analyzer) that add a hop without policy.",
+      "score_rationale": "Cleanly direct domain code and only one Dict[str, Any] annotation across the production tree pull the score above the solid-but-uneven anchor at 80. Dead-abstraction debt in backends/base.py and a couple of vestigial factory wrappers prevent a higher score by misleading readers about the real backend interface."
+    }
+  },
+  "issues": [
+    {
+      "dimension": "abstraction_fitness",
+      "identifier": "dead_backend_abstraction",
+      "summary": "BaseLLMBackend / BackendManager / mixins in server/backends/base.py have zero concrete users",
+      "related_files": ["server/backends/base.py", "server/backends/moltis.py", "server/backends/openclaw.py", "server/backends/pi.py"],
+      "evidence": [
+        "base.py defines BaseLLMBackend(ABC), SimpleBackendMixin, DualPipelineMixin, BackendManager (147 LOC) plus a module-level backend_manager singleton.",
+        "Project-wide grep shows the only references to these symbols are inside base.py itself; MoltisLLMService and OpenClawLLMService extend pipecat.services.llm_service.LLMService directly, and PiLLMService is a plain class.",
+        "Unused-imports detector also flags asyncio, AsyncGenerator, and Frame in this file."
+      ],
+      "suggestion": "Delete server/backends/base.py (and the unused backend_manager singleton). The real backend contract is 'subclass pipecat.LLMService' — leaving a parallel ABC strongly implies an interface that does not exist and confuses readers about how to add a new backend.",
+      "confidence": "high",
+      "impact_scope": "module",
+      "fix_scope": "single_edit",
+      "root_cause_cluster": "vestigial_backend_layer"
+    },
+    {
+      "dimension": "abstraction_fitness",
+      "identifier": "unused_pi_factory",
+      "summary": "create_pi_service is a pass-through factory with no callers",
+      "related_files": ["server/backends/pi.py"],
+      "evidence": [
+        "pi.py:116 def create_pi_service(config, work_dir=None) -> PiLLMService: return PiLLMService(config, work_dir) — no policy, no translation.",
+        "No production callers in the tree; only PiLLMService itself is re-exported from server/backends/__init__.py."
+      ],
+      "suggestion": "Delete create_pi_service; callers can instantiate PiLLMService directly. If a factory is ever needed, reintroduce it with the policy it actually adds.",
+      "confidence": "high",
+      "impact_scope": "local",
+      "fix_scope": "single_edit",
+      "root_cause_cluster": "vestigial_backend_layer"
+    },
+    {
+      "dimension": "abstraction_fitness",
+      "identifier": "trivial_vad_wrapper",
+      "summary": "create_vad_analyzer is a one-liner wrapping SileroVADAnalyzer()",
+      "related_files": ["shared/voice_config.py"],
+      "evidence": [
+        "voice_config.py:44-46 def create_vad_analyzer(): return SileroVADAnalyzer() — no configuration, no policy.",
+        "SileroVADAnalyzer is already a Pipecat public class that callers can instantiate themselves."
+      ],
+      "suggestion": "Inline the SileroVADAnalyzer() call at the two or three call sites and drop create_vad_analyzer; the wrapper hides nothing and adds an indirection hop.",
+      "confidence": "medium",
+      "impact_scope": "local",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "abstraction_fitness",
+      "identifier": "tts_daemon_shim",
+      "summary": "server/tts_daemon.py is a 26-line backward-compat re-export with no in-tree callers",
+      "related_files": ["server/tts_daemon.py", "server/voice_daemon.py"],
+      "evidence": [
+        "tts_daemon.py docstring labels it 'backward-compatible wrapper around voice_daemon' and only re-exports VoiceDaemon as TTSDaemon plus a few helpers.",
+        "Production tree imports voice_daemon directly; no remaining import of server.tts_daemon was found inside the repo."
+      ],
+      "suggestion": "If no external script still relies on `talky_workspace.server.tts_daemon`, delete the file; otherwise add a deprecation log and a sunset date so this stays a documented migration shim instead of a quiet facade.",
+      "confidence": "medium",
+      "impact_scope": "local",
+      "fix_scope": "single_edit",
+      "root_cause_cluster": "vestigial_backend_layer"
+    }
+  ],
+  "retrospective": {
+    "root_causes": [
+      "An early generic 'backend manager' design was abandoned when both real LLM backends were rewritten as Pipecat LLMService subclasses, but the abandoned ABC/manager file was never removed.",
+      "Small factory helpers (create_pi_service, create_vad_analyzer) were created speculatively for symmetry rather than to encode policy."
+    ],
+    "likely_symptoms": [
+      "unused_pi_factory",
+      "trivial_vad_wrapper"
+    ]
+  },
+  "context_updates": {
+    "abstraction_fitness": {
+      "add": [
+        {
+          "header": "Backends extend Pipecat LLMService directly",
+          "description": "MoltisLLMService and OpenClawLLMService inherit from pipecat.services.llm_service.LLMService rather than a project-local ABC. This keeps the real backend contract aligned with the framework and removes a wrapper layer.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Typed dataclasses around YAML config",
+          "description": "profile_manager exposes LLMBackend / VoiceProfile / TalkyProfile dataclasses while keeping nested provider-specific config as Dict[str, Any]. This bounds the typed surface to what the daemon needs without inventing schemas for every provider.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Dead BaseLLMBackend abstraction surface",
+          "description": "server/backends/base.py defines an ABC, two mixins, and a manager singleton with zero concrete users. The file is misleading documentation about how to add a backend.",
+          "settled": true,
+          "positive": false
+        },
+        {
+          "header": "Speculative one-line factory wrappers",
+          "description": "create_pi_service and create_vad_analyzer add an indirection hop without encoding any policy. They are remnants of a symmetry-driven factory pattern that the rest of the codebase abandoned.",
+          "settled": false,
+          "positive": false
+        },
+        {
+          "header": "MCPDriverLLMService is a deliberate Pipecat extension",
+          "description": "The null/passthrough LLM service is documented as an LLMSwitcher peer with explicit frame-handling rules — framework extension, not invented indirection. Skip when scoring.",
+          "settled": true,
+          "positive": true
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,147 @@
+{
+  "batch": "mid_level_elegance",
+  "batch_index": 9,
+  "assessments": {"mid_level_elegance": 76.5},
+  "dimension_notes": {
+    "mid_level_elegance": {
+      "evidence": [
+        "shared/daemon_protocol.py defines length-prefixed JSON helpers (send_message/recv_message) and unix-socket path constants (VOICE_SOCKET_PATH/VOICE_PID_FILE) that server/tts_client.py and server/voice_client.py consume; mcp-server/src/pipecat_mcp_server/daemon_bridge.py duplicates both the constants and the wire-protocol code (lines 21-22 reassign the paths, _send_recv at line 104-134 reimplements the length-prefix framing). One seam, two implementations — drift risk if the protocol evolves.",
+        "Voice profile switching is reimplemented twice. mcp-server/src/pipecat_mcp_server/channel.py:575-621 (VoiceChannel.switch_voice) handles the same-provider/cross-provider TTS switch logic, and server/features/voice_switcher.py:155-303 (VoiceProfileSwitcher._handle_set_voice_profile and switch_profile) implements an almost identical state machine. The channel.py comment near line 1170 acknowledges 'RTVI voice-switcher handlers removed... the VoiceProfileSwitcher instance is still used for its TTS ServiceSwitcher and profile tracking', leaving handle_message + send_server_response code paths unreachable from the production seam.",
+        "talky_cli.py duplicates urllib.request.urlopen + urllib.error.HTTPError handling across cmd_profile, cmd_voice, cmd_talkystatus, and others (lines 332-507) — same try/except/json.loads pattern repeated 4+ times. A small `_daemon_get` / `_daemon_post` helper would consolidate the seam between CLI and daemon HTTP API.",
+        "Strong examples of well-designed seams elsewhere: VoiceChannel exposes a small surface (warmup/attach/detach/speak/listen/switch_to_profile/switch_voice/request_leave) and the lifecycle table at the top of channel.py documents every entry point. MCPDriverLLMService (mcp_driver_llm_service.py) is a tight, well-documented frame-level adapter: a single ~30-line process_frame routes UserTurnTextFrame to a queue and passes everything else through. Output of listen() is a stable {text, segments[]} dict.",
+        "server.py composes a single Starlette app by extending FastMCP's lifespan context (mcp-server/src/pipecat_mcp_server/server.py:745-781) — orchestration reads as composition, not entanglement. Webrtc routes, mcp /mcp, and static client are mounted in one builder.",
+        "Idle-TTL, request_leave, listen-vs-disconnect race, and pipeline rebuild on disconnect are all expressed as asyncio.Event/asyncio.wait patterns with explicit cancellation in finally blocks (channel.py:418-465, 1003-1019). The d5e6 'flag-based liveness' anti-pattern is explicitly avoided (is_live() reads task state directly, channel.py:243-255).",
+        "Profile-greeting / signoff lookup repeats the same shape twice (channel.py:749-787) — both functions build the same try/except wrapper around get_profile_manager().get_llm_backend(name). Minor, but a candidate for one helper.",
+        "_check_ports_or_exit (server.py:403-466) duplicates 'lsof -ti :PORT -sTCP:LISTEN' logic that talky_cli.py:38-57 (_kill_pids_on_port) also runs. The port-holder discovery seam between CLI and daemon could share a `shared/network_utils.py` helper (which already exists with related code).",
+        "Dual daemons (voice_daemon on unix socket, talky daemon on tcp 9090) are clean as separate concerns, but mcp-server/server.py talks to both; the bridge to the voice daemon (daemon_bridge.py) bypasses shared/daemon_protocol entirely while the talky daemon serves HTTP — slight asymmetry."
+      ],
+      "impact_scope": "subsystem",
+      "fix_scope": "multi_file_refactor",
+      "confidence": "high",
+      "issues_preventing_higher_score": "Duplicated daemon-protocol implementation in mcp-server/daemon_bridge.py vs shared/daemon_protocol.py; voice-switching state machine duplicated across VoiceChannel.switch_voice and VoiceProfileSwitcher; CLI HTTP boilerplate repeated across 4 command handlers."
+    }
+  },
+  "dimension_judgment": {
+    "mid_level_elegance": {
+      "dimension_character": "Seams are uneven: the high-traffic paths (VoiceChannel pipeline lifecycle, MCPDriverLLMService frame translation, the composed Starlette+FastMCP+WebRTC lifespan) are well-scoped, well-documented, and read as composition rather than tangle. But several boundaries carry meaningful glue-code entropy — the wire-protocol for the voice daemon is implemented twice, voice-profile switching has two parallel state machines (one of which is partially dead RTVI handler code still wired to the live class), and CLI<->daemon HTTP error handling is copy-pasted across commands. The strong central spine is real, but a developer crossing those particular seams encounters surprising duplication.",
+      "score_rationale": "The codebase clears the 80 anchor on its hot path (handoffs across the in-process voice pipeline, transport disconnect, profile/voice switch frames, listen/speak races) — these are genuinely well-designed seams with explicit lifecycle and asyncio discipline. It falls short of 85 because of the duplicated daemon-protocol implementation in daemon_bridge.py, the parallel voice-switcher state machines, and the CLI HTTP boilerplate — three concrete, fixable seams that a developer will trip over. None is structural; all are extraction debt."
+    }
+  },
+  "issues": [
+    {
+      "dimension": "mid_level_elegance",
+      "identifier": "daemon_bridge_duplicates_protocol",
+      "summary": "mcp-server/daemon_bridge.py reimplements unix-socket length-prefix protocol and path constants that shared/daemon_protocol.py already exports",
+      "related_files": [
+        "mcp-server/src/pipecat_mcp_server/daemon_bridge.py",
+        "shared/daemon_protocol.py",
+        "server/tts_client.py",
+        "server/voice_client.py"
+      ],
+      "evidence": [
+        "daemon_bridge.py lines 21-22 redefine VOICE_SOCKET_PATH and VOICE_PID_FILE locally with a comment noting they 'must match shared/daemon_protocol.py'.",
+        "daemon_bridge.py:_send_recv (lines 104-134) hand-rolls struct.pack('!I', ...) framing and chunked recv, while shared/daemon_protocol.py:send_message/recv_message provides the same primitives that voice_client.py and tts_client.py both use."
+      ],
+      "suggestion": "Replace daemon_bridge.py's local constants and _send_recv with imports from shared.daemon_protocol (VOICE_SOCKET_PATH, VOICE_PID_FILE, send_message, recv_message, daemon_is_running). Net delete ~30 lines and one drift surface.",
+      "confidence": "high",
+      "impact_scope": "module",
+      "fix_scope": "single_edit",
+      "root_cause_cluster": "boundary_translation_duplication"
+    },
+    {
+      "dimension": "mid_level_elegance",
+      "identifier": "voice_switcher_dual_state_machine",
+      "summary": "Voice-profile switching logic exists in both VoiceChannel.switch_voice and VoiceProfileSwitcher._handle_set_voice_profile/switch_profile",
+      "related_files": [
+        "mcp-server/src/pipecat_mcp_server/channel.py",
+        "server/features/voice_switcher.py"
+      ],
+      "evidence": [
+        "channel.py:575-621 implements same-provider set_voice + cross-provider ManuallySwitchServiceFrame logic; voice_switcher.py:155-303 implements the same two branches (handle_message + switch_profile).",
+        "channel.py:1170 explicitly notes 'RTVI voice-switcher handlers removed' — VoiceProfileSwitcher.handle_message / _handle_set_voice_profile (lines 104-254) are dead from production paths but still in the class; the live channel only consumes voice_switcher.tts_service_map and current_profile attributes."
+      ],
+      "suggestion": "Slim VoiceProfileSwitcher down to its still-used surface: tts_service_map construction, ServiceSwitcher build, and current_profile tracking. Delete handle_message, _handle_get_voice_profiles, _handle_get_current_voice_profile, _handle_set_voice_profile, and switch_profile (RTVI-era code). Keep VoiceChannel.switch_voice as the single entry point.",
+      "confidence": "high",
+      "impact_scope": "subsystem",
+      "fix_scope": "multi_file_refactor",
+      "root_cause_cluster": "boundary_translation_duplication"
+    },
+    {
+      "dimension": "mid_level_elegance",
+      "identifier": "cli_http_error_handling_repeated",
+      "summary": "talky_cli.py repeats the same urllib request + HTTPError + URLError + json.loads block across cmd_profile, cmd_voice, cmd_talkystatus, and others",
+      "related_files": [
+        "talky_cli.py"
+      ],
+      "evidence": [
+        "Lines 332-388 (cmd_profile), 410-467 (cmd_voice), 470-506 (cmd_talkystatus) each instantiate urllib.request.Request, wrap in urlopen, catch HTTPError + URLError, parse JSON, print formatted error — same shape every time."
+      ],
+      "suggestion": "Extract two helpers in talky_cli.py: `_daemon_get(path) -> dict` and `_daemon_post(path, body) -> dict`, both raising a typed CliError that the caller prints. Removes ~60 lines and centralizes the CLI<->daemon HTTP seam.",
+      "confidence": "medium",
+      "impact_scope": "local",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "mid_level_elegance",
+      "identifier": "port_holder_lookup_duplicated",
+      "summary": "lsof-based port-holder discovery is implemented in both talky_cli._kill_pids_on_port and server._check_ports_or_exit",
+      "related_files": [
+        "talky_cli.py",
+        "mcp-server/src/pipecat_mcp_server/server.py",
+        "shared/network_utils.py"
+      ],
+      "evidence": [
+        "talky_cli.py:38-57 runs `lsof -ti :PORT -sTCP:LISTEN`, parses pids, kills them.",
+        "server.py:425-435 runs the same lsof invocation to discover the holder pid; identical command and parse, separate implementation."
+      ],
+      "suggestion": "Add `shared/network_utils.find_pids_listening(port: int) -> list[int]` and have both talky_cli and server.py call it. The shared/network_utils.py module already exists for this kind of helper.",
+      "confidence": "high",
+      "impact_scope": "module",
+      "fix_scope": "single_edit",
+      "root_cause_cluster": "boundary_translation_duplication"
+    }
+  ],
+  "retrospective": {
+    "root_causes": [
+      "Boundary-translation duplication: protocol/path/error shapes redefined in callers instead of imported from shared/.",
+      "Migration residue: VoiceProfileSwitcher's RTVI-era message handlers persist after the channel-level REST/SSE replacement (ticket 2ed2)."
+    ]
+  },
+  "context_updates": {
+    "mid_level_elegance": {
+      "add": [
+        {
+          "header": "Composed lifespan in unified Starlette app",
+          "description": "server.py wraps FastMCP's existing lifespan_context with a _composed_lifespan that runs voice_channel.warmup, health polling, and ready-file write inside uvicorn's event loop. Composition rather than reinvention — the seam between MCP, WebRTC handler, and static client is one builder.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "VoiceChannel exposes a small, lifecycle-clear surface",
+          "description": "warmup / attach / detach / speak / listen / switch_to_profile / switch_voice / request_leave / shutdown — each documented in the module-level lifecycle table. Liveness derived from task state, not flags. Disconnect/listen race resolved via asyncio.wait + explicit cancel in finally.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "MCPDriverLLMService is a tight frame-level adapter",
+          "description": "~30-line process_frame consumes UserTurnTextFrame to a shared queue and passes all other frames through (notably LLMTextFrame from convo_speak). Single responsibility, well-documented frame table.",
+          "positive": true
+        },
+        {
+          "header": "Daemon protocol implemented twice",
+          "description": "mcp-server/daemon_bridge.py duplicates the wire format and path constants from shared/daemon_protocol.py instead of importing them. Drift risk for any future protocol change.",
+          "settled": true
+        },
+        {
+          "header": "VoiceProfileSwitcher carries dead RTVI handlers",
+          "description": "After ticket 2ed2 moved voice switching to REST+SSE driven from VoiceChannel, voice_switcher.py still keeps handle_message / _handle_set_voice_profile / switch_profile — parallel state machines that never run from production paths.",
+          "settled": true
+        },
+        {
+          "header": "CLI<->daemon HTTP boilerplate repeated",
+          "description": "talky_cli.py reimplements urllib request + HTTPError/URLError + JSON parse + error print across each subcommand that talks to :9090. Asks for a small _daemon_get/_daemon_post helper."
+        }
+      ]
+    }
+  }
+}

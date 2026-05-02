@@ -62,8 +62,8 @@ def _check_daemon(pid_file: Path, socket_path: Path) -> bool:
         return False
 
 
-def daemon_is_running() -> bool:
-    """Check if voice daemon is running."""
+def voice_daemon_is_running() -> bool:
+    """Check if the voice daemon (local audio TTS/STT, unix socket) is running."""
     return _check_daemon(VOICE_PID_FILE, VOICE_SOCKET_PATH)
 
 

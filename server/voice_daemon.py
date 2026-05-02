@@ -36,7 +36,7 @@ from shared.daemon_protocol import (
     VOICE_PID_FILE,
     VOICE_SOCKET_PATH,
     cleanup_legacy_daemon,
-    daemon_is_running,
+    voice_daemon_is_running,
     recv_message,
     send_message,
 )
@@ -500,7 +500,7 @@ class VoiceDaemon:
 
 def start_daemon(wait: bool = True) -> bool:
     """Start daemon in background via double-fork."""
-    if daemon_is_running():
+    if voice_daemon_is_running():
         logger.info("Daemon already running")
         return True
 
@@ -557,7 +557,7 @@ def stop_daemon() -> bool:
     """Stop the daemon gracefully."""
     import socket as socket_mod
 
-    if not daemon_is_running():
+    if not voice_daemon_is_running():
         logger.info("Daemon not running")
         return True
 
@@ -569,7 +569,7 @@ def stop_daemon() -> bool:
         sock.close()
 
         for _ in range(10):
-            if not daemon_is_running():
+            if not voice_daemon_is_running():
                 logger.info("Daemon stopped")
                 return True
             time.sleep(0.5)
@@ -660,7 +660,7 @@ def main():
         sys.exit(0 if stop_daemon() else 1)
 
     if args.status:
-        if daemon_is_running():
+        if voice_daemon_is_running():
             pid = VOICE_PID_FILE.read_text().strip()
             print(f"Voice daemon running (PID: {pid})")
         else:
@@ -671,7 +671,7 @@ def main():
         parser.print_help()
         return
 
-    if not daemon_is_running():
+    if not voice_daemon_is_running():
         logger.info("Starting daemon...")
         if not start_daemon():
             logger.error("Failed to start daemon, falling back to direct TTS")

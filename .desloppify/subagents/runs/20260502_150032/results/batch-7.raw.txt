@@ -1,0 +1,116 @@
+{
+  "batch": "dependency_health",
+  "batch_index": 7,
+  "assessments": {"dependency_health": 76.0},
+  "dimension_notes": {
+    "dependency_health": {
+      "evidence": [
+        "Root pyproject.toml pins pipecat-ai==0.0.102 with extras [runner,silero,webrtc] but mcp-server/pyproject.toml uses pipecat-ai>=0.0.101 with a much larger extras set ([cartesia,deepgram,google,local-smart-turn-v3,rnnoise,runner,silero,webrtc,websocket]); the workspace lock unifies them but the version-constraint mismatch contradicts the CLAUDE.md rule 'Pin critical deps with =='.",
+        "mcp-server/pyproject.toml lists 'requests>=2.32.5,<3' and 'httpx>=0.28.0,<1' as runtime dependencies, but no source file under mcp-server/ or talky/ imports either module (grep for 'import requests/httpx' yields only comment hits) — both appear unused at the talky-workspace level (likely transitively used by pipecat).",
+        "Root pyproject.toml declares 'rich>=13.0.0' as a dependency, but no .py file in the project (talky_cli, server/, mcp-server/, shared/) imports rich; only loguru is used for terminal output.",
+        "mcp-server/pyproject.toml declares 'kokoro-onnx>=0.5.0,<1' as a hard runtime dep, yet no source file imports kokoro_onnx — the only 'kokoro' references are TTS provider config strings, and kokoro is also exposed as the lazy-installed extra 'tts-kokoro' in root pyproject. So kokoro-onnx is force-installed for every install regardless of whether the user picks the kokoro profile.",
+        "shared/dependency_installer.py implements a deliberate, well-documented lazy-install pattern: provider-specific deps live as optional extras (tts-*, stt-*, aws/azure/groq/fal) and are only added via `uv tool install --reinstall --with` when a profile that needs them activates. PROVIDER_TO_EXTRA maps profile name to extra name with comments.",
+        "pyproject.toml exposes a coherent extras taxonomy: per-provider extras (tts-openai, stt-deepgram, etc.), grouped extras (tts, stt, all), and convenience extras (audio, local_audio). No duplicate libraries for the same purpose at the talky level — single HTTP-style usage path, single logger (loguru), single config format (yaml).",
+        "Two-workspace setup: root talky-workspace + members 'server' and 'mcp-server'. server/pyproject.toml has minimal deps (pipecat-ai with [runner,silero,webrtc], pyyaml, loguru) and an unused 'opencv-python' vision extra group (excluded deliberately per comment to avoid AVFoundation symbol conflicts).",
+        "uv.lock contains 251 distinct packages — heavy transitive footprint driven by pipecat-ai's many extras (cartesia, deepgram, google, mlx-whisper, rnnoise, websocket, etc. all pulled into the editable mcp-server install regardless of profile)."
+      ],
+      "impact_scope": "subsystem",
+      "fix_scope": "multi_file_refactor",
+      "confidence": "high",
+      "issues_preventing_higher_score": "Three concrete unused-or-overdeclared deps (rich, requests, httpx, kokoro-onnx), a version-pinning inconsistency between the root and mcp-server workspace members for pipecat-ai, and several heavy pipecat extras hard-required by mcp-server that should be optional, all cut against the otherwise tidy lazy-install design."
+    }
+  },
+  "dimension_judgment": {
+    "dependency_health": {
+      "dimension_character": "Dependency strategy is mostly thoughtful — a single HTTP/log/config stack, a clean optional-extras taxonomy in the root pyproject, and a well-documented lazy-install pipeline (shared/dependency_installer.py) that defers heavy provider SDKs until a profile actually needs them. However, the mcp-server workspace member contradicts that strategy: it hard-requires kokoro-onnx, requests, and httpx even though they are unused at the talky level, and pins pipecat-ai loosely (>=0.0.101) while the root pins it strictly (==0.0.102), so a developer can't trust a single source of truth for critical versions. The root also declares 'rich' as a runtime dep with no importer.",
+      "score_rationale": "Score sits in the upper 70s: the codebase has clear deliberate patterns (lazy extras, single-purpose libs, consistent lockfile) but several concrete defects — unused declared deps, a hard-required heavy ML package (kokoro-onnx), and inconsistent version pinning across workspace members — that a developer reviewing dependencies would have to untangle. Not low enough for the 60-band (no pervasive drift), not high enough for 85+ (multiple confirmed defects)."
+    }
+  },
+  "issues": [
+    {
+      "dimension": "dependency_health",
+      "identifier": "unused_rich_dep",
+      "summary": "'rich>=13.0.0' declared in root pyproject.toml but never imported",
+      "related_files": ["pyproject.toml"],
+      "evidence": ["Root pyproject.toml lists rich>=13.0.0 in [project].dependencies", "grep 'from rich|import rich' across talky_cli.py, server/, mcp-server/, shared/ returns zero matches; only loguru is used for terminal output"],
+      "suggestion": "Remove 'rich>=13.0.0' from root dependencies, or add the actual rich-based UI code if it was intended.",
+      "confidence": "high",
+      "impact_scope": "local",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "dependency_health",
+      "identifier": "unused_http_clients_in_mcp_server",
+      "summary": "requests and httpx declared as mcp-server runtime deps but never imported by talky code",
+      "related_files": ["mcp-server/pyproject.toml"],
+      "evidence": ["mcp-server/pyproject.toml lists 'httpx>=0.28.0,<1' and 'requests>=2.32.5,<3'", "grep for 'import requests', 'from requests', 'import httpx', 'httpx.' across all talky source files yields zero real usages (only the word 'requests' inside a comment)"],
+      "suggestion": "Drop both from mcp-server/pyproject.toml and rely on pipecat's transitive dep declarations, or document why the project pins them directly.",
+      "confidence": "high",
+      "impact_scope": "module",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "dependency_health",
+      "identifier": "kokoro_onnx_force_required",
+      "summary": "kokoro-onnx is a hard runtime dep of mcp-server though kokoro TTS is also gated behind the lazy-install 'tts-kokoro' extra",
+      "related_files": ["mcp-server/pyproject.toml", "shared/dependency_installer.py", "pyproject.toml"],
+      "evidence": ["mcp-server/pyproject.toml: 'kokoro-onnx>=0.5.0,<1' in [project].dependencies", "Root pyproject.toml exposes 'tts-kokoro = [pipecat-ai[kokoro]]' and shared/dependency_installer.py maps 'kokoro: tts-kokoro' for on-demand install", "No source file imports kokoro_onnx; it's only referenced as a TTS provider name in config"],
+      "suggestion": "Move kokoro-onnx into an optional dependency group on mcp-server (or drop it and let the lazy installer pull pipecat-ai[kokoro] when the profile activates), so users who never run kokoro don't pay for the ONNX runtime weight.",
+      "confidence": "high",
+      "impact_scope": "subsystem",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "dependency_health",
+      "identifier": "pipecat_pin_inconsistency",
+      "summary": "pipecat-ai pinned exactly (==0.0.102) in root but loose (>=0.0.101) in mcp-server workspace member",
+      "related_files": ["pyproject.toml", "mcp-server/pyproject.toml", "CLAUDE.md"],
+      "evidence": ["Root pyproject.toml: 'pipecat-ai[runner,silero,webrtc]==0.0.102'", "mcp-server/pyproject.toml: 'pipecat-ai[...]>=0.0.101' and 'pipecat-ai[mlx-whisper]>=0.0.100; sys_platform == darwin'", "CLAUDE.md states: 'Pin critical deps with =='. The two venvs (tool install vs uv sync) resolve independently per CLAUDE.md, making the inconsistency a real risk."],
+      "suggestion": "Align mcp-server's pipecat-ai constraint to the same exact pin as the root (==0.0.102), or hoist the version into a shared workspace constraint, so the tool venv and project venv cannot drift.",
+      "confidence": "high",
+      "impact_scope": "subsystem",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "dependency_health",
+      "identifier": "mcp_server_extras_too_broad",
+      "summary": "mcp-server hard-requires pipecat-ai with [cartesia, deepgram, google, websocket, ...] disabling lazy-install benefits",
+      "related_files": ["mcp-server/pyproject.toml", "shared/dependency_installer.py"],
+      "evidence": ["mcp-server lists 'pipecat-ai[cartesia,deepgram,google,local-smart-turn-v3,rnnoise,runner,silero,webrtc,websocket]>=0.0.101'", "Root design: shared/dependency_installer.py PROVIDER_TO_EXTRA gates cartesia, deepgram, google etc. behind tts-*/stt-* extras for on-demand install", "Result: every install pulls cartesia, deepgram, google SDKs even if the user only ever uses, say, openai TTS"],
+      "suggestion": "Trim mcp-server's pipecat-ai extras to the subset actually required by the daemon's core code paths (likely runner, silero, webrtc) and delegate provider-specific SDKs to the existing root-level optional extras and lazy installer.",
+      "confidence": "medium",
+      "impact_scope": "subsystem",
+      "fix_scope": "multi_file_refactor"
+    }
+  ],
+  "context_updates": {
+    "dependency_health": {
+      "add": [
+        {
+          "header": "Lazy provider extras with PROVIDER_TO_EXTRA map",
+          "description": "shared/dependency_installer.py defers heavy TTS/STT provider SDKs until a profile activates by mapping provider names to root-pyproject extras and shelling out to `uv tool install --reinstall --with`. This keeps the baseline install small and is documented in pyproject comments.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Coherent extras taxonomy in root pyproject",
+          "description": "Optional dependencies are organized as per-provider (tts-*/stt-*), per-cloud (aws, azure, groq, fal), grouped (tts, stt, audio), and convenience (all). No duplicate libraries serve the same purpose at the talky level — single logger (loguru), single config format (yaml), single UI lib (InquirerPy).",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Workspace pin drift between root and mcp-server",
+          "description": "Root pins pipecat-ai==0.0.102 but mcp-server pins >=0.0.101 with a different (larger) extras set. The two venvs resolve independently per CLAUDE.md, so this is a real divergence risk despite the shared lockfile.",
+          "settled": true,
+          "positive": false
+        },
+        {
+          "header": "mcp-server hard-requires several unused-at-talky-level deps",
+          "description": "kokoro-onnx, requests, and httpx are declared as runtime deps of mcp-server but no talky source file imports them. kokoro-onnx in particular duplicates the lazy-install path for the kokoro TTS provider.",
+          "settled": true,
+          "positive": false
+        }
+      ]
+    }
+  }
+}

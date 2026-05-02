@@ -1,0 +1,174 @@
+{
+  "batch": "incomplete_migration",
+  "batch_index": 14,
+  "assessments": {"incomplete_migration": 68.0},
+  "dimension_notes": {
+    "incomplete_migration": {
+      "evidence": [
+        "server/tts_daemon.py is a backward-compat wrapper re-exporting from voice_daemon, but no Python module imports it (grep for 'from server.tts_daemon' / 'import tts_daemon' returns zero callers). Only file-path script invocations elsewhere reference talky_voice_daemon paths. Pure stale shim.",
+        "shared/profile_manager.py:474-475 creates a module-level `profile_manager = get_profile_manager()` singleton with a 'Backwards compat' comment, but no callers import the bare name (all 17+ importers use `get_profile_manager()`). Eager import-time singleton with zero consumers.",
+        "shared/daemon_protocol.py:70 defines `legacy_daemon_is_running()` which has no callers (grep confirms only the definition site). Only `cleanup_legacy_daemon()` is still wired in voice_daemon.py:482 — the check function is unused.",
+        "mcp-server/src/pipecat_mcp_server/server.py:564,575,717-719 defines `/api/profile` GET/POST routes labeled 'legacy compat for CLI (old shape)' alongside the new `/api/profiles` and `/api/profiles/switch` routes. talky_cli.py:348,370 uses `/api/profile` as its only path — so the 'legacy' route is the active contract; CLI never migrated to the new shape, leaving two parallel route shapes that do the same thing.",
+        "shared/profile_manager.py:54 has `llm_backend: Optional[str] = None  # Legacy - for backends like OpenClaw/Moltis` coexisting with `backend: Optional[str] = None  # New: 'mcp' for voice backends` on TalkyProfile. The 'Legacy' field still has 6+ active call sites in channel.py and tests; the New field has parallel meaning. Two-axis coexistence with no clear cutover plan.",
+        "Two LLM-aggregator patterns coexist for the same conceptual operation: server/voice_daemon.py:249-306 still wires `LLMContextAggregatorPair` + `LLMContext`, while mcp-server/src/pipecat_mcp_server/talky_turn.py replaces it with `TalkyUserTurnDetector` emitting `UserTurnTextFrame` (ticket 76a3). CLAUDE.md flags voice_daemon unification as 'deferred (9d02)'; documented but unfinished — the legacy aggregator path remains live.",
+        "talky_cli.py:340-341,418-419,475-476 duplicates the legacy env-var alias pattern `os.environ.get('TALKY_DAEMON_HOST', os.environ.get('TALKY_MCP_HOST', 'localhost'))` four times instead of centralizing the resolution; mcp-server/server.py:411 also reads both names. Compat is consistent but copy-pasted.",
+        "No mixed JS/TS in client/src — all .tsx/.ts. No class-component holdouts found. axios/fetch coexistence absent. urllib (sync CLI) and aiohttp (async server) are intentionally separated by sync/async context, not migration coexistence.",
+        "No stale TODO/FIXME mentioning 'migrate', 'remove after', etc. Migrations referenced are linked to tickets (76a3, c3a1, 0c5d, 73b9) with documentation of intent.",
+        "Migration markers are mostly explicit and traced ('Ticket 0c5d', 'ticket 76a3', 'preserve legacy behavior'). The codebase comments call out compat surfaces clearly even when they are stale."
+      ],
+      "impact_scope": "module",
+      "fix_scope": "multi_file_refactor",
+      "confidence": "high"
+    }
+  },
+  "dimension_judgment": {
+    "incomplete_migration": {
+      "dimension_character": "Migration discipline is broadly present — transitions are tied to ticket numbers, intent is documented in module docstrings, and there's no JS/TS or class/functional split. But the codebase carries several genuinely stale shims (a backward-compat tts_daemon wrapper with no callers, a module-level profile_manager singleton with no callers, a legacy_daemon_is_running with no callers) plus a real coexistence: two LLM-aggregator patterns live in parallel because the voice_daemon path was deferred, and the 'legacy' /api/profile route is in fact the only route the current CLI uses. The labels lie in places — what is marked 'legacy' is sometimes the active contract and what is marked 'backwards compat' is sometimes orphaned.",
+      "score_rationale": "Mid-range score: the codebase isn't a migration graveyard, but it isn't tidy either — multiple identifiable shims have outlived their callers, and at least one structural coexistence (two aggregator patterns, two TalkyProfile backend fields) reflects a paused migration rather than an active one. Below the 75-band because evidence of orphan compat code is direct and unambiguous; above the 50-band because most callers have moved to the new shapes and migrations are at least named and tracked."
+    }
+  },
+  "issues": [
+    {
+      "dimension": "incomplete_migration",
+      "identifier": "tts_daemon_orphan_shim",
+      "summary": "server/tts_daemon.py wrapper has no Python importers — pure stale shim",
+      "related_files": ["server/tts_daemon.py"],
+      "evidence": [
+        "Module exists solely to re-export voice_daemon symbols 'for backward compatibility with existing callers' (docstring lines 2-5).",
+        "grep across the repo finds zero `from server.tts_daemon` / `from tts_daemon` / `import tts_daemon` imports outside the file itself; only string-path references in voice_config.py docstrings remain."
+      ],
+      "suggestion": "Delete server/tts_daemon.py. If any out-of-tree script still references it, redirect them to voice_daemon directly. Update the voice_config.py docstring that mentions tts_daemon.",
+      "confidence": "high",
+      "impact_scope": "local",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "incomplete_migration",
+      "identifier": "profile_manager_module_singleton_unused",
+      "summary": "Module-level `profile_manager` singleton kept 'for backwards compat' has zero callers",
+      "related_files": ["shared/profile_manager.py"],
+      "evidence": [
+        "Lines 474-475 create `profile_manager = get_profile_manager()` eagerly at import time with comment 'Backwards compat: module-level instance'.",
+        "All 18 import sites across talky_cli, server/, and mcp-server use `get_profile_manager()`; none import the bare `profile_manager` name."
+      ],
+      "suggestion": "Delete the module-level instance and its comment. Eager creation also forces config loading at import which is undesirable for a 'compat' helper nobody uses.",
+      "confidence": "high",
+      "impact_scope": "local",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "incomplete_migration",
+      "identifier": "legacy_daemon_is_running_unused",
+      "summary": "`legacy_daemon_is_running()` defined but never called",
+      "related_files": ["shared/daemon_protocol.py"],
+      "evidence": [
+        "shared/daemon_protocol.py:70-72 defines the helper; grep confirms no callers anywhere in the tree (only `cleanup_legacy_daemon()` is invoked from voice_daemon.py:482).",
+        "LEGACY_PID_FILE / LEGACY_SOCKET_PATH constants exist solely to support this unused check plus the cleanup call."
+      ],
+      "suggestion": "Inline the cleanup logic into voice_daemon's startup or fold the legacy paths directly into cleanup_legacy_daemon, then drop the unused predicate. Keeps the cleanup-on-startup behavior without the dangling API.",
+      "confidence": "high",
+      "impact_scope": "local",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "incomplete_migration",
+      "identifier": "mislabelled_legacy_profile_route",
+      "summary": "/api/profile is the only profile route the CLI uses, despite being labeled 'legacy compat'",
+      "related_files": [
+        "mcp-server/src/pipecat_mcp_server/server.py",
+        "talky_cli.py"
+      ],
+      "evidence": [
+        "server.py:564,575,717-719 brands `/api/profile` GET/POST as 'legacy compat for CLI (old shape)' and adds `/api/profiles` + `/api/profiles/switch` as the new routes.",
+        "talky_cli.py:348,370 only ever calls `/api/profile`. The CLI never migrated to the new route shape. Two implementations of the same operation coexist in the server but only the 'legacy' one is exercised by the in-tree client."
+      ],
+      "suggestion": "Either migrate talky_cli to the `/api/profiles/switch` shape and delete the old route, or accept `/api/profile` as the canonical route and remove the duplicate `/api/profiles*` handlers — pick one shape and commit. The current state has all the cost of a half-done migration with none of the benefits.",
+      "confidence": "high",
+      "impact_scope": "subsystem",
+      "fix_scope": "multi_file_refactor"
+    },
+    {
+      "dimension": "incomplete_migration",
+      "identifier": "talkyprofile_dual_backend_fields",
+      "summary": "TalkyProfile has both 'Legacy' llm_backend and 'New' backend fields actively used",
+      "related_files": ["shared/profile_manager.py"],
+      "evidence": [
+        "shared/profile_manager.py:54-57 declares `llm_backend: Optional[str] = None  # Legacy - for backends like OpenClaw/Moltis` alongside `backend: Optional[str] = None  # New: 'mcp' for voice backends` and `app: Optional[str] = None  # New: ...`.",
+        "channel.py:480,654,705,761,781,1074 still reads `llm_backend` as the canonical attribute for routing to backends. There is no migration path or deprecation warning toward `backend`."
+      ],
+      "suggestion": "Decide whether `backend` and `llm_backend` are truly distinct concepts (backend type vs. backend instance) and rename to make the distinction explicit, or collapse them. Drop the 'Legacy'/'New' commentary — the comments imply a migration that isn't being executed.",
+      "confidence": "medium",
+      "impact_scope": "module",
+      "fix_scope": "multi_file_refactor"
+    },
+    {
+      "dimension": "incomplete_migration",
+      "identifier": "two_aggregator_patterns_coexist",
+      "summary": "voice_daemon still uses LLMContextAggregatorPair while MCP daemon migrated to TalkyUserTurnDetector",
+      "related_files": [
+        "server/voice_daemon.py",
+        "mcp-server/src/pipecat_mcp_server/talky_turn.py",
+        "mcp-server/src/pipecat_mcp_server/mcp_driver_llm_service.py"
+      ],
+      "evidence": [
+        "talky_turn.py:7-28 documents the 76a3 migration: drop LLMContext aggregation in favor of UserTurnTextFrame. Used by the MCP/talky daemon pipeline.",
+        "voice_daemon.py:236-306 still wires `LLMContextAggregatorPair` + `LLMContext()` directly, with a comment 'Uses the same pattern as the MCP agent' that is now stale.",
+        "CLAUDE.md acknowledges the deferral: 'Separate from the talky daemon (two daemons, 9d02 unification deferred).'"
+      ],
+      "suggestion": "Either migrate voice_daemon's `_do_listen` to use `TalkyUserTurnDetector` (single emission pattern across the two pipelines) or carry through with the planned daemon unification. The deferral is documented but the divergent patterns still impose a learning tax on anyone touching both pipelines.",
+      "confidence": "high",
+      "impact_scope": "subsystem",
+      "fix_scope": "multi_file_refactor"
+    },
+    {
+      "dimension": "incomplete_migration",
+      "identifier": "duplicated_env_alias_resolution",
+      "summary": "TALKY_DAEMON_*/TALKY_MCP_* alias fallback duplicated 4x in talky_cli",
+      "related_files": ["talky_cli.py", "mcp-server/src/pipecat_mcp_server/server.py"],
+      "evidence": [
+        "talky_cli.py:340-341, 418-419, 475-476 each repeat `os.environ.get('TALKY_DAEMON_HOST', os.environ.get('TALKY_MCP_HOST', 'localhost'))` and the equivalent for PORT.",
+        "server.py:411 reads `TALKY_DAEMON_FORCE` with `TALKY_MCP_FORCE` fallback inline."
+      ],
+      "suggestion": "Centralize the daemon-host/port/force resolution in one helper (e.g. shared/daemon_env.py) so the legacy alias is removed in one place when the migration completes. Reduces the cost of finishing the rename.",
+      "confidence": "medium",
+      "impact_scope": "module",
+      "fix_scope": "single_edit"
+    }
+  ],
+  "context_updates": {
+    "incomplete_migration": {
+      "add": [
+        {
+          "header": "Migrations are ticket-traced and documented in code",
+          "description": "Module docstrings name the migration ticket (76a3, c3a1, 0c5d, 73b9) and explain the before/after frame shape. This makes it easy to understand which code path is the 'new' one, even when both still live in the tree.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "TypeScript-only frontend, no JS holdovers",
+          "description": "client/src is entirely .ts/.tsx with no .js/.jsx files alongside. No class/functional component coexistence. Frontend has none of the typical incomplete-TS-migration smells.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Stale compat shims accumulate without cleanup",
+          "description": "server/tts_daemon.py, the module-level profile_manager singleton, and legacy_daemon_is_running each carry a 'backward compat' label but have no remaining callers. Compat code is added with discipline but not retired when callers move on.",
+          "settled": true,
+          "positive": false
+        },
+        {
+          "header": "Voice daemon unfinished half of aggregator migration",
+          "description": "The MCP/talky daemon switched to TalkyUserTurnDetector + UserTurnTextFrame (ticket 76a3) but server/voice_daemon.py kept the older LLMContextAggregatorPair pattern. Both patterns coexist for the same operation, with the deferral acknowledged but no scheduled cutover.",
+          "settled": true,
+          "positive": false
+        },
+        {
+          "header": "Legacy labels do not always match active usage",
+          "description": "/api/profile is labeled 'legacy compat for old CLI' but the in-tree CLI uses it exclusively; /api/profiles/switch was added as 'new' but has no in-tree caller. The compat-vs-canonical labels disagree with what the code actually does.",
+          "settled": true,
+          "positive": false
+        }
+      ]
+    }
+  }
+}

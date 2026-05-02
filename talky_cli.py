@@ -61,7 +61,7 @@ def cmd_say(args):
     if getattr(args, "log_level", None):
         os.environ["TALKY_LOG_LEVEL"] = args.log_level
     
-    from shared.daemon_protocol import daemon_is_running
+    from shared.daemon_protocol import voice_daemon_is_running
 
     # server_dir is already defined globally from script location
 
@@ -110,7 +110,7 @@ def cmd_say(args):
         sys.exit(0 if success else 1)
 
     # Daemon mode - let daemon handle its own dependencies
-    if daemon_is_running():
+    if voice_daemon_is_running():
         cmd = [sys.executable, str(server_dir / "tts_client.py"), args.text]
     else:
         # Auto-start daemon, use client with wait
@@ -147,14 +147,14 @@ def cmd_ask(args):
     if getattr(args, "log_level", None):
         os.environ["TALKY_LOG_LEVEL"] = args.log_level
 
-    from shared.daemon_protocol import daemon_is_running
+    from shared.daemon_protocol import voice_daemon_is_running
 
     if not args.text:
         print("Usage: talky ask <text>", file=sys.stderr)
         sys.exit(1)
 
     # Ensure daemon is running (auto-start if needed)
-    if not daemon_is_running():
+    if not voice_daemon_is_running():
         subprocess.Popen(
             [sys.executable, str(server_dir / "voice_daemon.py"), "--start"],
             stdout=subprocess.DEVNULL,
@@ -169,7 +169,7 @@ def cmd_ask(args):
         "--cmd", "ask",
     ]
 
-    if not daemon_is_running():
+    if not voice_daemon_is_running():
         cmd.extend(["--wait", "15"])
 
     cmd.append(args.text)
@@ -538,14 +538,14 @@ def cmd_daemon(args):
         return
 
     # User-facing mode: ensure the daemon is up, return immediately.
-    if force and _daemon_is_running():
+    if force and talky_daemon_is_running():
         print("🔪 stopping existing daemon...", file=sys.stderr)
         try:
             subprocess.run(["talky", "kill"], check=False)
         except (FileNotFoundError, subprocess.SubprocessError) as e:
             print(f"⚠️  talky kill failed: {e}", file=sys.stderr)
 
-    if _daemon_is_running():
+    if talky_daemon_is_running():
         print("✅ talky daemon already running on :9090")
         return
 
@@ -562,7 +562,7 @@ _DAEMON_PID_PATH = _DAEMON_RUN_DIR / "talky-daemon.pid"
 _DAEMON_LOCK_PATH = _DAEMON_RUN_DIR / "talky-daemon.lock"
 
 
-def _daemon_is_running() -> bool:
+def talky_daemon_is_running() -> bool:
     """Return True if the daemon is running. Checks the ready file (written by
     the daemon after uvicorn binds), verifying the PID is still alive."""
     try:
@@ -590,7 +590,7 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
     """
     import fcntl
 
-    if _daemon_is_running():
+    if talky_daemon_is_running():
         return True
 
     _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
@@ -606,7 +606,7 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
 
     if got_lock:
         # Double-check after lock — another CLI may have finished first.
-        if _daemon_is_running():
+        if talky_daemon_is_running():
             lock_fh.close()
             return True
 
@@ -637,7 +637,7 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
     dot_interval = 2.0
     next_dot = time.monotonic() + dot_interval
     while time.monotonic() < deadline:
-        if _daemon_is_running():
+        if talky_daemon_is_running():
             if verbose:
                 print(f"\n✅ talky daemon up on :9090", file=sys.stderr)
             lock_fh.close()

@@ -1,0 +1,110 @@
+{
+  "batch": "type_safety",
+  "batch_index": 20,
+  "assessments": {"type_safety": 82.0},
+  "dimension_notes": {
+    "type_safety": {
+      "evidence": [
+        "shared/profile_manager.py:447 — resolve_talky_profile passes tp.llm_backend (Optional[str]) into get_llm_backend(name: str); same at line 450 for voice_profile. The accessor signature lies — None is reachable.",
+        "All 12 `type: ignore` comments are confined to test files (mcp-server/tests/test_request_leave.py, test_channel_ttl.py) with specific error codes ([method-assign], [attr-defined]) for AsyncMock assignment — appropriate, not blanket ignores.",
+        "dict[str, Any] usage is bounded and intentional: channel.py:182 (profile→LLMService map for dynamic backend dispatch), event_bus.py:20/34 (genuinely heterogeneous SSE payloads). No TypedDict opportunities being missed.",
+        "No Literal[] aliases shadowing enums; no enum-bypass via raw strings (no Enum subclasses in production code at all — VoiceChannel.MCP_DRIVER_PROFILE is a class constant string used consistently).",
+        "shared/daemon_protocol.py:22,28 — send_message/recv_message take/return bare `dict` (no parameter type), but they round-trip JSON, so dict[str, Any] would be the only honest annotation. Minor.",
+        "server/backends/base.py:9 — AsyncGenerator imported but unused (dead import, not a typing defect per se).",
+        "Dataclasses (LLMBackend, VoiceProfile, TalkyProfile, Event) are well-typed with Optional defaults marked appropriately.",
+        "CLI command handlers in talky_cli.py (cmd_say, cmd_ask, etc.) lack annotations on `args` and return type — conventional for argparse Namespace consumers, low value to annotate."
+      ],
+      "impact_scope": "module",
+      "fix_scope": "single_edit",
+      "confidence": "high",
+      "issues_preventing_higher_score": "Optional/required mismatch in TalkyProfile→accessor flow (resolve_talky_profile) means a developer cannot trust the get_llm_backend/get_voice_profile signatures — None is silently passed through dict.get, which masks the contract violation. Public CLI handlers and daemon_protocol message helpers are under-annotated."
+    }
+  },
+  "dimension_judgment": {
+    "type_safety": {
+      "dimension_character": "Type annotations are present on most public APIs, dataclasses are honest about Optional fields, and `type: ignore` comments are confined to test mocks with specific error codes. The main weakness is a single Optional/required mismatch where TalkyProfile's Optional[str] fields are fed into accessors that promise `name: str`, plus a few looser surfaces (bare `dict`, untyped CLI handler args) that don't actively mislead but leave honesty on the table.",
+      "score_rationale": "Solid type discipline overall — a developer can mostly trust the annotations as documentation. The Optional flow-through bug in profile resolution is real but isolated, and the under-annotated CLI/daemon-protocol surfaces are conventional rather than misleading. Lands above 80 (mostly trustworthy with isolated soft spots) but short of 90 because the resolve_talky_profile path is the kind of mismatch the rubric explicitly calls out."
+    }
+  },
+  "issues": [
+    {
+      "dimension": "type_safety",
+      "identifier": "talkyprofile_optional_to_required_str",
+      "summary": "resolve_talky_profile passes Optional[str] fields into accessors typed as `name: str`",
+      "related_files": ["shared/profile_manager.py"],
+      "evidence": [
+        "TalkyProfile.llm_backend and .voice_profile are typed Optional[str] = None (lines 54–55).",
+        "resolve_talky_profile (line 442) calls self.get_llm_backend(tp.llm_backend) and self.get_voice_profile(tp.voice_profile) — both accessors are annotated `name: str` (lines 415, 418), so a None value silently violates the signature and only produces ValueError because dict.get(None) returns None.",
+        "Loaders set llm_backend / voice_profile via `config.get(...) or self.defaults.get(...)` (lines 323–324, 346–347), which can resolve to None when both are missing."
+      ],
+      "suggestion": "Either tighten the accessor signatures to accept Optional[str] and return Optional[...] (already do), or guard explicitly in resolve_talky_profile: raise ValueError if tp.llm_backend is None / tp.voice_profile is None before dispatch. Cleanest: split TalkyProfile into a raw config dataclass and a resolved one where llm_backend/voice_profile are required str.",
+      "confidence": "high",
+      "impact_scope": "module",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "type_safety",
+      "identifier": "daemon_protocol_bare_dict",
+      "summary": "send_message/recv_message use bare `dict` instead of dict[str, Any]",
+      "related_files": ["shared/daemon_protocol.py"],
+      "evidence": [
+        "Line 22: `def send_message(sock: socket.socket, data: dict) -> None` — `data` is annotated as bare `dict` with no value type.",
+        "Line 28: `def recv_message(sock: socket.socket, timeout: float = 30.0) -> dict` — same.",
+        "These functions are the wire protocol surface used by both voice_daemon.py and clients; loose typing here propagates Any through every call site."
+      ],
+      "suggestion": "Annotate as `dict[str, Any]` (or define a `Mapping[str, Any]`/TypedDict if the message envelope is stable, e.g. `{'type': str, 'payload': ...}`).",
+      "confidence": "medium",
+      "impact_scope": "module",
+      "fix_scope": "single_edit"
+    },
+    {
+      "dimension": "type_safety",
+      "identifier": "unused_async_generator_import",
+      "summary": "AsyncGenerator imported in server/backends/base.py but never used",
+      "related_files": ["server/backends/base.py"],
+      "evidence": [
+        "Line 9: `from typing import Any, AsyncGenerator, Dict, Optional` — AsyncGenerator has no references in the file."
+      ],
+      "suggestion": "Remove AsyncGenerator from the import list.",
+      "confidence": "high",
+      "impact_scope": "local",
+      "fix_scope": "single_edit"
+    }
+  ],
+  "context_updates": {
+    "type_safety": {
+      "add": [
+        {
+          "header": "type:ignore comments are scoped and explained",
+          "description": "All 12 `type: ignore` comments live in test files (test_request_leave.py, test_channel_ttl.py) and carry specific error codes ([method-assign], [attr-defined]) for AsyncMock assignment patterns. No blanket ignores in production code.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Honest dataclasses for config domain objects",
+          "description": "LLMBackend, VoiceProfile, TalkyProfile, and Event are dataclasses with Optional defaults marked deliberately, distinguishing required identity fields (name) from optional config (greeting, signoff, system_message). The shape of config data is visible at a glance.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "dict[str, Any] used only where dynamic dispatch is real",
+          "description": "The handful of dict[str, Any] sites (channel.py profile→LLMService map, event_bus.py SSE payloads) reflect genuinely polymorphic data rather than missed TypedDict opportunities. No premature flattening of structured types into Any-bags.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "No parallel Literal/enum drift",
+          "description": "The codebase does not define Enum classes redundantly with Literal aliases, and the one constant identifier (VoiceChannel.MCP_DRIVER_PROFILE = '__mcp__') is referenced by attribute everywhere rather than by raw string literal.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Optional flow-through in profile resolution",
+          "description": "TalkyProfile fields llm_backend / voice_profile are typed Optional[str], but resolve_talky_profile and several internal call sites pass them straight into accessors typed `name: str`. The signatures are dishonest about None handling — error surfaces only via dict.get returning None.",
+          "settled": true,
+          "positive": false
+        }
+      ]
+    }
+  }
+}

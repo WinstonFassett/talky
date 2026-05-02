@@ -1,0 +1,92 @@
+{
+  "batch": "naming_quality",
+  "batch_index": 5,
+  "assessments": {"naming_quality": 86.0},
+  "dimension_notes": {
+    "naming_quality": {
+      "evidence": [
+        "Function name vocabulary is dominated by intent-revealing verbs: ensure_daemon, restore_profile_on_startup, cleanup_legacy_daemon, _emit_profile_changed, _schedule_ttl_if_empty, switch_to_profile, request_leave, build_device_auth — names tell you what the function does and why.",
+        "Generic verbs (process, handle, on, run) cluster on framework-conformant boundaries: process_frame is Pipecat's FrameProcessor contract (server/transcribe.py:42, server/backends/moltis.py:207, server/backends/openclaw.py:493, mcp-server/src/pipecat_mcp_server/mcp_driver_llm_service.py:99); handle_offer/handle_ice/handle_status/handle_switch_profile in mcp-server/src/pipecat_mcp_server/server.py are HTTP route handlers; on_user_turn_started / on_connected are Pipecat event callbacks. These are framework names, not vague names.",
+        "Class names are specific and domain-loaded: VoiceChannel, MCPDriverLLMService, TalkyUserTurnDetector, ProfileManager, BackendManager, VoiceProfileSwitcher, AppLauncher, DaemonManager — readers can infer responsibility from the name.",
+        "Boolean predicates correctly named with is_ / _is_ prefix and return bool: _is_empty (channel.py:275), _is_tool_env (dependency_installer.py:94), is_initialized, is_live, daemon_is_running.",
+        "Snake_case is consistent across server/, shared/, mcp-server/src/, features/, backends/ — only one camelCase outlier in server/ per the holistic conventions scan, no cross-module divergence observed in current code.",
+        "Helper-prefixed underscore privates are stable and descriptive: _build_app, _build_webrtc_routes, _build_and_start_pipeline, _composed_lifespan, _read_idle_ttl_seconds, _read_request_leave_grace_seconds, _restore_profile_on_startup — clear scope and clear intent.",
+        "create_*/load_*/list_*/get_* prefixes are used in line with naming_vocabulary aggregate (get:40, create:17, load:6, ensure:6) — consistent factory/loader/getter discipline. Examples: create_services_from_profile, create_tts_service_from_config, load_paired_tokens, list_voice_profiles, get_default_voice_profile.",
+        "Two functions named daemon_is_running exist (shared/daemon_protocol.py:65 referring to voice daemon, mcp-server/src/pipecat_mcp_server/daemon_bridge.py:25 referring to talky daemon). Module qualifies the meaning, but the bare names are identical and could mislead a grep. Minor.",
+        "Module name shared/voice_config.py contains a nested helper smart_filter (line 55) — adjective 'smart' is mildly vague but locally scoped to configure_quiet_logging and is a thin loguru filter callback; framework-shaped use, not ambiguous in context.",
+        "Test function names are long but communicate the assertion clearly (e.g., test_profile_manager_resolves_talky_profile, test_service_factory_splits_dotted_path) — readable as living spec."
+      ],
+      "impact_scope": "codebase",
+      "fix_scope": "single_edit",
+      "confidence": "high"
+    }
+  },
+  "dimension_judgment": {
+    "naming_quality": {
+      "dimension_character": "Naming across the codebase is intent-revealing and consistent: snake_case throughout, domain-loaded class names, predicates that honestly return booleans, and factory/loader prefixes used in a uniform way. Generic verbs cluster on framework-mandated boundaries (Pipecat FrameProcessor.process_frame, HTTP route handle_*, Pipecat event on_*) rather than as evasive abstractions, so the apparent 'handle/process/on' counts in the vocabulary scan are not vague names. The few rough edges (two functions sharing the bare name daemon_is_running, one nested smart_filter helper) are local and don't undermine the overall clarity.",
+      "score_rationale": "Strong, systemic naming discipline with framework-shaped exceptions correctly placed on framework seams puts this above 'solid but uneven' and into the upper band. It is held back from the exemplary range by the duplicated daemon_is_running across two daemon contexts and a small set of mildly generic helper names — minor friction rather than structural problems."
+    }
+  },
+  "issues": [
+    {
+      "dimension": "naming_quality",
+      "identifier": "duplicate_daemon_is_running_name",
+      "summary": "daemon_is_running is defined in two daemon contexts with the same bare name",
+      "related_files": [
+        "shared/daemon_protocol.py",
+        "mcp-server/src/pipecat_mcp_server/daemon_bridge.py",
+        "talky_cli.py"
+      ],
+      "evidence": [
+        "shared/daemon_protocol.py:65 defines daemon_is_running() that checks the voice daemon (VOICE_PID_FILE, VOICE_SOCKET_PATH).",
+        "mcp-server/src/pipecat_mcp_server/daemon_bridge.py:25 defines _daemon_is_running() that checks the talky/MCP daemon on port 9090.",
+        "talky_cli.py:567 also defines _daemon_is_running() locally for the talky daemon. Three near-identical names refer to two distinct daemons (voice daemon vs talky daemon), which is exactly the source-of-confusion the project documents in CLAUDE.md ('two daemons, 9d02 unification deferred')."
+      ],
+      "suggestion": "Rename to disambiguate by daemon kind: voice_daemon_is_running() in shared/daemon_protocol.py and talky_daemon_is_running() in daemon_bridge.py / talky_cli.py. The qualifier matches the existing module-level naming (voice_daemon.py vs talky daemon) and removes the grep-collision.",
+      "confidence": "medium",
+      "impact_scope": "module",
+      "fix_scope": "multi_file_refactor"
+    }
+  ],
+  "retrospective": {
+    "root_causes": [
+      "Two-daemon architecture (voice daemon + talky daemon) was named generically before unification was deferred, leaving overlapping bare names."
+    ]
+  },
+  "context_updates": {
+    "naming_quality": {
+      "add": [
+        {
+          "header": "Generic verbs sit on framework seams, not in app code",
+          "description": "process_frame, handle_*, on_* appear as Pipecat FrameProcessor overrides, aiohttp route handlers, and Pipecat event callbacks. The naming_vocabulary aggregate (handle:22, on:14, process:7) reflects framework conformance, not vague application naming — these are not candidates for renaming.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Predicates honestly typed and prefixed",
+          "description": "is_/_is_ predicates (is_initialized, is_live, _is_empty, _is_tool_env, daemon_is_running) all return bool. No getX-that-mutates patterns observed across server/, shared/, mcp-server/src/.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Factory/loader/list prefix discipline",
+          "description": "create_*, load_*, list_*, get_*, ensure_* are used consistently for their conventional roles (factory, deserializer, enumeration, accessor, idempotent setup). create_services_from_profile, load_paired_tokens, list_voice_profiles, ensure_daemon, ensure_dependencies are representative.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Domain-loaded class names",
+          "description": "Class names encode subsystem and role: VoiceChannel, MCPDriverLLMService, TalkyUserTurnDetector, ProfileManager, BackendManager, VoiceProfileSwitcher, AppLauncher, DaemonManager. Readers can infer responsibility without opening the file.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Two-daemon naming overlap",
+          "description": "Voice daemon and talky daemon each expose a daemon_is_running predicate under the same bare name in different modules. Module path disambiguates at import time but bare-name greps and reader memory can collide. Minor friction tied to the deferred daemon-unification work.",
+          "settled": false,
+          "positive": false
+        }
+      ]
+    }
+  }
+}

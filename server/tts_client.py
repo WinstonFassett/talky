@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.daemon_protocol import (
     SOCKET_PATH,
-    daemon_is_running,
+    voice_daemon_is_running,
     recv_message,
     send_message,
 )
@@ -65,10 +65,10 @@ def main():
 
     if args.wait > 0:
         end_time = time.time() + args.wait
-        while not daemon_is_running() and time.time() < end_time:
+        while not voice_daemon_is_running() and time.time() < end_time:
             time.sleep(0.1)
 
-    if not daemon_is_running():
+    if not voice_daemon_is_running():
         print("Daemon not running. Start it with: talky say --start-daemon")
         sys.exit(1)
 

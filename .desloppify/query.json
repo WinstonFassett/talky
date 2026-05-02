@@ -1,0 +1,652 @@
+{
+  "command": "next",
+  "items": [],
+  "queue": {
+    "total": 0,
+    "mode": "execution"
+  },
+  "narrative": {},
+  "agent_notes": [
+    "Do NOT use `desloppify plan skip` unless the user explicitly asks you to skip an item.",
+    "If you cannot fix an item, report it and move to the next one.",
+    "For cluster items: if the autofix_hint finds 0 results, drill into individual issues with the primary_command."
+  ],
+  "plan": {
+    "active": true,
+    "focus": "shared-package-and-syspath",
+    "clusters": [
+      {
+        "name": "auto/unused",
+        "description": "Remove 42 unused issues",
+        "item_count": 42
+      },
+      {
+        "name": "auto/test_coverage-untested_module",
+        "description": "Fix 46 test coverage issues",
+        "item_count": 22
+      },
+      {
+        "name": "auto/test_coverage-untested_critical",
+        "description": "Fix 6 test coverage issues",
+        "item_count": 3
+      },
+      {
+        "name": "auto/security-log_sensitive",
+        "description": "Fix 6 security issues",
+        "item_count": 3
+      },
+      {
+        "name": "auto/security-B404",
+        "description": "Fix 11 security issues",
+        "item_count": 6
+      },
+      {
+        "name": "auto/security-B607",
+        "description": "Fix 34 security issues",
+        "item_count": 15
+      },
+      {
+        "name": "auto/security-B603",
+        "description": "Fix 63 security issues",
+        "item_count": 30
+      },
+      {
+        "name": "auto/security-B110",
+        "description": "Fix 20 security issues",
+        "item_count": 10
+      },
+      {
+        "name": "auto/security-B104",
+        "description": "Fix 6 security issues",
+        "item_count": 2
+      },
+      {
+        "name": "auto/security-B108",
+        "description": "Fix 8 security issues",
+        "item_count": 6
+      },
+      {
+        "name": "auto/security-B606",
+        "description": "Fix 2 security issues",
+        "item_count": 1
+      },
+      {
+        "name": "auto/security-B101",
+        "description": "Fix 3 security issues",
+        "item_count": 3
+      },
+      {
+        "name": "auto/security-B310",
+        "description": "Fix 7 security issues",
+        "item_count": 7
+      },
+      {
+        "name": "auto/stale_exclude",
+        "description": "Fix 6 stale exclude issues",
+        "item_count": 6
+      },
+      {
+        "name": "auto/initial-review",
+        "description": "Initial review of 20 unscored subjective dimensions",
+        "item_count": 0
+      },
+      {
+        "name": "test-strategy-bootstrap",
+        "description": "Fix broken test_config import path (single-edit unblock), expand profile_manager test coverage, add CLI/daemon smoke tests, retire fake-print test files",
+        "item_count": 6
+      },
+      {
+        "name": "legacy-shim-deletion-sweep",
+        "description": "Delete dead modules with zero in-tree callers: server/tts_daemon.py, server/backends/base.py, eager profile_manager singleton, legacy_daemon_is_running predicate, create_pi_service factory, AsyncGenerator import",
+        "item_count": 9
+      },
+      {
+        "name": "shared-package-and-syspath",
+        "description": "Promote shared/ to a real workspace member, drop sys.path inserts, hoist deferred profile_manager imports, collapse duplicate daemon_is_running names, fold profile_manager triple-branch construction, address module-level http session cache, disambiguate TalkyProfile fields",
+        "item_count": 10
+      },
+      {
+        "name": "services-factory-unification",
+        "description": "Collapse to one factory in shared/, delete mcp-server services_factory wrapper, add from-e chaining and return annotations, fix singular/plural naming drift",
+        "item_count": 6
+      },
+      {
+        "name": "channel-and-server-decomposition",
+        "description": "Split mcp-server/server.py (846 LOC) into routes/tools/lifespan/server, extract pipeline build helpers in channel.py and voice_daemon._do_listen, extract _read_room_setting helper, move _http_sessions onto channel/lifespan, decide /api/profile route migration vs deletion",
+        "item_count": 8
+      },
+      {
+        "name": "cli-split-and-helpers",
+        "description": "Create cli/ package, split talky_cli.py (931 LOC) by subcommand group, factor _daemon_get/_daemon_post/_resolve_daemon_env helpers, collapse cmd_pi/cmd_claude duplication, drop inner-class Args copypaste",
+        "item_count": 5
+      },
+      {
+        "name": "package-restructure",
+        "description": "Flatten server/features/, consolidate /server/scripts/ into root /scripts/, address inverted server/ package role and protocol drift in server/backends/ siblings via naming/docs (not new abstraction)",
+        "item_count": 6
+      },
+      {
+        "name": "websocket-backend-base",
+        "description": "Extract WebsocketLLMBackendBase from Moltis/OpenClaw, normalize handle_messages, remove magic-byte v2 dup, single finally for _process_user_text, narrow moltis debug log, collapse session-key dead branches, add from-e chaining in OpenClaw raises",
+        "item_count": 7
+      },
+      {
+        "name": "voice-switcher-consolidation",
+        "description": "Extract single VoiceProfileSwitcher.apply_profile, slim switcher to still-used surface (delete RTVI-era handlers), iterate (close,shutdown) with shared try/except",
+        "item_count": 3
+      },
+      {
+        "name": "mcp-tool-contract-unification",
+        "description": "Pick one envelope ({success, error?, ...payload}), apply to convo_speak/switch_profile/switch_voice, document at top of tools.py",
+        "item_count": 5
+      },
+      {
+        "name": "dependency-trim",
+        "description": "Drop unused rich, unused requests/httpx in mcp-server, align pipecat-ai pin to ==0.0.102 across workspace, narrow pipecat-ai extras, demote kokoro-onnx to optional",
+        "item_count": 5
+      },
+      {
+        "name": "small-fixes-batch",
+        "description": "Trivial typed-tedium and small cleanups bundled into one PR: Optional[str] annotations, Pi NoReturn, dict[str, Any] daemon protocol, narrow bare except, drop unused imports, inline trivial wrappers, drop spurious async, consolidate __future__ imports, add fallback warning log",
+        "item_count": 13
+      }
+    ],
+    "total_ordered": 84,
+    "total_skipped": 161,
+    "plan_overrides_narrative": true
+  },
+  "overall_score": 77.4,
+  "objective_score": 83.9,
+  "strict_score": 71.5,
+  "scorecard_dimensions": [
+    {
+      "name": "File health",
+      "score": 86.8,
+      "strict": 86.8,
+      "checks": 34,
+      "failing": 6,
+      "tier": 3,
+      "subjective": false
+    },
+    {
+      "name": "AI generated debt",
+      "score": 84.0,
+      "strict": 84.0,
+      "checks": 10,
+      "failing": 5,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "ai_generated_debt"
+      ]
+    },
+    {
+      "name": "API coherence",
+      "score": 76.0,
+      "strict": 76.0,
+      "checks": 10,
+      "failing": 3,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "api_surface_coherence"
+      ]
+    },
+    {
+      "name": "Abstraction fit",
+      "score": 76.0,
+      "strict": 76.0,
+      "checks": 10,
+      "failing": 4,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "abstraction_fitness"
+      ]
+    },
+    {
+      "name": "Code quality",
+      "score": 81.0,
+      "strict": 65.8,
+      "checks": 252,
+      "failing": 158,
+      "tier": 3,
+      "subjective": false
+    },
+    {
+      "name": "Contracts",
+      "score": 82.5,
+      "strict": 82.5,
+      "checks": 10,
+      "failing": 5,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "contract_coherence"
+      ]
+    },
+    {
+      "name": "Convention drift",
+      "score": 78.0,
+      "strict": 78.0,
+      "checks": 10,
+      "failing": 4,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "convention_outlier"
+      ]
+    },
+    {
+      "name": "Cross-module arch",
+      "score": 58.0,
+      "strict": 58.0,
+      "checks": 10,
+      "failing": 3,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "cross_module_architecture"
+      ]
+    },
+    {
+      "name": "Dep health",
+      "score": 76.0,
+      "strict": 76.0,
+      "checks": 10,
+      "failing": 5,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "dependency_health"
+      ]
+    },
+    {
+      "name": "Design coherence",
+      "score": 76.0,
+      "strict": 76.0,
+      "checks": 10,
+      "failing": 5,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "design_coherence"
+      ]
+    },
+    {
+      "name": "Duplication",
+      "score": 99.9,
+      "strict": 99.9,
+      "checks": 205,
+      "failing": 1,
+      "tier": 3,
+      "subjective": false
+    },
+    {
+      "name": "Elegance",
+      "score": 71.0,
+      "strict": 71.0,
+      "checks": 30,
+      "failing": 18,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "high_level_elegance",
+        "low_level_elegance",
+        "mid_level_elegance"
+      ]
+    },
+    {
+      "name": "Error consistency",
+      "score": 78.5,
+      "strict": 78.5,
+      "checks": 10,
+      "failing": 5,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "error_consistency"
+      ]
+    },
+    {
+      "name": "Init coupling",
+      "score": 62.0,
+      "strict": 62.0,
+      "checks": 10,
+      "failing": 4,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "initialization_coupling"
+      ]
+    },
+    {
+      "name": "Security",
+      "score": 76.7,
+      "strict": 67.6,
+      "checks": 118,
+      "failing": 156,
+      "tier": 4,
+      "subjective": false
+    },
+    {
+      "name": "Stale migration",
+      "score": 68.0,
+      "strict": 68.0,
+      "checks": 10,
+      "failing": 6,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "incomplete_migration"
+      ]
+    },
+    {
+      "name": "Structure nav",
+      "score": 82.0,
+      "strict": 82.0,
+      "checks": 10,
+      "failing": 3,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "package_organization"
+      ]
+    },
+    {
+      "name": "Test health",
+      "score": 74.1,
+      "strict": 1.8,
+      "checks": 446,
+      "failing": 9,
+      "tier": 4,
+      "subjective": false
+    },
+    {
+      "name": "Test strategy",
+      "score": 38.0,
+      "strict": 38.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "test_strategy"
+      ]
+    },
+    {
+      "name": "Type safety",
+      "score": 82.0,
+      "strict": 82.0,
+      "checks": 10,
+      "failing": 3,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "type_safety"
+      ]
+    }
+  ],
+  "subjective_measures": [
+    {
+      "name": "AI generated debt",
+      "score": 84.0,
+      "strict": 84.0,
+      "checks": 10,
+      "failing": 5,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "ai_generated_debt"
+      ]
+    },
+    {
+      "name": "API coherence",
+      "score": 76.0,
+      "strict": 76.0,
+      "checks": 10,
+      "failing": 3,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "api_surface_coherence"
+      ]
+    },
+    {
+      "name": "Abstraction fit",
+      "score": 76.0,
+      "strict": 76.0,
+      "checks": 10,
+      "failing": 4,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "abstraction_fitness"
+      ]
+    },
+    {
+      "name": "Contracts",
+      "score": 82.5,
+      "strict": 82.5,
+      "checks": 10,
+      "failing": 5,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "contract_coherence"
+      ]
+    },
+    {
+      "name": "Convention drift",
+      "score": 78.0,
+      "strict": 78.0,
+      "checks": 10,
+      "failing": 4,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "convention_outlier"
+      ]
+    },
+    {
+      "name": "Cross-module arch",
+      "score": 58.0,
+      "strict": 58.0,
+      "checks": 10,
+      "failing": 3,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "cross_module_architecture"
+      ]
+    },
+    {
+      "name": "Dep health",
+      "score": 76.0,
+      "strict": 76.0,
+      "checks": 10,
+      "failing": 5,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "dependency_health"
+      ]
+    },
+    {
+      "name": "Design coherence",
+      "score": 76.0,
+      "strict": 76.0,
+      "checks": 10,
+      "failing": 5,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "design_coherence"
+      ]
+    },
+    {
+      "name": "Elegance",
+      "score": 71.0,
+      "strict": 71.0,
+      "checks": 30,
+      "failing": 18,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "high_level_elegance",
+        "low_level_elegance",
+        "mid_level_elegance"
+      ]
+    },
+    {
+      "name": "Error consistency",
+      "score": 78.5,
+      "strict": 78.5,
+      "checks": 10,
+      "failing": 5,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "error_consistency"
+      ]
+    },
+    {
+      "name": "Init coupling",
+      "score": 62.0,
+      "strict": 62.0,
+      "checks": 10,
+      "failing": 4,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "initialization_coupling"
+      ]
+    },
+    {
+      "name": "Stale migration",
+      "score": 68.0,
+      "strict": 68.0,
+      "checks": 10,
+      "failing": 6,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "incomplete_migration"
+      ]
+    },
+    {
+      "name": "Structure nav",
+      "score": 82.0,
+      "strict": 82.0,
+      "checks": 10,
+      "failing": 3,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "package_organization"
+      ]
+    },
+    {
+      "name": "Test strategy",
+      "score": 38.0,
+      "strict": 38.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "test_strategy"
+      ]
+    },
+    {
+      "name": "Type safety",
+      "score": 82.0,
+      "strict": 82.0,
+      "checks": 10,
+      "failing": 3,
+      "tier": 4,
+      "subjective": true,
+      "placeholder": false,
+      "cli_keys": [
+        "type_safety"
+      ]
+    }
+  ],
+  "config": {
+    "target_strict_score": 85,
+    "review_max_age_days": 30,
+    "review_batch_max_files": 80,
+    "holistic_max_age_days": 30,
+    "generate_scorecard": true,
+    "badge_path": "scorecard.png",
+    "exclude": [
+      ".venv",
+      "node_modules",
+      "dist",
+      "__pycache__",
+      "talky_workspace.egg-info",
+      "archive",
+      "client/dist",
+      "src-tauri/target",
+      ".pytest_cache",
+      ".ruff_cache",
+      "spikes",
+      "screenshots",
+      ".tix",
+      "tickets",
+      "docs",
+      ".claude/worktrees"
+    ],
+    "ignore": [],
+    "ignore_metadata": {},
+    "zone_overrides": {},
+    "review_dimensions": [],
+    "large_files_threshold": 0,
+    "props_threshold": 0,
+    "issue_noise_budget": 10,
+    "issue_noise_global_budget": 0,
+    "execution_log_max_entries": 10000,
+    "needs_rescan": false,
+    "languages": {},
+    "commit_tracking_enabled": true,
+    "commit_pr": 0,
+    "commit_default_branch": "",
+    "commit_message_template": "desloppify: {status} {count} issue(s) \u2014 {summary}",
+    "trust_plugins": false,
+    "transition_messages": {},
+    "hermes_enabled": false,
+    "hermes_models": {
+      "execute": "openrouter:x-ai/grok-4.20-beta",
+      "review": "openrouter:google/gemini-3.1-pro-preview"
+    }
+  }
+}

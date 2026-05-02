@@ -1,0 +1,174 @@
+{
+  "batch": "design_coherence",
+  "batch_index": 17,
+  "assessments": {"design_coherence": 76.0},
+  "dimension_notes": {
+    "design_coherence": {
+      "evidence": [
+        "server.py: thin MCP tool layer (each @mcp.tool one-line delegation to voice_channel) plus header-commented sectioning — patterns are consistent.",
+        "event_bus.py and daemon_bridge.py are tight, single-responsibility modules; daemon_bridge cleanly wraps the unix-socket protocol with no concern bleed.",
+        "channel.py is large (1252 LOC) but the docstring contract is explicit and most methods have a single coherent role; size reflects domain complexity (lifecycle + warmup + profile/voice switching + health polling + pipeline build).",
+        "Defect: talky_cli.py cmd_pi (lines 782-794) and cmd_claude (lines 802-814) are byte-for-byte identical apart from the profile string — exactly the data-driven repeated pattern the rubric calls out.",
+        "Defect: shared/profile_manager.py _load_llm_backends repeats the `self.llm_backends[name] = LLMBackend(name=..., description=..., service_class=..., config=..., greeting=..., signoff=...)` constructor block in three branches (override path, no-user-extensions path, exception fallback). _load_voice_backends has a parallel triple-branch merge structure.",
+        "Defect: server.py _read_idle_ttl_seconds (lines 66-102) and _read_request_leave_grace_seconds (lines 108-146) are near-isomorphic env-var-then-yaml-then-default readers; the second adds clamp-to-zero but the parsing/logging/precedence ladder is duplicated.",
+        "Defect: channel.py _build_and_start_pipeline (~210 lines, 1043-1252) interleaves LLM-switcher assembly, pong-responder polling task, transport construction, voice-switcher wiring, multiple event-handler closures, frame-filter installation, state commitment, runner kickoff, and a runner done-callback. The steps are sequential but the function is doing five clearly separable jobs.",
+        "Defect: server/voice_daemon.py _do_listen (lines 230-386) sets up STT, plays cue tone, builds transport, builds aggregator, registers two event handlers, runs a silence-monitor task, applies a hard-cap timeout, plays cue tone again, and packages three different result shapes — multiple distinct responsibilities collapsed into one function body.",
+        "Repeated cmd_* boilerplate in talky_cli.main() — argparse subparser definitions are individually fine, but the whole argument-table setup is a long imperative builder where a declarative table of (name, help, args, func) would be clearer; not a defect on its own given argparse idiom."
+      ],
+      "impact_scope": "subsystem",
+      "fix_scope": "multi_file_refactor",
+      "confidence": "high",
+      "issues_preventing_higher_score": "Two clear data-driven duplication clusters (profile_manager backend-loading 3-way fallback, server.py env+yaml setting-readers), one cmd_pi/cmd_claude copy-paste, and two long mixed-responsibility functions (_build_and_start_pipeline, _do_listen). The codebase otherwise shows good separation; these specific hotspots prevent a higher score."
+    }
+  },
+  "dimension_judgment": {
+    "design_coherence": {
+      "dimension_character": "Most modules show clear separation of concerns — the MCP tool layer in server.py is a thin facade over VoiceChannel, daemon_bridge and event_bus are tight single-purpose units, and large files like channel.py earn their length through genuine domain complexity rather than mixed concerns. The drag comes from a small number of repeated structural patterns that should be data-driven (profile_manager's triple-branch backend constructor, server.py's two near-identical settings readers, talky_cli's cmd_pi/cmd_claude twins) and from two long functions (_build_and_start_pipeline, _do_listen) that fold five-plus distinct steps into a single body.",
+      "score_rationale": "Solid-but-uneven territory: the architectural shape is coherent and the patterns that are followed are followed consistently, but a developer would repeatedly hit copy-paste branches in the merge/fallback code and would have to scroll through 200-line orchestration functions to understand pipeline construction. The defects are concentrated rather than systemic, which keeps this above the 70 line; the duplication in profile_manager is structural enough to keep it well below 85."
+    }
+  },
+  "issues": [
+    {
+      "dimension": "design_coherence",
+      "identifier": "cli_cmd_pi_claude_dup",
+      "summary": "cmd_pi and cmd_claude in talky_cli.py are byte-identical apart from the profile string",
+      "related_files": ["talky_cli.py"],
+      "evidence": [
+        "talky_cli.py:782-794 cmd_pi defines a local Args class, copies vars(args), constructs Args('pi', ...) and calls cmd_run_client_profile.",
+        "talky_cli.py:802-814 cmd_claude does the same with 'claude'."
+      ],
+      "suggestion": "Replace both with a single factory: `def _make_client_profile_cmd(profile_name): def cmd(args): args_dict = {k: v for k, v in vars(args).items() if k != 'func'}; args.profile = profile_name; return cmd_run_client_profile(args); return cmd` and use `pi_parser.set_defaults(func=_make_client_profile_cmd('pi'))`. The local Args class is unnecessary — assigning `args.profile` on the existing Namespace is sufficient since cmd_run_client_profile reads it via getattr.",
+      "confidence": "high",
+      "impact_scope": "local",
+      "fix_scope": "single_edit",
+      "concern_verdict": "confirmed",
+      "concern_fingerprint": "f82edd0249362024",
+      "root_cause_cluster": "data_driven_repetition"
+    },
+    {
+      "dimension": "design_coherence",
+      "identifier": "profile_manager_triple_branch_backend_construction",
+      "summary": "ProfileManager._load_llm_backends repeats the LLMBackend(...) constructor block in three branches",
+      "related_files": ["shared/profile_manager.py"],
+      "evidence": [
+        "shared/profile_manager.py:117-205 the user-override path (149-160), the no-user-extensions path (172-181), the FileNotFoundError fallback (185-193), and the broad-Exception fallback (197-205) each rebuild LLMBackend with the same six-field construction.",
+        "_load_voice_backends:207-262 has a parallel triple-branch merge structure for the (backend_type, provider_name) two-level dict."
+      ],
+      "suggestion": "Refactor to a two-stage merge: (1) build a merged dict by `core | defaults_only_for_new_keys | user_extensions` using deep-merge helpers, (2) materialise into `self.llm_backends` with a single LLMBackend(**config) loop. Wrap the user-extension YAML read in a try/except returning {} on FileNotFoundError or unexpected errors so the materialise step has one path. Same shape for voice backends.",
+      "confidence": "high",
+      "impact_scope": "module",
+      "fix_scope": "multi_file_refactor",
+      "root_cause_cluster": "data_driven_repetition"
+    },
+    {
+      "dimension": "design_coherence",
+      "identifier": "server_settings_reader_duplication",
+      "summary": "server.py defines two near-identical env-var-then-YAML setting readers",
+      "related_files": ["mcp-server/src/pipecat_mcp_server/server.py"],
+      "evidence": [
+        "_read_idle_ttl_seconds:66-102 reads TALKY_ROOM_IDLE_TTL_SECS, falls back to settings['room']['idle_ttl_seconds'], parses float-or-infinity, validates positive.",
+        "_read_request_leave_grace_seconds:108-146 mirrors the same env→yaml→default ladder with clamp-to-zero instead of infinity handling."
+      ],
+      "suggestion": "Extract a single helper `def _read_room_setting(env_key: str, yaml_key: str, *, default: float | None, allow_infinity: bool, clamp_floor: float | None) -> float | None`. Both call sites collapse to one-line wrappers. This both removes duplication and centralises the env-vs-yaml precedence rule so future settings inherit it.",
+      "confidence": "medium",
+      "impact_scope": "local",
+      "fix_scope": "single_edit",
+      "root_cause_cluster": "data_driven_repetition"
+    },
+    {
+      "dimension": "design_coherence",
+      "identifier": "build_pipeline_mixed_responsibilities",
+      "summary": "_build_and_start_pipeline mixes pipeline construction, pong-responder setup, lifecycle handlers, and runner kickoff",
+      "related_files": ["mcp-server/src/pipecat_mcp_server/channel.py"],
+      "evidence": [
+        "channel.py:1043-1252 in one function: instantiates STT, builds the LLM switcher map (with per-backend try/except), spawns a `_setup_pong_responder` background task that polls for the data channel, builds the transport, constructs VoiceProfileSwitcher and sets the task back on it, builds the turn detector, builds the Pipeline and PipelineTask, registers transport on_client_connected/on_client_disconnected handlers, installs an upstream frame filter and on_user_speaking handler, commits state to self.*, starts the runner task, and registers _on_runner_done.",
+        "Each of those is a coherent step but they accumulate to a 200-line body with five distinct concerns."
+      ],
+      "suggestion": "Split into private helpers on VoiceChannel: `_build_llm_switcher(pm) -> (LLMSwitcher, profile_map)`, `_build_voice_pipeline(stt, llm_switcher, voice_switcher, transport, turn_detector) -> (Pipeline, PipelineTask)`, `_attach_lifecycle_handlers(transport, pipeline_task)`, `_attach_pong_responder(connection)`. Keep _build_and_start_pipeline as the orchestrator that calls these in order and commits state. Don't add new types — just method extraction.",
+      "confidence": "medium",
+      "impact_scope": "module",
+      "fix_scope": "multi_file_refactor",
+      "root_cause_cluster": "long_orchestration_functions"
+    },
+    {
+      "dimension": "design_coherence",
+      "identifier": "voice_daemon_do_listen_mixed_responsibilities",
+      "summary": "voice_daemon._do_listen folds STT setup, pipeline build, two timeout strategies, and result packaging into one function",
+      "related_files": ["server/voice_daemon.py"],
+      "evidence": [
+        "server/voice_daemon.py:230-386 builds STT, plays start tone, builds LocalAudioTransport, constructs LLMContextAggregatorPair with VAD + UserTurnStrategies, registers on_user_turn_started and on_user_turn_stopped handlers, runs a silence-monitor coroutine, applies an asyncio.wait_for hard-cap, plays stop tone, and returns one of three result-dict shapes.",
+        "result_holder dict pattern signals the function is coordinating async events that would naturally live on a small helper class or be returned via a queue."
+      ],
+      "suggestion": "Extract `_build_listen_pipeline(stt) -> (PipelineTask, result_holder)` and `_run_with_timeouts(task, silence_timeout, listen_timeout, speech_started_flag) -> bool` (returns True if hard-cap tripped). _do_listen becomes: build, play start tone, run-with-timeouts, play stop tone, package result. The two timeouts are independent strategies and reading them as separate helpers makes the contract obvious.",
+      "confidence": "medium",
+      "impact_scope": "module",
+      "fix_scope": "multi_file_refactor",
+      "root_cause_cluster": "long_orchestration_functions"
+    },
+    {
+      "concern_verdict": "dismissed",
+      "concern_fingerprint": "9eb5bb97489f9bfb",
+      "reasoning": "event_bus.py is 64 lines, single-purpose. The two suppressed-error sites are intentional: QueueFull pass (drop slow consumers) and ValueError on subscribers.remove (already-removed). Both are documented behaviours, not design problems."
+    },
+    {
+      "concern_verdict": "dismissed",
+      "concern_fingerprint": "19c6d452fe5995e0",
+      "reasoning": "server.py's sys.exit() inside _check_ports_or_exit is appropriate — it runs at process startup before any framework is up; raising would bubble into uvicorn import code with no handler. The function name is honest about exiting."
+    },
+    {
+      "concern_verdict": "dismissed",
+      "concern_fingerprint": "c78079c496e60280",
+      "reasoning": "Worktree spike file (.claude/worktrees/spike+livekit-explore/...) — not part of the production tree, intentionally exploratory."
+    },
+    {
+      "concern_verdict": "dismissed",
+      "concern_fingerprint": "ef46225afcea435a",
+      "reasoning": "Worktree spike file — out of production scope."
+    },
+    {
+      "concern_verdict": "dismissed",
+      "concern_fingerprint": "0be4232913f964e5",
+      "reasoning": "Worktree spike file — out of production scope."
+    }
+  ],
+  "retrospective": {
+    "root_causes": [
+      "data_driven_repetition: same configuration-merge or env-vs-yaml shape implemented inline across multiple branches/functions instead of extracted",
+      "long_orchestration_functions: voice pipeline lifecycle setup is procedural and accumulates concerns over time"
+    ],
+    "likely_symptoms": [
+      "cli_cmd_pi_claude_dup",
+      "server_settings_reader_duplication"
+    ]
+  },
+  "context_updates": {
+    "design_coherence": {
+      "add": [
+        {
+          "header": "Thin MCP tool layer over VoiceChannel",
+          "description": "server.py exposes each MCP tool as a one-line delegation to voice_channel — the FastMCP layer carries no business logic, which keeps tool surface and channel implementation independently reviewable.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Cohesive small infrastructure modules",
+          "description": "event_bus.py (64 LOC) and daemon_bridge.py (190 LOC) each handle one concern with no concern bleed — pub/sub broadcast and unix-socket RPC respectively. They demonstrate the codebase's preferred shape when domain complexity is bounded.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "Profile-loading merge logic duplicates the constructor block",
+          "description": "shared/profile_manager.py rebuilds LLMBackend / voice-backend dicts in three-to-four parallel branches across user-override / no-extensions / FileNotFound / broad-except paths. A two-stage merge-then-materialise pattern would collapse this and is the single highest-value design refactor available.",
+          "settled": true,
+          "positive": false
+        },
+        {
+          "header": "Pipeline build orchestration lives in one long function",
+          "description": "VoiceChannel._build_and_start_pipeline coordinates LLM switcher, transport, voice switcher, turn detector, lifecycle handlers, pong responder, and runner kickoff in one ~200-line body. Cohesive in intent but mixed in concern — splitting into named helpers would improve traceability without adding indirection.",
+          "settled": false,
+          "positive": false
+        }
+      ]
+    }
+  }
+}

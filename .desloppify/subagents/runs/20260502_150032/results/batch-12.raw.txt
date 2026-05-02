@@ -1,0 +1,54 @@
+{
+  "batch": "authorization_consistency",
+  "batch_index": 12,
+  "assessments": {"authorization_consistency": 78.0},
+  "dimension_notes": {
+    "authorization_consistency": {
+      "evidence": [
+        "Single-user local desktop daemon: mcp_host defaults to 'localhost' (server.py:57) with comment 'defaults to localhost for security'; no concept of users, tenants, or sessions tied to identity (grep for user_id/current_user/owner_id/tenant returns zero hits in production code).",
+        "All Starlette routes in mcp-server/src/pipecat_mcp_server/server.py:697-720 (/start, /api/offer, /api/profiles, /api/voices, /api/events, /status, /api/profile) are uniformly unauthenticated. Consistency is high precisely because there is no auth layer — no sibling has it while another does not.",
+        "FastMCP /mcp endpoint mounted at the same Starlette root with no auth gate; consistent with the localhost-trust model.",
+        "talky_auth.py is a credential-management TUI for outbound provider API keys (Cartesia, Deepgram, etc.), not an authn/z system — naming is the only thing that suggests otherwise.",
+        "WebRTC session_id is intentionally not validated against active_sessions (server.py:528-538, handle_session_offer) — documented as Pipecat Cloud compat token, not a security boundary. Reasoning is explicit and consistent.",
+        "MCP_HOST is overridable via env var; if a user sets MCP_HOST=0.0.0.0 the daemon exposes /api/profiles/switch, /api/voices/switch, /api/events, and WebRTC signaling on the network with no authentication or CORS configuration. This is opt-in, not the default.",
+        "MCP_SSL_CERTFILE/MCP_SSL_KEYFILE allow TLS (server.py:821-833) but no auth layer is added alongside — TLS+no-auth is symmetric across all routes, so still consistent.",
+        "scan_evidence 'authorization': {} — mechanical detector found no auth signals to evaluate.",
+        "No RLS, no permission strings, no role checks anywhere in the codebase — there is no auth surface to be inconsistent about."
+      ],
+      "impact_scope": "local",
+      "fix_scope": "single_edit",
+      "confidence": "high"
+    }
+  },
+  "dimension_judgment": {
+    "authorization_consistency": {
+      "dimension_character": "Talky is a single-user local daemon with no notion of users, tenants, or roles, so authorization consistency reduces to 'every route is uniformly unauthenticated and bound to localhost'. The trust model is explicit (host defaults to localhost, comment documents the rationale) and applied uniformly across WebRTC signaling, REST profile/voice management, SSE events, and the FastMCP endpoint. The only latent inconsistency is that MCP_HOST is overridable to 0.0.0.0 without adding any auth — but that is an opt-in deployment choice, not a sibling-vs-sibling drift.",
+      "score_rationale": "High score because the dimension's failure modes (mixed decorators, RLS gaps, permission magic strings, mixed trust boundaries) simply do not manifest — there is one trust boundary (localhost) and all routes sit equally inside it. Held below the very top because the env-var escape hatch for MCP_HOST exposes admin-shaped endpoints (profile switch, voice switch) with no defense if misconfigured, which is the closest thing to an auth concern in the codebase."
+    }
+  },
+  "issues": [],
+  "context_updates": {
+    "authorization_consistency": {
+      "add": [
+        {
+          "header": "Single-user local daemon, no auth surface",
+          "description": "Talky is a local-only desktop tool: the MCP/WebRTC server defaults to localhost, has no users/tenants/roles, and stores only outbound provider API keys. Authorization consistency is high by absence — there is no auth layer for siblings to diverge from.",
+          "settled": true,
+          "positive": true
+        },
+        {
+          "header": "MCP_HOST override is the lone latent risk",
+          "description": "MCP_HOST is configurable via env var. If a user sets it to 0.0.0.0, the unauthenticated /api/profiles/switch, /api/voices/switch, /api/events and WebRTC signaling routes become network-reachable. Not a defect today (default is localhost and documented as 'for security'), but a single config flip removes the only trust boundary.",
+          "settled": false,
+          "positive": false
+        },
+        {
+          "header": "talky_auth.py is credential TUI, not authn/z",
+          "description": "Despite the filename, talky_auth.py manages outbound provider API keys (Cartesia, Deepgram, ElevenLabs, AssemblyAI, Google) via an InquirerPy TUI. It has no role in authenticating callers of the daemon. Naming only — flagged here so future reviewers don't mistake it for an auth subsystem.",
+          "settled": true,
+          "positive": false
+        }
+      ]
+    }
+  }
+}
