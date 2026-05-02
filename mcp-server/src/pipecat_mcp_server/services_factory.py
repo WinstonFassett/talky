@@ -4,7 +4,6 @@ Integrates with our existing talky configuration system.
 Uses YAML config files and credential storage instead of .env files.
 """
 
-import os
 import sys
 from pathlib import Path
 from typing import Optional

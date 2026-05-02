@@ -2,7 +2,7 @@
 
 import asyncio
 import re
-from typing import Dict, Optional
+from typing import Dict
 
 from loguru import logger
 from pipecat.frames.frames import ManuallySwitchServiceFrame

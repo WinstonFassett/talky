@@ -4,12 +4,10 @@ Provides a unified interface that any LLM backend can implement.
 Handles both simple request/response (Moltis) and complex async event models (OpenClaw).
 """
 
-import asyncio
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, Dict, Optional
 
 from loguru import logger
-from pipecat.frames.frames import Frame
 from pipecat.services.llm_service import LLMService
 
 

@@ -6,8 +6,8 @@ In a uv tool environment, uses `uv tool install --reinstall --with`
 then re-execs the process so new packages are immediately available.
 """
 
-import functools
 import importlib.metadata
+import importlib.util
 import os
 import re
 import subprocess
@@ -139,15 +139,11 @@ def _check_extra_installed(extra: str) -> bool:
     
     # Additional checks for specific provider modules
     if extra == "stt-google":
-        try:
-            import google.genai
-        except ImportError:
+        if importlib.util.find_spec("google.genai") is None:
             return False
-    
+
     if extra == "stt-deepgram":
-        try:
-            import deepgram
-        except ImportError:
+        if importlib.util.find_spec("deepgram") is None:
             return False
     
     return True

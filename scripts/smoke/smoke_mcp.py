@@ -5,7 +5,6 @@ Run this before testing with Claude Code to ensure everything works.
 """
 
 import asyncio
-import json
 import sys
 
 from mcp import ClientSession, StdioServerParameters

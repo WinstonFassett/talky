@@ -7,9 +7,7 @@ Run from anywhere: talky moltis
 
 import argparse
 import json
-import logging
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -92,7 +90,7 @@ def cmd_say(args):
         # Direct mode — no daemon, handle dependencies here
         import asyncio
 
-        from shared.dependency_installer import ensure_dependencies, get_configured_providers
+        from shared.dependency_installer import ensure_dependencies
         
         if not ensure_dependencies(for_cli=True):
             print("❌ Failed to install required dependencies")
@@ -303,7 +301,7 @@ def cmd_config(args):
             pm = get_profile_manager()
             for name, desc in pm.list_voice_profiles().items():
                 print(f"  {name}: {desc}")
-        except Exception as e:
+        except Exception:
             print(f"  (Run 'talky say hello' first to install dependencies)")
 
 

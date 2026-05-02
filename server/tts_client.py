@@ -6,14 +6,12 @@ import os
 import socket
 import sys
 import time
-from pathlib import Path
 from typing import Optional
 
 # Add project root for shared imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.daemon_protocol import (
-    PID_FILE,
     SOCKET_PATH,
     daemon_is_running,
     recv_message,

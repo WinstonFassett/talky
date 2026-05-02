@@ -1,7 +1,6 @@
 """Self-contained tests for talky_auth. No TTY required — prompts are mocked."""
 
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path

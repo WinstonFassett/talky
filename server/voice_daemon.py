@@ -19,7 +19,6 @@ import signal
 import struct
 import sys
 import time
-from pathlib import Path
 from typing import Optional
 
 # Add project root for shared imports
@@ -31,9 +30,7 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     EndFrame,
     StartFrame,
-    TranscriptionFrame,
     TTSAudioRawFrame,
-    UserStartedSpeakingFrame,
 )
 from shared.daemon_protocol import (
     VOICE_PID_FILE,
@@ -240,9 +237,6 @@ class VoiceDaemon:
         The aggregator handles VAD, speech accumulation, and fires
         on_user_turn_stopped with the complete transcript.
         """
-        from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
-            LocalSmartTurnAnalyzerV3,
-        )
         from pipecat.pipeline.pipeline import Pipeline
         from pipecat.pipeline.runner import PipelineRunner
         from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -257,9 +251,6 @@ class VoiceDaemon:
         )
         from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
             SpeechTimeoutUserTurnStopStrategy,
-        )
-        from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
-            TurnAnalyzerUserTurnStopStrategy,
         )
         from pipecat.turns.user_turn_strategies import UserTurnStrategies
         from shared.profile_manager import get_profile_manager

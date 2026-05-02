@@ -10,12 +10,8 @@ import json
 import os
 import ssl
 import time
-from pathlib import Path
-from typing import Optional
 
 import websockets
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519
 from loguru import logger
 from pipecat.frames.frames import (
     Frame,

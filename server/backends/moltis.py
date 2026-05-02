@@ -8,7 +8,6 @@ import json
 import os
 import ssl
 import time
-from typing import Optional
 
 import websockets
 from loguru import logger
@@ -22,7 +21,6 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 from pipecat_mcp_server.talky_turn import UserTurnTextFrame
 from server.config.voice_prompts import format_voice_message
-from shared.profile_manager import get_profile_manager
 
 
 class MoltisLLMService(LLMService):

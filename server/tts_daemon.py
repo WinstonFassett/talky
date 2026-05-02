@@ -17,9 +17,6 @@ from voice_daemon import (  # noqa: F401
 )
 from voice_daemon import (
     main,
-    send_speak_request,
-    start_daemon,
-    stop_daemon,
 )
 
 if __name__ == "__main__":

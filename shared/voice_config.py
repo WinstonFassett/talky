@@ -8,7 +8,6 @@ import sys
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 
 from .service_factory import (
-    create_stt_service_from_config,
     create_tts_service_from_config,
 )
 

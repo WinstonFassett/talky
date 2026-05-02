@@ -108,7 +108,7 @@ def test_profile_manager_copies_defaults_on_missing(tmp_path):
     from shared.profile_manager import ProfileManager
 
     # tmp_path is empty, PM should copy from bundled defaults
-    pm = ProfileManager(config_dir=tmp_path)
+    ProfileManager(config_dir=tmp_path)
 
     # Should have copied default yaml files
     for name in [
@@ -278,8 +278,7 @@ def test_profile_manager_singleton_reset(tmp_path):
 
 def test_service_factory_raises_on_missing_provider(tmp_path):
     """Unknown provider → ValueError."""
-    import shared.service_factory as sf
-    from shared.profile_manager import ProfileManager, get_profile_manager
+    from shared.profile_manager import get_profile_manager
     from shared.service_factory import create_tts_service_from_config
 
     _write_all_yamls(tmp_path)
@@ -289,7 +288,7 @@ def test_service_factory_raises_on_missing_provider(tmp_path):
 
     old = pm_mod._instance
     pm_mod._instance = None
-    pm = get_profile_manager(config_dir=tmp_path)
+    get_profile_manager(config_dir=tmp_path)
 
     try:
         with pytest.raises(ValueError, match="not found"):
