@@ -252,3 +252,6 @@ server/server-*.pem
 server/server-*.key
 
 .desloppify/scorecard.png
+
+.desloppify/
+scorecard.png
