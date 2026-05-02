@@ -67,11 +67,6 @@ def daemon_is_running() -> bool:
     return _check_daemon(VOICE_PID_FILE, VOICE_SOCKET_PATH)
 
 
-def legacy_daemon_is_running() -> bool:
-    """Check if legacy TTS daemon is running."""
-    return _check_daemon(LEGACY_PID_FILE, LEGACY_SOCKET_PATH)
-
-
 def cleanup_legacy_daemon() -> None:
     """Clean up stale legacy daemon socket/pid files."""
     LEGACY_SOCKET_PATH.unlink(missing_ok=True)

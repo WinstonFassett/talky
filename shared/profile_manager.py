@@ -469,7 +469,3 @@ def get_profile_manager(config_dir: Optional[Path] = None) -> ProfileManager:
     if _instance is None or config_dir is not None:
         _instance = ProfileManager(config_dir=config_dir)
     return _instance
-
-
-# Backwards compat: module-level instance (eagerly created on import)
-profile_manager = get_profile_manager()

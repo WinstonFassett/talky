@@ -2,6 +2,7 @@
 
 import subprocess
 import time
+import typing
 from pathlib import Path
 from typing import Optional
 
@@ -106,11 +107,6 @@ class PiLLMService:
         
         logger.info("Stopped")
     
-    async def send_message(self, message: str) -> str:
-        """Send a message to Pi (not implemented - Pi handles its own UI)."""
+    async def send_message(self, message: str) -> typing.NoReturn:
+        """Pi handles its own UI; direct message injection is not supported."""
         raise NotImplementedError("Pi backend doesn't support direct message injection")
-
-
-def create_pi_service(config: dict, work_dir: Optional[str] = None) -> PiLLMService:
-    """Create Pi LLM service instance."""
-    return PiLLMService(config, work_dir)
