@@ -196,6 +196,7 @@ def cmd_kill(args):
     lifecycle is separate. Use `talky say --stop-daemon` to bounce that one.
     """
     any_killed = _kill_pids_on_port(9090)
+    _clear_daemon_files()
     if not any_killed:
         print("port 9090: clear")
 
@@ -534,6 +535,8 @@ def cmd_daemon(args):
         except Exception as e:
             print(f"❌ talky daemon failed to start: {e}", file=sys.stderr)
             sys.exit(1)
+        finally:
+            _clear_daemon_files()
         return
 
     # User-facing mode: ensure the daemon is up, return immediately.
@@ -555,66 +558,115 @@ def cmd_daemon(args):
         print(f"(note: --voice-profile {voice_profile} is not yet propagated through the ensure path)")
 
 
+_DAEMON_RUN_DIR = Path.home() / ".talky" / "run"
+_DAEMON_READY_PATH = _DAEMON_RUN_DIR / "talky-daemon.ready"
+_DAEMON_PID_PATH = _DAEMON_RUN_DIR / "talky-daemon.pid"
+_DAEMON_LOCK_PATH = _DAEMON_RUN_DIR / "talky-daemon.lock"
+
+
 def _daemon_is_running() -> bool:
-    """Return True if the talky daemon is listening on 9090."""
+    """Return True if the daemon is running. Checks the ready file (written by
+    the daemon after uvicorn binds), verifying the PID is still alive."""
     try:
-        result = subprocess.run(
-            ["lsof", "-ti:9090"], capture_output=True, text=True, timeout=1.0
-        )
-        return bool(result.stdout.strip())
-    except (FileNotFoundError, subprocess.SubprocessError):
+        pid = int(_DAEMON_READY_PATH.read_text().strip())
+        os.kill(pid, 0)
+        return True
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         return False
 
 
-def ensure_daemon(wait_secs: float = 12.0, verbose: bool = True) -> bool:
+def _clear_daemon_files() -> None:
+    for p in (_DAEMON_READY_PATH, _DAEMON_PID_PATH):
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
     """Ensure the talky daemon is running on :9090. Spawn it (detached) if not.
 
-    Mirrors the voice daemon auto-start pattern: any talky subcommand
-    that needs the daemon can call this first, and the daemon will be
-    lazy-started on first use. Subsequent calls see it already running
-    and return immediately.
-
-    Returns True on success. Prints an error and returns False if the
-    spawn fails or the daemon doesn't come up within wait_secs.
+    Uses a lock file to serialize spawning. Waits for the daemon's ready
+    file (written after uvicorn binds) rather than sniffing ports.
+    Returns True on success, False on timeout.
     """
+    import fcntl
+
     if _daemon_is_running():
         return True
 
-    if verbose:
-        print("⚙️  starting talky daemon...", file=sys.stderr)
+    _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = _DAEMON_RUN_DIR / "talky-daemon.log"
 
-    log_dir = Path.home() / ".talky" / "run"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "talky-daemon.log"
-
+    # Acquire an exclusive lock so only one CLI spawns the daemon.
+    lock_fh = open(_DAEMON_LOCK_PATH, "w")
     try:
-        log_fh = open(log_path, "a")
-        subprocess.Popen(
-            ["talky", "daemon", "--foreground"],
-            stdout=log_fh,
-            stderr=log_fh,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,  # detach so the daemon outlives this CLI
-            close_fds=True,
-        )
-    except (FileNotFoundError, subprocess.SubprocessError) as e:
-        print(f"❌ could not spawn `talky daemon`: {e}", file=sys.stderr)
-        return False
+        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        got_lock = True
+    except OSError:
+        got_lock = False
 
-    # Poll for the daemon to come up.
+    if got_lock:
+        # Double-check after lock — another CLI may have finished first.
+        if _daemon_is_running():
+            lock_fh.close()
+            return True
+
+        if verbose:
+            print("⚙️  starting talky daemon...", file=sys.stderr, end="", flush=True)
+
+        try:
+            log_fh = open(log_path, "a")
+            proc = subprocess.Popen(
+                ["talky", "daemon", "--foreground"],
+                stdout=log_fh,
+                stderr=log_fh,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+            _DAEMON_PID_PATH.write_text(str(proc.pid))
+        except (FileNotFoundError, subprocess.SubprocessError) as e:
+            print(f"\n❌ could not spawn `talky daemon`: {e}", file=sys.stderr)
+            lock_fh.close()
+            return False
+    else:
+        if verbose:
+            print("⏳ talky daemon is starting...", file=sys.stderr, end="", flush=True)
+
+    # Poll for the ready file, showing progress dots.
     deadline = time.monotonic() + wait_secs
+    dot_interval = 2.0
+    next_dot = time.monotonic() + dot_interval
     while time.monotonic() < deadline:
         if _daemon_is_running():
             if verbose:
-                print(f"✅ talky daemon up on :9090 (log: {log_path})", file=sys.stderr)
+                print(f"\n✅ talky daemon up on :9090", file=sys.stderr)
+            lock_fh.close()
             return True
-        time.sleep(0.2)
+        # Check if the spawned process died before becoming ready.
+        try:
+            pid = int(_DAEMON_PID_PATH.read_text().strip())
+            os.kill(pid, 0)
+        except (FileNotFoundError, ValueError, ProcessLookupError):
+            _clear_daemon_files()
+            print(f"\n❌ talky daemon process died during startup. Check {log_path}", file=sys.stderr)
+            lock_fh.close()
+            return False
+        except PermissionError:
+            pass  # alive but owned by another user — keep waiting
+        now = time.monotonic()
+        if verbose and now >= next_dot:
+            print(".", file=sys.stderr, end="", flush=True)
+            next_dot = now + dot_interval
+        time.sleep(0.3)
 
     print(
-        f"❌ talky daemon failed to come up within {wait_secs:.0f}s. "
+        f"\n❌ talky daemon failed to come up within {wait_secs:.0f}s. "
         f"Check {log_path} for details.",
         file=sys.stderr,
     )
+    lock_fh.close()
     return False
 
 

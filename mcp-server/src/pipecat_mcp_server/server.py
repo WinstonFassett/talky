@@ -58,6 +58,11 @@ mcp_host = os.getenv("MCP_HOST", "localhost")
 mcp_port = int(os.getenv("MCP_PORT", "9090"))
 mcp = FastMCP(name="pipecat-mcp-server", host=mcp_host, port=mcp_port)
 
+# Ready file: written after uvicorn binds + lifespan completes. The CLI
+# checks this instead of sniffing ports with lsof.
+DAEMON_RUN_DIR = Path.home() / ".talky" / "run"
+DAEMON_READY_PATH = DAEMON_RUN_DIR / "talky-daemon.ready"
+
 def _read_idle_ttl_seconds() -> Optional[float]:
     """Load the idle-room TTL (ticket 0c5d).
 
@@ -395,65 +400,69 @@ def signal_handler(signum, frame):
     sys.exit(0)
 
 
-def _port_holder(port: int) -> Optional[int]:
-    """Return the holder PID if a port is bound, else None."""
-    try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
-            capture_output=True,
-            text=True,
-            timeout=2.0,
-        )
-    except (FileNotFoundError, subprocess.SubprocessError):
-        return None
-    stdout = result.stdout.strip()
-    if not stdout:
-        return None
-    first = stdout.split("\n")[0].strip()
-    try:
-        return int(first)
-    except ValueError:
-        return None
-
-
 def _check_ports_or_exit():
-    """Defense #4 (ticket 727e): refuse to start if port 9090 is held.
+    """Refuse to start if another daemon is already running.
 
+    Checks the ready file first (authoritative), falls back to lsof.
     `TALKY_DAEMON_FORCE=1` kills whoever's there and proceeds.
-    (Legacy `TALKY_MCP_FORCE` is still honored as a fallback.)
     """
+    import time as _t
+
     force_env = os.getenv("TALKY_DAEMON_FORCE", "").strip() or os.getenv("TALKY_MCP_FORCE", "").strip()
     force = force_env not in ("", "0")
-    holder = _port_holder(mcp_port)
-    if holder is None:
+
+    # Check ready file — the authoritative "daemon is running" signal.
+    holder_pid = None
+    try:
+        holder_pid = int(DAEMON_READY_PATH.read_text().strip())
+        os.kill(holder_pid, 0)  # verify it's alive
+    except (FileNotFoundError, ValueError, ProcessLookupError):
+        holder_pid = None
+        # Stale ready file — clean it up.
+        DAEMON_READY_PATH.unlink(missing_ok=True)
+
+    # Fallback: check if something is actually LISTENING on the port.
+    if holder_pid is None:
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{mcp_port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True, timeout=2.0,
+            )
+            pids = result.stdout.strip()
+            if pids:
+                holder_pid = int(pids.split("\n")[0].strip())
+        except (FileNotFoundError, subprocess.SubprocessError, ValueError):
+            pass
+
+    if holder_pid is None:
         return
 
     if force:
         logger.warning(
-            f"TALKY_DAEMON_FORCE: killing pid {holder} holding port {mcp_port}"
+            f"TALKY_DAEMON_FORCE: killing pid {holder_pid} holding port {mcp_port}"
         )
         try:
-            os.kill(holder, signal.SIGTERM)
-            import time as _t
-
+            os.kill(holder_pid, signal.SIGTERM)
             _t.sleep(0.2)
             try:
-                os.kill(holder, 0)
-                os.kill(holder, signal.SIGKILL)
+                os.kill(holder_pid, 0)
+                os.kill(holder_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
         except ProcessLookupError:
             pass
         except PermissionError as e:
-            logger.error(f"Cannot kill pid {holder} on port {mcp_port}: {e}")
+            logger.error(f"Cannot kill pid {holder_pid} on port {mcp_port}: {e}")
             sys.exit(2)
+        DAEMON_READY_PATH.unlink(missing_ok=True)
+        _t.sleep(0.3)
         return
 
     logger.error(
-        f"Port {mcp_port} already held by pid {holder} — cannot start talky mcp."
+        f"Port {mcp_port} already held by pid {holder_pid} — cannot start talky daemon."
     )
     logger.error("Fix: run `talky kill` to reclaim, then retry.")
-    logger.error("Or: rerun with `talky mcp --force` to take over automatically.")
+    logger.error("Or: rerun with `talky daemon --force` to take over automatically.")
     sys.exit(2)
 
 
@@ -750,11 +759,20 @@ def _build_app():
         # Start background health polling (ticket 73b9).
         voice_channel.start_health_polling(interval=30.0)
 
+        # Signal to the CLI that the daemon is ready to accept requests.
+        DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
+        DAEMON_READY_PATH.write_text(str(os.getpid()))
+        logger.info(f"Daemon ready (pid={os.getpid()}, ready_file={DAEMON_READY_PATH})")
+
         async with _original_lifespan(app):
             try:
                 yield
             finally:
                 logger.info("Lifespan shutdown: tearing down voice channel")
+                try:
+                    DAEMON_READY_PATH.unlink(missing_ok=True)
+                except Exception:
+                    pass
                 try:
                     await voice_channel.shutdown()
                 except Exception as e:  # noqa: BLE001
