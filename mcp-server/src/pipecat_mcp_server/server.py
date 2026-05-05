@@ -694,6 +694,53 @@ def _build_webrtc_routes():
             },
         )
 
+    async def handle_pi_ws(websocket):
+        """WebSocket endpoint for Pi extensions (/ws/pi).
+
+        Accepts a connection from a Pi voice extension, auto-switches the
+        active profile to __pi__, and bridges STT/TTS/abort signals until
+        the extension disconnects. On disconnect, reverts to __mcp__.
+        """
+        from starlette.websockets import WebSocketDisconnect, WebSocketState
+
+        await websocket.accept()
+
+        pi_ext = voice_channel._pi_ext_service
+        if pi_ext is None:
+            import json
+            await websocket.send_text(json.dumps({"type": "error", "message": "no pi ext service — is the browser connected?"}))
+            await websocket.close()
+            return
+
+        logger.info("/ws/pi: Pi extension connected")
+
+        try:
+            await voice_channel.switch_to_profile(voice_channel.PI_EXT_PROFILE)
+        except Exception as e:
+            import json
+            logger.warning(f"/ws/pi: could not switch to __pi__: {e}")
+            await websocket.send_text(json.dumps({"type": "error", "message": str(e)}))
+            await websocket.close()
+            return
+
+        try:
+            await pi_ext.handle_websocket(websocket)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            logger.info("/ws/pi: Pi extension disconnected — reverting to __mcp__")
+            try:
+                if websocket.client_state != WebSocketState.DISCONNECTED:
+                    await websocket.close()
+            except Exception:
+                pass
+            try:
+                await voice_channel.switch_to_profile(voice_channel.MCP_DRIVER_PROFILE)
+            except Exception:
+                pass
+
+    from starlette.routing import WebSocketRoute
+
     routes = [
         Route("/start", handle_start, methods=["POST"]),
         Route("/api/offer", handle_offer, methods=["POST"]),
@@ -717,6 +764,7 @@ def _build_webrtc_routes():
         # Legacy compat — old CLI may still hit /api/profile.
         Route("/api/profile", handle_get_profile, methods=["GET"]),
         Route("/api/profile", handle_set_profile, methods=["POST"]),
+        WebSocketRoute("/ws/pi", handle_pi_ws),
     ]
     return routes, webrtc_handler
 
