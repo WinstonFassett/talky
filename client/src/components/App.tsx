@@ -19,13 +19,13 @@ import { TranscriptExport } from './TranscriptExport';
 
 const BOT_OUTPUT_RENDERERS: Record<string, (content: string) => JSX.Element> = {
   tool_start: (content) => (
-    <span className="text-xs font-mono text-muted-foreground opacity-70">{content}</span>
+    <div className="text-xs font-mono text-muted-foreground opacity-70">{content}</div>
   ),
   tool_end: (content) => (
-    <span className="text-xs font-mono text-muted-foreground opacity-70">{content}</span>
+    <div className="text-xs font-mono text-muted-foreground opacity-70">{content}</div>
   ),
   thinking: (content) => (
-    <span className="text-xs italic text-muted-foreground opacity-60">{content}</span>
+    <div className="text-xs italic text-muted-foreground opacity-60">{content}</div>
   ),
 };
 
