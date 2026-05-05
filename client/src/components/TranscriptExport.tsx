@@ -55,7 +55,8 @@ const download = (content: string, filename: string, mime: string) => {
   a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(url);
+  // Defer cleanup to ensure download has started
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
 type Format = 'md' | 'jsonl' | 'csv';

@@ -46,39 +46,55 @@ export const LLMProfileSelect = () => {
 
     eventSource.addEventListener('init', (e: MessageEvent) => {
       if (!mounted) return;
-      applyProfiles(JSON.parse(e.data));
-      setError('');
+      try {
+        applyProfiles(JSON.parse(e.data));
+        setError('');
+      } catch {
+        setError('Invalid server response');
+      }
     });
 
     eventSource.addEventListener('profileChanged', (e: MessageEvent) => {
       if (!mounted) return;
-      const data = JSON.parse(e.data);
-      if (data.type === 'llm') {
-        setActiveProfile(data.profile);
-        setProfiles((prev) =>
-          prev.map((p) => ({ ...p, active: p.name === data.profile }))
-        );
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === 'llm') {
+          setActiveProfile(data.profile);
+          setProfiles((prev) =>
+            prev.map((p) => ({ ...p, active: p.name === data.profile }))
+          );
+        }
+      } catch {
+        // Ignore malformed events
       }
     });
 
     eventSource.addEventListener('peerConnected', (e: MessageEvent) => {
       if (!mounted) return;
-      applyProfiles(JSON.parse(e.data));
+      try {
+        applyProfiles(JSON.parse(e.data));
+      } catch {
+        // Ignore malformed events
+      }
     });
 
     eventSource.addEventListener('healthChanged', (e: MessageEvent) => {
       if (!mounted) return;
-      const data = JSON.parse(e.data);
-      setProfiles((prev) =>
-        prev.map((p) =>
-          p.name === data.backend ? { ...p, healthy: data.healthy } : p
-        )
-      );
+      try {
+        const data = JSON.parse(e.data);
+        setProfiles((prev) =>
+          prev.map((p) =>
+            p.name === data.backend ? { ...p, healthy: data.healthy } : p
+          )
+        );
+      } catch {
+        // Ignore malformed events
+      }
     });
 
     eventSource.onerror = () => {
       // EventSource auto-reconnects.
-      if (mounted) setError('');
+      if (mounted) setError('Connection lost - reconnecting...');
     };
 
     return () => {

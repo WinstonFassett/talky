@@ -7,6 +7,7 @@ import {
   // EventsPanel,
   UserAudioControl,
 } from '@pipecat-ai/voice-ui-kit';
+import type { JSX } from 'react';
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
 import type { TransportType } from '../config';
@@ -15,6 +16,18 @@ import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
+
+const BOT_OUTPUT_RENDERERS: Record<string, (content: string) => JSX.Element> = {
+  tool_start: (content) => (
+    <div className="text-xs font-mono text-muted-foreground opacity-70">{content}</div>
+  ),
+  tool_end: (content) => (
+    <div className="text-xs font-mono text-muted-foreground opacity-70">{content}</div>
+  ),
+  thinking: (content) => (
+    <div className="text-xs italic text-muted-foreground opacity-60">{content}</div>
+  ),
+};
 
 // Pre-load the drop cue so it plays instantly on unexpected disconnect.
 // The WAV is generated from shared/audio_cues.stop_cue_pcm (three
@@ -123,8 +136,14 @@ export const App = ({
       if (!dc || dc.readyState !== 'open') return false;
 
       const handler = (ev: MessageEvent) => {
-        if (typeof ev.data === 'string' && ev.data.includes('"pong"')) {
-          lastPongRef.current = Date.now();
+        if (typeof ev.data !== 'string') return;
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'pong') {
+            lastPongRef.current = Date.now();
+          }
+        } catch {
+          // Ignore non-JSON messages
         }
       };
       dc.addEventListener('message', handler);
@@ -146,6 +165,8 @@ export const App = ({
       cancelled = true;
       if (pollInterval) clearInterval(pollInterval);
       cleanupFn?.();
+      // Reset pong tracking to prevent stale values on reconnect
+      lastPongRef.current = 0;
     };
   }, [client, transportState]);
 
@@ -221,7 +242,7 @@ export const App = ({
       </div>
       <div className="flex-1 overflow-hidden px-4">
         <div className="h-full overflow-hidden">
-          <ConversationPanel />
+          <ConversationPanel conversationElementProps={{ botOutputRenderers: BOT_OUTPUT_RENDERERS }} />
         </div>
       </div>
     </div>

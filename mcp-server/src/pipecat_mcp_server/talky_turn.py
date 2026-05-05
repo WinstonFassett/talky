@@ -32,7 +32,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from pipecat.frames.frames import DataFrame
+from pipecat.frames.frames import DataFrame, LLMMessagesAppendFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregator,
@@ -85,6 +85,23 @@ class TalkyUserTurnDetector(LLMUserAggregator):
         both ``add_message`` and ``push_context_frame``.
         """
         super().__init__(context=LLMContext([]), params=params, **kwargs)
+
+    async def _handle_llm_messages_append(self, frame: LLMMessagesAppendFrame) -> None:
+        """Route browser text input as UserTurnTextFrame instead of LLMContextFrame.
+
+        Parent's version adds to context and pushes LLMContextFrame — none of
+        talky's LLM backends consume LLMContextFrame. Emit UserTurnTextFrame
+        (the same path as voice) so all backends see text input consistently.
+        Only acts if run_llm is set (i.e. the user intends to send, not just
+        accumulate context).
+        """
+        if not frame.run_llm:
+            return
+        for msg in frame.messages:
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str) and content.strip():
+                    await self.push_frame(UserTurnTextFrame(text=content, timestamp=time.time()))
 
     async def push_aggregation(self) -> str:
         """Emit the current aggregation as a ``UserTurnTextFrame``.

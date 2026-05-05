@@ -114,6 +114,7 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from pipecat_mcp_server.mcp_driver_llm_service import MCPDriverLLMService
+from pipecat_mcp_server.pi_ext_llm_service import PiExtensionLLMService
 from pipecat_mcp_server.talky_turn import TalkyUserTurnDetector
 
 
@@ -144,6 +145,9 @@ class VoiceChannel:
     # passthrough (used for external-agent-driven mode). Chosen so it
     # can't collide with user-configured LLM backend names.
     MCP_DRIVER_PROFILE = "__mcp__"
+
+    # Special profile name for a Pi extension connected over /ws/pi.
+    PI_EXT_PROFILE = "__pi__"
 
     def __init__(
         self,
@@ -181,6 +185,9 @@ class VoiceChannel:
         self._llm_switcher: Optional[Any] = None  # LLMSwitcher
         self._llm_services: dict[str, Any] = {}  # profile name → LLMService
         self._active_profile: Optional[str] = None
+
+        # Pi extension service — set per pipeline, read by /ws/pi handler.
+        self._pi_ext_service: Optional[Any] = None  # PiExtensionLLMService
 
         # Speech buffer — written by MCPDriverLLMService, drained by listen()
         self._user_speech_queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -480,7 +487,7 @@ class VoiceChannel:
             names = set(pm.list_talky_profiles().keys()) | set(pm.list_llm_backends().keys())
         except Exception:  # noqa: BLE001
             names = set()
-        return [self.MCP_DRIVER_PROFILE, *sorted(names)]
+        return [self.MCP_DRIVER_PROFILE, self.PI_EXT_PROFILE, *sorted(names)]
 
     async def switch_to_profile(self, profile_name: str) -> None:
         """Flip the active LLM profile.
@@ -642,7 +649,14 @@ class VoiceChannel:
                 "description": "External agent drives the conversation",
                 "active": active == self.MCP_DRIVER_PROFILE,
                 "healthy": self._health.get(self.MCP_DRIVER_PROFILE),
-            }
+            },
+            {
+                "name": self.PI_EXT_PROFILE,
+                "label": "Pi (extension)",
+                "description": "Pi coding agent via terminal extension",
+                "active": active == self.PI_EXT_PROFILE,
+                "healthy": self._pi_ext_service is not None,
+            },
         ]
         try:
             pm = get_profile_manager()
@@ -755,6 +769,8 @@ class VoiceChannel:
         """
         if profile_name == self.MCP_DRIVER_PROFILE:
             return None
+        if profile_name == self.PI_EXT_PROFILE:
+            return "Pi online."
         try:
             from shared.profile_manager import get_profile_manager
 
@@ -912,6 +928,7 @@ class VoiceChannel:
         self._transport = None
         self._voice_switcher = None
         self._llm_switcher = None
+        self._pi_ext_service = None
         # Per-pipeline LLM service instances can't be reused across rebuilds
         # (pipecat services are pipeline-bound), so clear them regardless.
         self._llm_services = {}
@@ -922,10 +939,13 @@ class VoiceChannel:
         # that the next attach() will switch back to.
 
         if task is not None:
+            task.cancel()
             try:
-                await task.cancel()
+                await task
+            except asyncio.CancelledError:
+                pass
             except Exception as e:
-                logger.debug(f"VoiceChannel teardown: task.cancel() raised {e!r}")
+                logger.debug(f"VoiceChannel teardown: task cancel raised {e!r}")
         if runner_task is not None and not runner_task.done():
             runner_task.cancel()
             try:
@@ -1068,8 +1088,13 @@ class VoiceChannel:
         # LLMSwitcher slot: MCPDriver first (default active) then every
         # configured backend. See ticket ea77 / c3a1.
         mcp_driver = MCPDriverLLMService(user_speech_queue=self._user_speech_queue)
-        llm_services: list = [mcp_driver]
-        profile_map: dict[str, Any] = {self.MCP_DRIVER_PROFILE: mcp_driver}
+        pi_ext = PiExtensionLLMService()
+        llm_services: list = [mcp_driver, pi_ext]
+        profile_map: dict[str, Any] = {
+            self.MCP_DRIVER_PROFILE: mcp_driver,
+            self.PI_EXT_PROFILE: pi_ext,
+        }
+        self._pi_ext_service = pi_ext
 
         for backend_name in pm.list_llm_backends().keys():
             try:

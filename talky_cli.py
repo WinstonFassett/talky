@@ -673,7 +673,7 @@ def main():
     # Shortcut: treat first non-option, non-command arg as a profile name.
     # `talky openclaw` → `talky profile openclaw`. `cmd_profile` ensures
     # the daemon is up.
-    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "pi", "claude", "transcribe", "kill", "profile", "voice", "status"}
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "claude", "pi", "transcribe", "kill", "profile", "voice", "status"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "profile")
@@ -772,25 +772,14 @@ def main():
     ls_parser = subparsers.add_parser("ls", help="List profiles")
     ls_parser.set_defaults(func=lambda args: cmd_list_profiles(args))
 
-    
     # === pi subcommand ===
-    pi_parser = subparsers.add_parser("pi", help="Start Pi with voice")
-    pi_parser.add_argument("--dir", "-d", help="Working directory for app (default: current)")
-    
-    def cmd_pi(args):
-        # Create a simple object with the profile and copy all attributes
-        class Args:
-            def __init__(self, profile, **kwargs):
-                self.profile = profile
-                # Copy all attributes from the original args
-                for key, value in kwargs.items():
-                    setattr(self, key, value)
-        
-        # Copy all attributes from original args
-        args_dict = {k: v for k, v in vars(args).items() if k != 'func'}
-        args_obj = Args('pi', **args_dict)
-        return cmd_run_client_profile(args_obj)
-    
+    pi_parser = subparsers.add_parser("pi", help="Start Pi coding agent with voice in this terminal")
+    pi_parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Optional initial message passed to Pi (e.g. 'Let\\'s work on auth')",
+    )
+    pi_parser.add_argument("--cwd", "-d", help="Working directory for Pi (default: current)")
     pi_parser.set_defaults(func=cmd_pi)
 
     # === claude subcommand ===
@@ -855,6 +844,47 @@ def main():
 
     args.name = default_profile
     cmd_profile(args)
+
+
+def cmd_pi(args):
+    """Start Pi coding agent with the talky voice extension.
+
+    Ensures the daemon is running, opens the browser, then exec's into
+    `pi -e <extension>` so Pi's terminal UI runs in this terminal with
+    voice live from the start.
+    """
+    import shutil
+    import webbrowser
+
+    if not ensure_daemon():
+        sys.exit(1)
+
+    ext_path = _root / "extensions" / "pi-voice" / "extension.ts"
+    if not ext_path.exists():
+        print(f"❌ Pi voice extension not found: {ext_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if not shutil.which("pi"):
+        print("❌ `pi` not found in PATH", file=sys.stderr)
+        sys.exit(1)
+
+    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
+    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
+    client_url = f"http://{host}:{port}?autoconnect=true"
+    webbrowser.open(client_url)
+
+    cwd = getattr(args, "cwd", None)
+    if cwd:
+        os.chdir(cwd)
+
+    pi_cmd = ["pi", "-e", str(ext_path)]
+    prompt = getattr(args, "prompt", None)
+    if prompt:
+        pi_cmd.append(prompt)
+
+    # Replace this process with Pi. Pi's terminal UI runs in this terminal;
+    # the voice extension auto-connects to the daemon.
+    os.execvp("pi", pi_cmd)
 
 
 def cmd_run_client_profile(args):
