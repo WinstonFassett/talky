@@ -10,6 +10,11 @@ import {
 import type { JSX } from 'react';
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
+// Internal transport interface for data channel access (not exposed in public API)
+interface TransportWithDataChannel {
+  dc?: RTCDataChannel;
+}
+
 import type { TransportType } from '../config';
 import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
@@ -131,7 +136,8 @@ export const App = ({
 
     const attach = () => {
       // Access the data channel through the transport internals.
-      const transport = (client as any)?._transport;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const transport = (client as unknown as { _transport?: TransportWithDataChannel })?._transport;
       const dc: RTCDataChannel | undefined = transport?.dc;
       if (!dc || dc.readyState !== 'open') return false;
 
