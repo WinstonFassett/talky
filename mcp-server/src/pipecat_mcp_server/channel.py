@@ -712,6 +712,11 @@ class VoiceChannel:
             # MCP driver is always "healthy" — it's a local passthrough.
             return True
 
+        if name == self.PI_EXT_PROFILE:
+            # Pi extension health is whether the service is wired up,
+            # not a TCP probe. profiles_info() tracks this separately.
+            return self._pi_ext_service is not None
+
         from shared.profile_manager import get_profile_manager
 
         try:
@@ -891,8 +896,10 @@ class VoiceChannel:
         """
         async with self._attach_lock:
             await self._teardown_locked(preserve_active_profile=True)
-        # Outside the lock: the room may be empty now. Schedule TTL if so.
-        self._schedule_ttl_if_empty()
+            # Schedule TTL inside the lock so a concurrent attach() that
+            # already holds or is waiting on the lock will see the cancel
+            # call in its own attach() path and not race with us.
+            self._schedule_ttl_if_empty()
 
     async def _restore_profile_on_startup(self, profile_name: str) -> None:
         """Switch the active LLM to ``profile_name`` shortly after a
@@ -1038,7 +1045,12 @@ class VoiceChannel:
         if disc_task in done and first_task not in done:
             raise RuntimeError("WebRTC peer disconnected during listen()")
 
-        first = first_task.result()
+        # Both tasks may have completed simultaneously; if first_task raised
+        # (e.g. CancelledError on rapid disconnect), treat it as a disconnect.
+        try:
+            first = first_task.result()
+        except Exception as e:
+            raise RuntimeError(f"WebRTC peer disconnected during listen(): {e}") from e
         segments = [first]
 
         # Drain whatever else was buffered (non-blocking).

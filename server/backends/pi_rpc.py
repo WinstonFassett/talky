@@ -113,19 +113,27 @@ class PiRPCLLMService(LLMService):
             self._reader_task.cancel()
             try:
                 await self._reader_task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
             self._reader_task = None
-        if self._proc:
+        proc = self._proc
+        self._proc = None
+        if proc:
+            exc_to_reraise = None
             try:
-                self._proc.terminate()
-                await asyncio.wait_for(self._proc.wait(), timeout=3)
-            except (ProcessLookupError, asyncio.TimeoutError):
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=3)
+            except BaseException as e:
+                # CancelledError, TimeoutError, ProcessLookupError — all mean
+                # we must kill the child before propagating.
                 try:
-                    self._proc.kill()
+                    proc.kill()
                 except ProcessLookupError:
                     pass
-            self._proc = None
+                if isinstance(e, asyncio.CancelledError):
+                    exc_to_reraise = e
+            if exc_to_reraise is not None:
+                raise exc_to_reraise
 
     async def _log_stderr(self):
         try:

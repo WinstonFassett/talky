@@ -636,36 +636,36 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
     deadline = time.monotonic() + wait_secs
     dot_interval = 2.0
     next_dot = time.monotonic() + dot_interval
-    while time.monotonic() < deadline:
-        if talky_daemon_is_running():
-            if verbose:
-                print(f"\n✅ talky daemon up on :9090", file=sys.stderr)
-            lock_fh.close()
-            return True
-        # Check if the spawned process died before becoming ready.
-        try:
-            pid = int(_DAEMON_PID_PATH.read_text().strip())
-            os.kill(pid, 0)
-        except (FileNotFoundError, ValueError, ProcessLookupError):
-            _clear_daemon_files()
-            print(f"\n❌ talky daemon process died during startup. Check {log_path}", file=sys.stderr)
-            lock_fh.close()
-            return False
-        except PermissionError:
-            pass  # alive but owned by another user — keep waiting
-        now = time.monotonic()
-        if verbose and now >= next_dot:
-            print(".", file=sys.stderr, end="", flush=True)
-            next_dot = now + dot_interval
-        time.sleep(0.3)
+    try:
+        while time.monotonic() < deadline:
+            if talky_daemon_is_running():
+                if verbose:
+                    print(f"\n✅ talky daemon up on :9090", file=sys.stderr)
+                return True
+            # Check if the spawned process died before becoming ready.
+            try:
+                pid = int(_DAEMON_PID_PATH.read_text().strip())
+                os.kill(pid, 0)
+            except (FileNotFoundError, ValueError, ProcessLookupError):
+                _clear_daemon_files()
+                print(f"\n❌ talky daemon process died during startup. Check {log_path}", file=sys.stderr)
+                return False
+            except PermissionError:
+                pass  # alive but owned by another user — keep waiting
+            now = time.monotonic()
+            if verbose and now >= next_dot:
+                print(".", file=sys.stderr, end="", flush=True)
+                next_dot = now + dot_interval
+            time.sleep(0.3)
 
-    print(
-        f"\n❌ talky daemon failed to come up within {wait_secs:.0f}s. "
-        f"Check {log_path} for details.",
-        file=sys.stderr,
-    )
-    lock_fh.close()
-    return False
+        print(
+            f"\n❌ talky daemon failed to come up within {wait_secs:.0f}s. "
+            f"Check {log_path} for details.",
+            file=sys.stderr,
+        )
+        return False
+    finally:
+        lock_fh.close()
 
 
 def main():
