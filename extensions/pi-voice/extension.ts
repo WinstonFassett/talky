@@ -19,7 +19,7 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-const DAEMON_WS_URL = "ws://localhost:9090/ws/pi";
+const DAEMON_WS_URL = process.env.TALKY_PI_WS_URL || "ws://localhost:9090/ws/pi";
 const RECONNECT_DELAY_MS = 2000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 
@@ -128,7 +128,10 @@ export default function (pi: ExtensionAPI) {
 		const args: Record<string, unknown> = e.args ?? {};
 		let hint = "";
 		if (typeof args.path === "string") hint = `: ${args.path}`;
-		else if (typeof args.command === "string") hint = `: ${args.command.slice(0, 60)}${args.command.length > 60 ? "…" : ""}`;
+		else if (typeof args.command === "string") {
+			const cmd = args.command;
+			hint = `: ${cmd.slice(0, 60)}${cmd.length > 60 ? "…" : ""}`;
+		}
 		else if (typeof args.pattern === "string") hint = `: ${args.pattern}`;
 		send({ type: "tool_start", text: `▶ ${name}${hint}` });
 	});

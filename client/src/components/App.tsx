@@ -136,8 +136,14 @@ export const App = ({
       if (!dc || dc.readyState !== 'open') return false;
 
       const handler = (ev: MessageEvent) => {
-        if (typeof ev.data === 'string' && ev.data.includes('"pong"')) {
-          lastPongRef.current = Date.now();
+        if (typeof ev.data !== 'string') return;
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'pong') {
+            lastPongRef.current = Date.now();
+          }
+        } catch {
+          // Ignore non-JSON messages
         }
       };
       dc.addEventListener('message', handler);
@@ -159,6 +165,8 @@ export const App = ({
       cancelled = true;
       if (pollInterval) clearInterval(pollInterval);
       cleanupFn?.();
+      // Reset pong tracking to prevent stale values on reconnect
+      lastPongRef.current = 0;
     };
   }, [client, transportState]);
 

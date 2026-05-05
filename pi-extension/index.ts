@@ -252,9 +252,9 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		// Start talky mcp server
+		// Start talky daemon
 		const { spawn } = await import("node:child_process");
-		talkyProcess = spawn("talky", ["mcp"], {
+		talkyProcess = spawn("talky", ["daemon"], {
 			stdio: "ignore",
 		});
 
@@ -263,7 +263,7 @@ export default function (pi: ExtensionAPI) {
 			talkyProcess = null;
 		});
 		talkyProcess.on("error", (err) => {
-			console.error("Failed to start talky mcp server:", err);
+			console.error("Failed to start talky daemon:", err);
 			talkyProcess = null;
 		});
 

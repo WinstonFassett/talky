@@ -38,28 +38,40 @@ export const VoiceProfileSelect = () => {
 
     eventSource.addEventListener('init', (e: MessageEvent) => {
       if (!mounted) return;
-      const data = JSON.parse(e.data);
-      if (data.voices) applyVoices(data.voices);
-      setError('');
+      try {
+        const data = JSON.parse(e.data);
+        if (data.voices) applyVoices(data.voices);
+        setError('');
+      } catch {
+        setError('Invalid server response');
+      }
     });
 
     eventSource.addEventListener('peerConnected', (e: MessageEvent) => {
       if (!mounted) return;
-      const data = JSON.parse(e.data);
-      if (data.voices) applyVoices(data.voices);
+      try {
+        const data = JSON.parse(e.data);
+        if (data.voices) applyVoices(data.voices);
+      } catch {
+        // Ignore malformed events
+      }
     });
 
     eventSource.addEventListener('voiceChanged', (e: MessageEvent) => {
       if (!mounted) return;
-      const data = JSON.parse(e.data);
-      setActiveVoice(data.profile);
-      setVoices((prev) =>
-        prev.map((v) => ({ ...v, active: v.name === data.profile }))
-      );
+      try {
+        const data = JSON.parse(e.data);
+        setActiveVoice(data.profile);
+        setVoices((prev) =>
+          prev.map((v) => ({ ...v, active: v.name === data.profile }))
+        );
+      } catch {
+        // Ignore malformed events
+      }
     });
 
     eventSource.onerror = () => {
-      if (mounted) setError('');
+      if (mounted) setError('Connection lost - reconnecting...');
     };
 
     return () => {

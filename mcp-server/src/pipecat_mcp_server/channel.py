@@ -939,10 +939,13 @@ class VoiceChannel:
         # that the next attach() will switch back to.
 
         if task is not None:
+            task.cancel()
             try:
-                await task.cancel()
+                await task
+            except asyncio.CancelledError:
+                pass
             except Exception as e:
-                logger.debug(f"VoiceChannel teardown: task.cancel() raised {e!r}")
+                logger.debug(f"VoiceChannel teardown: task cancel raised {e!r}")
         if runner_task is not None and not runner_task.done():
             runner_task.cancel()
             try:

@@ -55,7 +55,18 @@ logger.add(sys.stderr, level="INFO")
 # Create MCP server
 # Host is configurable via MCP_HOST environment variable, defaults to localhost for security
 mcp_host = os.getenv("MCP_HOST", "localhost")
-mcp_port = int(os.getenv("MCP_PORT", "9090"))
+
+# Port validation: must be a valid port number (1-65535)
+_mcp_port_raw = os.getenv("MCP_PORT", "9090")
+try:
+    mcp_port = int(_mcp_port_raw)
+    if not (1 <= mcp_port <= 65535):
+        logger.error(f"Invalid MCP_PORT '{_mcp_port_raw}': must be between 1 and 65535")
+        sys.exit(1)
+except ValueError:
+    logger.error(f"Invalid MCP_PORT '{_mcp_port_raw}': not a valid integer")
+    sys.exit(1)
+
 mcp = FastMCP(name="pipecat-mcp-server", host=mcp_host, port=mcp_port)
 
 # Ready file: written after uvicorn binds + lifespan completes. The CLI
@@ -412,12 +423,23 @@ def _check_ports_or_exit():
     force = force_env not in ("", "0")
 
     # Check ready file — the authoritative "daemon is running" signal.
+    # Race defense: process could die between PID read and signal check,
+    # so we retry briefly if signal 0 fails.
     holder_pid = None
-    try:
-        holder_pid = int(DAEMON_READY_PATH.read_text().strip())
-        os.kill(holder_pid, 0)  # verify it's alive
-    except (FileNotFoundError, ValueError, ProcessLookupError):
-        holder_pid = None
+    for _ in range(3):
+        try:
+            holder_pid = int(DAEMON_READY_PATH.read_text().strip())
+            os.kill(holder_pid, 0)  # verify it's alive
+            break  # Process confirmed alive
+        except ProcessLookupError:
+            # Process died between read and check — retry
+            holder_pid = None
+            _t.sleep(0.05)
+            continue
+        except (FileNotFoundError, ValueError):
+            holder_pid = None
+            break
+    if holder_pid is None:
         # Stale ready file — clean it up.
         DAEMON_READY_PATH.unlink(missing_ok=True)
 
