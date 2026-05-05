@@ -30,8 +30,6 @@ import { Type } from "@sinclair/typebox";
 
 const TALKY_MCP_PORT = parseInt(process.env.TALKY_MCP_PORT || "9090", 10);
 const TALKY_MCP_URL = `http://localhost:${TALKY_MCP_PORT}/mcp`;
-const TALKY_WEBRTC_PORT = parseInt(process.env.TALKY_WEBRTC_PORT || "7860", 10);
-const TALKY_WEBRTC_URL = `http://localhost:${TALKY_WEBRTC_PORT}`;
 
 // ---------------------------------------------------------------------------
 // Minimal MCP Streamable-HTTP Client
@@ -320,8 +318,8 @@ export default function (pi: ExtensionAPI) {
 			await client.callTool("start");
 			voiceActive = true;
 
-			// Open browser to WebRTC endpoint
-			openBrowser(TALKY_WEBRTC_URL);
+			// Open browser to daemon client
+			openBrowser(`http://localhost:${TALKY_MCP_PORT}`);
 
 			if (ctx.hasUI !== false) {
 				ctx.ui.setStatus("talky", "🎤 Voice active");

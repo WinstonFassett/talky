@@ -675,7 +675,7 @@ def main():
     # Shortcut: treat first non-option, non-command arg as a profile name.
     # `talky openclaw` → `talky profile openclaw`. `cmd_profile` ensures
     # the daemon is up.
-    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "pi", "claude", "transcribe", "kill", "profile", "voice", "status"}
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "claude", "transcribe", "kill", "profile", "voice", "status"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         profile_name = sys.argv.pop(1)
         sys.argv.insert(1, "profile")
@@ -773,27 +773,6 @@ def main():
     # === ls subcommand ===
     ls_parser = subparsers.add_parser("ls", help="List profiles")
     ls_parser.set_defaults(func=lambda args: cmd_list_profiles(args))
-
-    
-    # === pi subcommand ===
-    pi_parser = subparsers.add_parser("pi", help="Start Pi with voice")
-    pi_parser.add_argument("--dir", "-d", help="Working directory for app (default: current)")
-    
-    def cmd_pi(args):
-        # Create a simple object with the profile and copy all attributes
-        class Args:
-            def __init__(self, profile, **kwargs):
-                self.profile = profile
-                # Copy all attributes from the original args
-                for key, value in kwargs.items():
-                    setattr(self, key, value)
-        
-        # Copy all attributes from original args
-        args_dict = {k: v for k, v in vars(args).items() if k != 'func'}
-        args_obj = Args('pi', **args_dict)
-        return cmd_run_client_profile(args_obj)
-    
-    pi_parser.set_defaults(func=cmd_pi)
 
     # === claude subcommand ===
     claude_parser = subparsers.add_parser("claude", help="Start Claude with voice")
