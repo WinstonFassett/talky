@@ -16,6 +16,8 @@ Protocol (JSON over WebSocket, text frames):
     {"type": "tts_start"}                 — Pi response starting
     {"type": "tts", "text": "..."}        — response token delta (stream these)
     {"type": "tts_end"}                   — Pi response complete
+    {"type": "tool_start", "text": "..."}  — tool call began (e.g. "▶ read_file: foo.py")
+    {"type": "tool_end",   "text": "..."}  — tool call finished (e.g. "✓ read_file (42 lines)")
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from typing import Any
 
 from loguru import logger
 from pipecat.frames.frames import (
+    AggregatedTextFrame,
     Frame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
@@ -97,6 +100,14 @@ class PiExtensionLLMService(LLMService):
                         await self.push_frame(TextFrame(text=text))
                 elif msg_type == "tts_end":
                     await self.push_frame(LLMFullResponseEndFrame())
+                elif msg_type == "tool_start":
+                    text = msg.get("text", "")
+                    if text:
+                        await self.push_frame(AggregatedTextFrame(text=text, aggregated_by="tool_start"))
+                elif msg_type == "tool_end":
+                    text = msg.get("text", "")
+                    if text:
+                        await self.push_frame(AggregatedTextFrame(text=text, aggregated_by="tool_end"))
                 # unknown types silently ignored
         except WebSocketDisconnect:
             logger.info("PiExtLLM: extension disconnected")

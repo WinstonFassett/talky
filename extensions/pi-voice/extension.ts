@@ -122,6 +122,31 @@ export default function (pi: ExtensionAPI) {
 		send({ type: "tts", text: delta });
 	});
 
+	pi.on("tool_execution_start", (event) => {
+		const e = event as any;
+		const name: string = e.toolName ?? "?";
+		const args: Record<string, unknown> = e.args ?? {};
+		let hint = "";
+		if (typeof args.path === "string") hint = `: ${args.path}`;
+		else if (typeof args.command === "string") hint = `: ${args.command.slice(0, 60)}${args.command.length > 60 ? "…" : ""}`;
+		else if (typeof args.pattern === "string") hint = `: ${args.pattern}`;
+		send({ type: "tool_start", text: `▶ ${name}${hint}` });
+	});
+
+	pi.on("tool_execution_end", (event) => {
+		const e = event as any;
+		const name: string = e.toolName ?? "?";
+		if (e.isError) {
+			send({ type: "tool_end", text: `✗ ${name}` });
+			return;
+		}
+		const content: Array<{ type: string; text?: string }> = e.result?.content ?? [];
+		const textContent = content.find((c) => c.type === "text")?.text ?? "";
+		const lines = textContent ? textContent.split("\n").length : 0;
+		const suffix = lines > 0 ? ` (${lines} lines)` : "";
+		send({ type: "tool_end", text: `✓ ${name}${suffix}` });
+	});
+
 	pi.on("agent_end", () => {
 		if (turnHasText) {
 			send({ type: "tts_end" });
