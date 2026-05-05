@@ -79,8 +79,9 @@ class VoiceProfileSwitcher:
                 
                 if provider_profile:
                     service = create_tts_service_from_config(
-                        provider, 
-                        voice_id=provider_profile.tts_voice
+                        provider,
+                        voice_id=provider_profile.tts_voice,
+                        skip_aggregator_types=["tool_start", "tool_end", "thinking"],
                     )
                     tts_services[provider] = service
                     logger.info(f"Created TTS service for {provider}: {type(service).__name__}")

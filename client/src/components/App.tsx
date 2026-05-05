@@ -7,6 +7,7 @@ import {
   // EventsPanel,
   UserAudioControl,
 } from '@pipecat-ai/voice-ui-kit';
+import type { JSX } from 'react';
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
 import type { TransportType } from '../config';
@@ -15,6 +16,18 @@ import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
+
+const BOT_OUTPUT_RENDERERS: Record<string, (content: string) => JSX.Element> = {
+  tool_start: (content) => (
+    <span className="text-xs font-mono text-muted-foreground opacity-70">{content}</span>
+  ),
+  tool_end: (content) => (
+    <span className="text-xs font-mono text-muted-foreground opacity-70">{content}</span>
+  ),
+  thinking: (content) => (
+    <span className="text-xs italic text-muted-foreground opacity-60">{content}</span>
+  ),
+};
 
 // Pre-load the drop cue so it plays instantly on unexpected disconnect.
 // The WAV is generated from shared/audio_cues.stop_cue_pcm (three
@@ -221,7 +234,7 @@ export const App = ({
       </div>
       <div className="flex-1 overflow-hidden px-4">
         <div className="h-full overflow-hidden">
-          <ConversationPanel />
+          <ConversationPanel conversationElementProps={{ botOutputRenderers: BOT_OUTPUT_RENDERERS }} />
         </div>
       </div>
     </div>

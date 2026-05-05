@@ -118,7 +118,10 @@ def create_services_from_profile():
 
     try:
         stt = create_stt_service(stt_provider)
-        tts = create_tts_service(tts_provider)
+        tts = create_tts_service(
+            tts_provider,
+            skip_aggregator_types=["tool_start", "tool_end", "thinking"],
+        )
     except ValueError as e:
         if "Credentials required" in str(e):
             raise ValueError(

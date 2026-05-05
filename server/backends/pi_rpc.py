@@ -7,18 +7,50 @@ from typing import Optional
 
 from loguru import logger
 from pipecat.frames.frames import (
+    AggregatedTextFrame,
     CancelFrame,
     EndFrame,
     Frame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
+    LLMMessagesAppendFrame,
     StartFrame,
     TextFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 from pipecat_mcp_server.talky_turn import UserTurnTextFrame
+
+
+def _format_tool_start(data: dict) -> str:
+    name = data.get("toolName", "?")
+    args = data.get("args") or {}
+    hint = ""
+    if "path" in args:
+        hint = f": {args['path']}"
+    elif "command" in args:
+        cmd = str(args["command"])
+        hint = f": {cmd[:60]}{'…' if len(cmd) > 60 else ''}"
+    elif "pattern" in args:
+        hint = f": {args['pattern']}"
+    return f"▶ {name}{hint}"
+
+
+def _format_tool_end(data: dict) -> str:
+    name = data.get("toolName", "?")
+    if data.get("isError"):
+        return f"✗ {name}"
+    result = data.get("result") or {}
+    lines = None
+    if isinstance(result, dict):
+        content = result.get("content", [])
+        if isinstance(content, list) and content:
+            text = next((c.get("text", "") for c in content if c.get("type") == "text"), "")
+            if text:
+                lines = len(text.splitlines())
+    suffix = f" ({lines} lines)" if lines else ""
+    return f"✓ {name}{suffix}"
 
 
 class PiRPCLLMService(LLMService):
@@ -61,10 +93,11 @@ class PiRPCLLMService(LLMService):
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
             cwd=self._cwd,
         )
         self._reader_task = asyncio.create_task(self._read_stdout())
+        asyncio.create_task(self._log_stderr())
         logger.info("Pi RPC process started")
 
     async def stop(self, frame: EndFrame):
@@ -94,9 +127,22 @@ class PiRPCLLMService(LLMService):
                     pass
             self._proc = None
 
+    async def _log_stderr(self):
+        try:
+            while self._proc and self._proc.stderr:
+                line = await self._proc.stderr.readline()
+                if not line:
+                    break
+                logger.debug(f"Pi stderr: {line.decode().rstrip()}")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Pi stderr reader error: {e}")
+
     async def _write(self, msg: dict):
         if self._proc and self._proc.stdin:
             line = json.dumps(msg) + "\n"
+            logger.info(f"Pi RPC → stdin: {line.rstrip()}")
             self._proc.stdin.write(line.encode())
             await self._proc.stdin.drain()
 
@@ -122,12 +168,38 @@ class PiRPCLLMService(LLMService):
 
                 elif event_type == "message_update":
                     evt = data.get("assistantMessageEvent", {})
-                    if evt.get("type") == "text_delta":
+                    evt_type = evt.get("type")
+                    if evt_type == "text_delta":
                         delta = evt.get("delta", "")
                         if delta:
                             await self.push_frame(TextFrame(delta))
+                    elif evt_type == "thinking_delta":
+                        delta = evt.get("delta", "")
+                        if delta:
+                            await self.push_frame(
+                                AggregatedTextFrame(text=delta, aggregated_by="thinking")
+                            )
+
+                elif event_type == "tool_execution_start":
+                    text = _format_tool_start(data)
+                    await self.push_frame(
+                        AggregatedTextFrame(text=text, aggregated_by="tool_start")
+                    )
+
+                elif event_type == "tool_execution_end":
+                    text = _format_tool_end(data)
+                    await self.push_frame(
+                        AggregatedTextFrame(text=text, aggregated_by="tool_end")
+                    )
 
                 elif event_type == "agent_end":
+                    # Surface any error message from the last assistant turn.
+                    msgs = data.get("messages") or []
+                    for msg in reversed(msgs):
+                        if msg.get("role") == "assistant" and msg.get("stopReason") == "error":
+                            err = msg.get("errorMessage", "unknown error")
+                            logger.error(f"Pi RPC LLM error: {err}")
+                            break
                     await self.push_frame(LLMFullResponseEndFrame())
 
                 elif event_type == "response" and not data.get("success", True):
@@ -148,6 +220,14 @@ class PiRPCLLMService(LLMService):
 
         if isinstance(frame, UserTurnTextFrame):
             await self._write({"type": "prompt", "message": frame.text})
+            return
+
+        if isinstance(frame, LLMMessagesAppendFrame) and frame.run_llm:
+            for msg in frame.messages:
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    if isinstance(content, str) and content:
+                        await self._write({"type": "prompt", "message": content})
             return
 
         await self.push_frame(frame, direction)

@@ -22,4 +22,6 @@ llm_backends:
     description: "Pi coding agent (RPC mode, interruptible)"
     service_class: "server.backends.pi_rpc.PiRPCLLMService"
     greeting: "Pi online."
-    config: {}
+    config:
+      provider: "github-copilot"
+      model: "gpt-4o"
