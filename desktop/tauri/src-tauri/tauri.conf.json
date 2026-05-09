@@ -1,0 +1,29 @@
+{
+  "productName": "Talky",
+  "version": "0.1.0",
+  "identifier": "dev.talky.shell",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "devUrl": "http://localhost:9090",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "infoPlist": "Info.plist"
+    }
+  }
+}
