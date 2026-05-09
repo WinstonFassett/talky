@@ -255,3 +255,6 @@ server/server-*.key
 
 .desloppify/
 scorecard.png
+
+desktop/zero-native/.zig-cache
+desktop/zero-native/zig-out/
