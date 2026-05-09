@@ -12,6 +12,22 @@ talky kill                            # reclaim port 9090
 uv run ruff check . && uv run pyright
 ```
 
+### Desktop shells (desktop/)
+
+Two candidates under `desktop/` — bake-off in progress:
+
+```bash
+# zero-native shell
+git submodule update --init desktop/zero-native/vendor/zero-native
+cd desktop/zero-native && zig build package
+open desktop/zero-native/zig-out/package/talky-shell-0.1.0-macos-Debug.app
+
+# tauri shell — see src-tauri/ (existing)
+```
+
+zero-native requires: Zig 0.16+, `zero-native` CLI (`npm install -g zero-native`).
+`desktop/zero-native/vendor/zero-native` tracks `talky-integration` branch (mic permission, setSinkId shim).
+
 After changing pyproject.toml deps: `uv sync && uv tool install --editable . --force --python 3.12`. Both venvs must stay in sync — the tool venv resolves independently from pyproject.toml, not from the lockfile. Pin critical deps with `==`.
 
 ## Architecture

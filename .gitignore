@@ -261,6 +261,8 @@ scorecard.png
 
 .zig-cache
 zig-out/
+desktop/zero-native/.zig-cache
+desktop/zero-native/zig-out/
 
 # Inspiration: external repos cloned for architectural reference. Not part of the project.
 inspiration/
