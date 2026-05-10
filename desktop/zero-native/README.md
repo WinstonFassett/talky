@@ -4,37 +4,32 @@ WKWebView desktop shell for the talky daemon. Navigates to `http://localhost:909
 
 ## Prerequisites
 
-- [Zig](https://ziglang.org/download/) 0.16+
-- [zero-native CLI](https://github.com/vercel-labs/zero-native): `npm install -g zero-native`
-- `shell/vendor/zero-native` submodule initialized (see below)
+- [Zig](https://ziglang.org/download/) 0.16+ (homebrew: `brew install zig`)
+- `desktop/zero-native/vendor/zero-native` submodule initialized (see below)
 
 ## Setup
 
 ```bash
-git submodule update --init shell/vendor/zero-native
+git submodule update --init desktop/zero-native/vendor/zero-native
 ```
 
-## Build
+## Build & run
 
-Run from `shell/` (or `shell/` is the cwd):
+From the repo root:
 
 ```bash
-# Debug binary only
-zig build
-
-# Package + codesign .app bundle
-zig build package
+desktop/zero-native/build-app.sh
 ```
 
-Output: `shell/zig-out/package/talky-shell-0.1.0-macos-Debug.app`
+That script: compiles from vendor source, copies the binary into the `.app`, codesigns, and opens it.
 
-## Run
+> **Do not use `zig build package`** — it calls the precompiled `zero-native` CLI which doesn't include the talky-integration patches.
 
-Start the talky daemon first, then open the app:
+## Run (after building)
 
 ```bash
 talky daemon
-open shell/zig-out/package/talky-shell-0.1.0-macos-Debug.app
+open desktop/zero-native/zig-out/package/talky-shell-0.1.0-macos-Debug.app
 ```
 
 ## zero-native vendor
@@ -44,5 +39,3 @@ open shell/zig-out/package/talky-shell-0.1.0-macos-Debug.app
 - `WKUIDelegate` + mic permission auto-grant (no OS prompt)
 - `setSinkId` JS shim (`WKWebView` doesn't implement `HTMLMediaElement.setSinkId`)
 - `NSMicrophoneUsageDescription` in the generated `Info.plist`
-
-Override the framework path if needed: `zig build -Dzero-native-path=/path/to/zero-native`
