@@ -731,14 +731,14 @@ def _build_webrtc_routes():
 
         await websocket.accept()
 
-        # Find the AgentExtensionLLMService and its profile name from the
-        # live pipeline's service map. No hardcoded profile names.
+        # Find the AgentExtensionLLMService instance + its backend name
+        # from the live pipeline. No hardcoded names.
         agent_ext = None
-        agent_profile = None
+        agent_backend_name = None
         for name, svc in voice_channel._llm_services.items():
             if isinstance(svc, AgentExtensionLLMService):
                 agent_ext = svc
-                agent_profile = name
+                agent_backend_name = name
                 break
 
         if agent_ext is None:
@@ -746,12 +746,27 @@ def _build_webrtc_routes():
             await websocket.close()
             return
 
-        logger.info(f"/ws/agent: extension connected → profile {agent_profile!r}")
+        # Prefer switching via a user-facing talky profile that uses this
+        # backend so the picker shows the right label. Fall back to the
+        # backend name if no talky profile points at it.
+        from shared.profile_manager import get_profile_manager
+        active_profile = agent_backend_name
+        try:
+            pm = get_profile_manager()
+            for tp_name in pm.list_talky_profiles().keys():
+                tp_obj = pm.get_talky_profile(tp_name)
+                if tp_obj and getattr(tp_obj, "llm_backend", None) == agent_backend_name:
+                    active_profile = tp_name
+                    break
+        except Exception as e:
+            logger.warning(f"/ws/agent: talky-profile lookup failed: {e}")
+
+        logger.info(f"/ws/agent: extension connected → profile {active_profile!r} (backend {agent_backend_name!r})")
 
         try:
-            await voice_channel.switch_to_profile(agent_profile)
+            await voice_channel.switch_to_profile(active_profile)
         except Exception as e:
-            logger.warning(f"/ws/agent: could not switch to {agent_profile!r}: {e}")
+            logger.warning(f"/ws/agent: could not switch to {active_profile!r}: {e}")
             await websocket.send_text(json.dumps({"type": "error", "message": str(e)}))
             await websocket.close()
             return

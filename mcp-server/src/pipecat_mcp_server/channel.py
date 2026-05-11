@@ -509,9 +509,13 @@ class VoiceChannel:
             return
 
         # Live path: queue the switch frame.
-        service = self._llm_services.get(profile_name)
+        # Talky profile names map to backend names — resolve before lookup.
+        from shared.profile_manager import get_profile_manager as _gpm
+        _pm = _gpm()
+        _tp = _pm.get_talky_profile(profile_name)
+        service_key = (_tp.llm_backend if _tp and _tp.llm_backend else None) or profile_name
+        service = self._llm_services.get(service_key)
         if service is None:
-            # Shouldn't happen given the validation above, but be defensive.
             raise ValueError(
                 f"profile {profile_name!r} valid but not in active switcher"
             )
@@ -761,7 +765,11 @@ class VoiceChannel:
         try:
             from shared.profile_manager import get_profile_manager
 
-            backend = get_profile_manager().get_llm_backend(profile_name)
+            pm = get_profile_manager()
+            # Talky profile → resolve to its backend; fall back to direct lookup.
+            tp = pm.get_talky_profile(profile_name)
+            backend_name = (tp.llm_backend if tp and tp.llm_backend else None) or profile_name
+            backend = pm.get_llm_backend(backend_name)
         except Exception as e:  # noqa: BLE001
             logger.debug(f"VoiceChannel: could not read backend for greeting lookup: {e}")
             return None

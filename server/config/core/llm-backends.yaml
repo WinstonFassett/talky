@@ -21,6 +21,8 @@ llm_backends:
   agent-ext:
     description: "Agent extension bridge (WebSocket, any agent CLI)"
     service_class: "pipecat_mcp_server.agent_ext_llm_service.AgentExtensionLLMService"
+    greeting: "Agent online."
+    config: {}
   pi:
     description: "Pi coding agent (RPC mode, interruptible)"
     service_class: "server.backends.pi_rpc.PiRPCLLMService"
