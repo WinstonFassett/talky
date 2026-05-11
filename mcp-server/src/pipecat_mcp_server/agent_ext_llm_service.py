@@ -8,9 +8,10 @@
 
 Protocol (JSON over WebSocket, text frames):
   Daemon → extension:
-    {"type": "ready"}                     — handshake after accept
-    {"type": "stt", "text": "..."}        — user speech transcript
-    {"type": "abort"}                     — VAD barge-in, abort current agent turn
+    {"type": "ready"}                          — handshake after accept
+    {"type": "greet", "instruction": "..."}    — agent should greet in own words
+    {"type": "stt", "text": "..."}             — user speech transcript
+    {"type": "abort"}                          — VAD barge-in, abort current agent turn
 
   Extension → daemon:
     {"type": "tts_start"}                 — agent response starting
@@ -23,7 +24,7 @@ Protocol (JSON over WebSocket, text frames):
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Optional
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -59,10 +60,19 @@ class AgentExtensionLLMService(LLMService):
     def connected(self) -> bool:
         return self._ws is not None
 
-    async def handle_websocket(self, ws: Any) -> None:
-        """Accept a WebSocket connection and run until it closes."""
+    async def handle_websocket(self, ws: Any, greeting_instruction: Optional[str] = None) -> None:
+        """Accept a WebSocket connection and run until it closes.
+
+        ``greeting_instruction`` (if provided) is sent as a ``greet``
+        message right after the ``ready`` handshake. The agent extension
+        is expected to feed it to its agent as a user message so the
+        agent generates its own greeting words (which then stream back
+        as ``tts`` frames through the normal pipeline).
+        """
         self._ws = ws
         await self._send({"type": "ready"})
+        if greeting_instruction:
+            await self._send({"type": "greet", "instruction": greeting_instruction})
         try:
             await self._reader_loop(ws)
         finally:

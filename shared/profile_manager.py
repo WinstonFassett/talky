@@ -10,6 +10,16 @@ from loguru import logger
 
 BUNDLED_DEFAULTS = Path(__file__).parent.parent / "server" / "config" / "defaults"
 
+# Built-in fallback greeting instruction handed to the agent when no profile,
+# backend, or settings.yaml override is configured. The agent generates its
+# own greeting words in response — this is an *instruction*, not a script.
+# Override globally via `defaults.greeting` in settings.yaml, or per profile
+# / per backend via `greeting:` in the respective YAML.
+BUILTIN_GREETING_INSTRUCTION = (
+    "Greet the user warmly in one short sentence using your own words, "
+    "then ask what they want to work on."
+)
+
 CONFIG_FILES = [
     "llm-backends.yaml",
     "voice-backends.yaml",
@@ -34,6 +44,14 @@ class LLMBackend:
     # this backend calls ``request_leave``. ``None`` means no phrase —
     # the descending-beep cue is still played. Ticket 0b80.
     signoff: Optional[str] = None
+    # Optional greeting *instruction* — the prompt the daemon hands to
+    # the agent on /ws/agent connect so the agent says hi in its own
+    # words. Distinct from ``announcement`` (impersonal system cue) and
+    # from a literal greeting string. Use the sentinel string
+    # ``"__none__"`` in YAML to explicitly disable greeting for this
+    # backend. ``None`` here means "no backend-level override; fall
+    # through to talky-profile / settings / built-in default."
+    greeting: Optional[str] = None
 
 
 @dataclass
@@ -59,6 +77,14 @@ class TalkyProfile:
     client: Optional[str] = None  # Client preference: "vite" or "debug"
     session_key: Optional[str] = None  # Override session for LLM backend
     system_message: Optional[str] = None  # Optional system message
+    # Per-profile greeting *instruction* override. See LLMBackend.greeting
+    # for semantics. Takes precedence over the backend-level value.
+    greeting: Optional[str] = None
+    # Optional launcher block — generic agent launcher config (5d95).
+    # Schema: {command: [str], extension: str, autoconnect_browser: bool,
+    # mode: "foreground"|"background"}. ``None`` means non-launchable
+    # (remote backend like openclaw / moltis).
+    launcher: Optional[Dict[str, Any]] = None
 
 
 class ProfileManager:
@@ -156,8 +182,9 @@ class ProfileManager:
                                 **core_backends[name]["config"],
                                 **user_config.get("config", {})
                             },
-                            announcement=user_config.get("announcement", user_config.get("greeting", core_backends[name].get("announcement", core_backends[name].get("greeting")))),
+                            announcement=user_config.get("announcement", core_backends[name].get("announcement")),
                             signoff=user_config.get("signoff", core_backends[name].get("signoff")),
+                            greeting=user_config.get("greeting", core_backends[name].get("greeting")),
                         )
                     else:
                         # Add new user-defined backend
@@ -166,8 +193,9 @@ class ProfileManager:
                             description=user_config.get("description", ""),
                             service_class=user_config.get("service_class", ""),
                             config=user_config.get("config", {}),
-                            announcement=user_config.get("announcement", user_config.get("greeting")),
+                            announcement=user_config.get("announcement"),
                             signoff=user_config.get("signoff"),
+                            greeting=user_config.get("greeting"),
                         )
             else:
                 # No user extensions - use core (+ defaults) backends
@@ -177,8 +205,9 @@ class ProfileManager:
                         description=config["description"],
                         service_class=config["service_class"],
                         config=config["config"],
-                        announcement=config.get("announcement", config.get("greeting")),
+                        announcement=config.get("announcement"),
                         signoff=config.get("signoff"),
+                        greeting=config.get("greeting"),
                     )
 
         except FileNotFoundError:
@@ -189,8 +218,9 @@ class ProfileManager:
                     description=config["description"],
                     service_class=config["service_class"],
                     config=config["config"],
-                    announcement=config.get("announcement", config.get("greeting")),
+                    announcement=config.get("announcement"),
                     signoff=config.get("signoff"),
+                    greeting=config.get("greeting"),
                 )
         except Exception as e:
             logger.warning(f"Error loading user LLM backends: {e}. Using core backends only.")
@@ -201,8 +231,9 @@ class ProfileManager:
                     description=config["description"],
                     service_class=config["service_class"],
                     config=config["config"],
-                    announcement=config.get("announcement", config.get("greeting")),
+                    announcement=config.get("announcement"),
                     signoff=config.get("signoff"),
+                    greeting=config.get("greeting"),
                 )
 
     def _load_voice_backends(self):
@@ -286,6 +317,27 @@ class ProfileManager:
                 stt_config=entry.get("stt_config", {}),
             )
 
+    def _make_talky_profile(self, name: str, config: dict) -> TalkyProfile:
+        """Construct a TalkyProfile from a merged config dict.
+
+        Centralizes field reads so adding a new TalkyProfile field
+        (e.g. ``greeting``, ``launcher``) doesn't require touching 4
+        call sites.
+        """
+        return TalkyProfile(
+            name=name,
+            description=config.get("description", ""),
+            llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend"),
+            voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
+            backend=config.get("backend"),
+            app=config.get("app"),
+            client=config.get("client"),
+            session_key=config.get("session_key"),
+            system_message=config.get("system_message"),
+            greeting=config.get("greeting"),
+            launcher=config.get("launcher"),
+        )
+
     def _load_talky_profiles(self):
         """Load talky profiles by merging core + defaults + user extensions."""
         # Start with core profiles from server/config/core/ folder
@@ -296,112 +348,50 @@ class ProfileManager:
             with open(core_path) as f:
                 core_data = yaml.safe_load(f) or {}
             core_profiles = core_data.get("talky_profiles", {})
-        
+
         # Extend with defaults (if any) - for new user templates
         defaults_path = BUNDLED_DEFAULTS / "talky-profiles.yaml"
         if defaults_path.exists():
             with open(defaults_path) as f:
                 defaults_data = yaml.safe_load(f) or {}
             defaults_profiles = defaults_data.get("talky_profiles", {})
-            
+
             # Merge defaults into core (defaults extend core)
             for name, config in defaults_profiles.items():
                 if name not in core_profiles:
                     core_profiles[name] = config
-        
+
         # Load user extensions/overrides from YAML
         try:
             data = self._read_yaml("talky-profiles.yaml")
             user_profiles = data.get("talky_profiles", {})
-            
+
             # First, load all core+defaults profiles
             for name, config in core_profiles.items():
-                enabled = config.get("enabled", True)
-                if enabled:
-                    self.talky_profiles[name] = TalkyProfile(
-                        name=name,
-                        description=config.get("description", ""),
-                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend"),
-                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
-                        backend=config.get("backend"),
-                        app=config.get("app"),
-                        client=config.get("client"),
-                        session_key=config.get("session_key"),
-                        system_message=config.get("system_message"),
-                    )
-            
+                if config.get("enabled", True):
+                    self.talky_profiles[name] = self._make_talky_profile(name, config)
+
             # Then apply user overrides
             for name, user_config in user_profiles.items():
                 if name in core_profiles:
-                    # Override existing core profile
-                    merged_config = {
-                        **core_profiles[name],
-                        **user_config  # User config takes precedence
-                    }
-                    # Check if profile is enabled (default to true if not specified)
-                    enabled = merged_config.get("enabled", True)
-                    if enabled:
-                        self.talky_profiles[name] = TalkyProfile(
-                            name=name,
-                            description=merged_config.get("description", ""),
-                            llm_backend=merged_config.get("llm_backend") or self.defaults.get("llm_backend"),
-                            voice_profile=merged_config.get("voice_profile") or self.defaults.get("voice_profile"),
-                            backend=merged_config.get("backend"),
-                            app=merged_config.get("app"),
-                            client=merged_config.get("client"),
-                            session_key=merged_config.get("session_key"),
-                            system_message=merged_config.get("system_message"),
-                        )
+                    merged_config = {**core_profiles[name], **user_config}
+                    if merged_config.get("enabled", True):
+                        self.talky_profiles[name] = self._make_talky_profile(name, merged_config)
                     else:
-                        # User disabled the profile, remove it
                         self.talky_profiles.pop(name, None)
                 else:
-                    # Add new user-defined profile
-                    enabled = user_config.get("enabled", True)
-                    if enabled:
-                        self.talky_profiles[name] = TalkyProfile(
-                            name=name,
-                            description=user_config.get("description", ""),
-                            llm_backend=user_config.get("llm_backend") or self.defaults.get("llm_backend") or "",
-                            voice_profile=user_config.get("voice_profile") or self.defaults.get("voice_profile") or "",
-                            client=user_config.get("client"),
-                            session_key=user_config.get("session_key"),
-                            system_message=user_config.get("system_message"),
-                        )
-                        
+                    if user_config.get("enabled", True):
+                        self.talky_profiles[name] = self._make_talky_profile(name, user_config)
+
         except FileNotFoundError:
-            # No user extensions file - use core (+ defaults) profiles
             for name, config in core_profiles.items():
-                enabled = config.get("enabled", True)
-                if enabled:
-                    self.talky_profiles[name] = TalkyProfile(
-                        name=name,
-                        description=config.get("description", ""),
-                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend"),
-                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
-                        backend=config.get("backend"),
-                        app=config.get("app"),
-                        client=config.get("client"),
-                        session_key=config.get("session_key"),
-                        system_message=config.get("system_message"),
-                    )
+                if config.get("enabled", True):
+                    self.talky_profiles[name] = self._make_talky_profile(name, config)
         except Exception as e:
             logger.warning(f"Error loading user talky profiles: {e}. Using core profiles only.")
-            # Fallback to core profiles
             for name, config in core_profiles.items():
-                enabled = config.get("enabled", True)
-                if enabled:
-                    self.talky_profiles[name] = TalkyProfile(
-                        name=name,
-                        description=config.get("description", ""),
-                        llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend"),
-                        voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
-                        backend=config.get("backend"),
-                        app=config.get("app"),
-                        client=config.get("client"),
-                        session_key=config.get("session_key"),
-                        system_message=config.get("system_message"),
-                    )
+                if config.get("enabled", True):
+                    self.talky_profiles[name] = self._make_talky_profile(name, config)
 
     def _load_defaults(self):
         data = self._read_yaml("settings.yaml")
@@ -433,6 +423,44 @@ class ProfileManager:
 
     def list_talky_profiles(self) -> Dict[str, str]:
         return {n: p.description for n, p in self.talky_profiles.items()}
+
+    # Sentinel in YAML to explicitly disable the greeting at any layer.
+    GREETING_DISABLED_SENTINEL = "__none__"
+
+    def resolve_greeting_instruction(self, talky_profile_name: Optional[str]) -> Optional[str]:
+        """Resolve the greeting *instruction* (not the spoken words) for the
+        agent that connects under ``talky_profile_name``.
+
+        Layer order (first non-None wins):
+          1. talky-profile ``greeting:`` field
+          2. backend ``greeting:`` field
+          3. ``defaults.greeting`` in settings.yaml
+          4. ``BUILTIN_GREETING_INSTRUCTION``
+
+        Returns ``None`` to disable (when any layer is set to the
+        sentinel ``__none__``).
+        """
+        layers: list[Optional[str]] = []
+        tp = self.get_talky_profile(talky_profile_name) if talky_profile_name else None
+        if tp is not None:
+            layers.append(tp.greeting)
+            if tp.llm_backend:
+                backend = self.get_llm_backend(tp.llm_backend)
+                if backend is not None:
+                    layers.append(backend.greeting)
+        layers.append(self.defaults.get("greeting"))
+
+        # First explicitly-set layer wins. The sentinel ``__none__`` is a
+        # set value that returns None (disabled). An unset layer is None
+        # and we fall through. If nothing is set at any layer, use the
+        # built-in default.
+        for layer in layers:
+            if layer is None:
+                continue
+            if layer == self.GREETING_DISABLED_SENTINEL:
+                return None
+            return layer
+        return BUILTIN_GREETING_INSTRUCTION
 
     def get_default_llm_backend(self) -> str:
         return self.defaults.get("llm_backend") or ""

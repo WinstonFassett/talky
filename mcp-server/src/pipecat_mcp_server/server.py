@@ -746,13 +746,17 @@ def _build_webrtc_routes():
             await websocket.close()
             return
 
+        # agent_backend_name is set in the loop above whenever agent_ext is
+        # set; the early-return on agent_ext is None guarantees this.
+        assert agent_backend_name is not None
+
         # Prefer switching via a user-facing talky profile that uses this
         # backend so the picker shows the right label. Fall back to the
         # backend name if no talky profile points at it.
         from shared.profile_manager import get_profile_manager
-        active_profile = agent_backend_name
+        pm = get_profile_manager()
+        active_profile: str = agent_backend_name
         try:
-            pm = get_profile_manager()
             for tp_name in pm.list_talky_profiles().keys():
                 tp_obj = pm.get_talky_profile(tp_name)
                 if tp_obj and getattr(tp_obj, "llm_backend", None) == agent_backend_name:
@@ -773,8 +777,22 @@ def _build_webrtc_routes():
             await websocket.close()
             return
 
+        # Resolve the greeting *instruction* (talky-profile → backend →
+        # settings → built-in default). The agent generates its own
+        # greeting words from this instruction. Returns None if greeting
+        # is explicitly disabled for this profile.
+        greeting_instruction: Optional[str] = None
         try:
-            await agent_ext.handle_websocket(websocket)
+            greeting_instruction = pm.resolve_greeting_instruction(active_profile)
+            logger.info(
+                f"/ws/agent: greeting instruction resolved for {active_profile!r}: "
+                f"{greeting_instruction!r}"
+            )
+        except Exception as e:
+            logger.warning(f"/ws/agent: greeting resolve failed: {e}")
+
+        try:
+            await agent_ext.handle_websocket(websocket, greeting_instruction=greeting_instruction)
         except WebSocketDisconnect:
             pass
         finally:

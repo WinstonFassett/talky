@@ -61,7 +61,7 @@ export default function (pi: ExtensionAPI) {
 		};
 
 		ws.onmessage = (event: MessageEvent) => {
-			let msg: { type: string; text?: string };
+			let msg: { type: string; text?: string; instruction?: string };
 			try {
 				msg = JSON.parse(event.data as string);
 			} catch {
@@ -70,6 +70,14 @@ export default function (pi: ExtensionAPI) {
 
 			if (msg.type === "ready") {
 				setStatus("🎙 voice: active");
+			} else if (msg.type === "greet") {
+				// Daemon-requested greeting: feed the instruction to Pi as
+				// a user message so Pi generates its own greeting words.
+				// The agent's TTS stream carries the spoken reply back.
+				const instruction = msg.instruction?.trim();
+				if (instruction) {
+					pi.sendUserMessage(instruction);
+				}
 			} else if (msg.type === "stt") {
 				// User speech transcript from daemon — inject as a Pi user message.
 				const text = msg.text?.trim();
