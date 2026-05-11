@@ -126,7 +126,7 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
 
     module_path = ".".join(backend.service_class.split(".")[:-1])
     class_name = backend.service_class.split(".")[-1]
-    if not module_path.startswith("server.") and not module_path.startswith("."):
+    if not module_path.startswith("server.") and not module_path.startswith("pipecat_mcp_server.") and not module_path.startswith("."):
         module_path = f"server.{module_path}"
     llm_module = importlib.import_module(module_path)
     return getattr(llm_module, class_name)(**backend.config)
