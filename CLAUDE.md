@@ -56,6 +56,9 @@ talky __mcp__                  # shortcut
 
 Switching uses `ManuallySwitchServiceFrame` — the transport stays connected, only the active LLM changes. No new pipeline, no peer disconnect. The soft switch (3769fe4) works even before the pipeline is live — the profile is remembered and applied at pipeline build.
 
+**Do:** All agent shortcuts (`talky claude`, `talky pi`, `talky openclaw`) switch the daemon profile via `cmd_profile` → POST `/api/profile`. They are all the same operation.
+**Don't:** Create agent-specific CLI subcommands that do something different from profile-switching unless there is real unique behavior (e.g. `cmd_pi` execs into pi with the extension). Don't create a subcommand just to hardcode a profile name — remove it and let the shortcut handle it.
+
 Ports: 9090 is the only port. 7860 and 5173 are dead (ripped in 5098).
 
 ## Debugging

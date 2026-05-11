@@ -514,7 +514,12 @@ class VoiceChannel:
                 get_llm_backend_extra,
                 install_extra_no_reexec,
             )
-            extra = get_llm_backend_extra(profile_name)
+            from shared.profile_manager import get_profile_manager
+            pm = get_profile_manager()
+            # Resolve talky profile → llm_backend name, then look up the extra.
+            tp = pm.get_talky_profile(profile_name)
+            backend_name = (tp.llm_backend if tp else None) or profile_name
+            extra = get_llm_backend_extra(backend_name)
             if extra:
                 already_installed = _check_extra_installed(extra)
                 if not already_installed:
@@ -540,9 +545,13 @@ class VoiceChannel:
             return
 
         # Live path: queue the switch frame.
-        service = self._llm_services.get(profile_name)
+        # Talky profiles map to backend names — resolve before lookup.
+        from shared.profile_manager import get_profile_manager as _gpm
+        _pm = _gpm()
+        _tp = _pm.get_talky_profile(profile_name)
+        service_key = (_tp.llm_backend if _tp and _tp.llm_backend else None) or profile_name
+        service = self._llm_services.get(service_key)
         if service is None:
-            # Shouldn't happen given the validation above, but be defensive.
             raise ValueError(
                 f"profile {profile_name!r} valid but not in active switcher"
             )
@@ -1290,7 +1299,12 @@ class VoiceChannel:
         # If the room had a non-default profile active before the disconnect,
         # switch back to it on this new pipeline. Fire-and-forget — the switch
         # frame will be processed as soon as the runner picks it up.
-        if desired_profile != self.MCP_DRIVER_PROFILE and desired_profile in profile_map:
+        # Resolve talky profile name → backend name for profile_map lookup.
+        # Pass the original desired_profile (talky name) to restore so
+        # _active_profile stays consistent with talky profile names.
+        _tp = pm.get_talky_profile(desired_profile) if desired_profile else None
+        resolved_profile = (_tp.llm_backend if _tp and _tp.llm_backend else None) or desired_profile
+        if desired_profile != self.MCP_DRIVER_PROFILE and resolved_profile in profile_map:
             asyncio.create_task(self._restore_profile_on_startup(desired_profile))
 
         # Add a done callback so a crashed runner flips us back to "not live"

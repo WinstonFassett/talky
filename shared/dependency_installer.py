@@ -232,10 +232,13 @@ def get_llm_backend_extra(backend_name: str) -> str | None:
 
 
 def install_extra_no_reexec(extra: str) -> bool:
-    """Install a single pyproject.toml extra into the current env without re-execing.
+    """Install a pyproject.toml extra without re-execing the current process.
 
-    Used at daemon runtime (profile switch). The installed package won't be
-    importable until the daemon restarts — caller must notify the user.
+    Used at daemon runtime (profile switch). In a tool env, uses
+    `uv tool install --with` so the package is registered in the tool env
+    and survives future reinstalls. In a dev venv, uses `uv pip install`.
+    The package won't be importable until the daemon restarts — caller
+    must notify the user.
     Returns True if install succeeded or extra was already present.
     """
     if _check_extra_installed(extra):
@@ -253,20 +256,54 @@ def install_extra_no_reexec(extra: str) -> bool:
         return False
 
     logger.info(f"Installing extra {extra!r}: {packages}")
-    result = subprocess.run(
-        [uv, "pip", "install"] + packages,
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        logger.error(f"Install failed: {result.stderr}")
-        return False
-    logger.info(f"Extra {extra!r} installed — daemon restart required")
+
+    if _is_tool_env():
+        # Use uv tool install --with so the package is persisted in the tool
+        # env's --with list and survives future `uv tool install --force`.
+        # Must pass ALL currently installed extras (not just the new one)
+        # because --with replaces the full list.
+        all_packages = list(packages)
+        for e, pkgs in extras.items():
+            if e != extra and _check_extra_installed(e):
+                all_packages.extend(pkgs)
+        python = sys.executable
+        result = subprocess.run(
+            [uv, "tool", "install", "--editable", str(_root), "--python", python]
+            + [f"--with={pkg}" for pkg in all_packages],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            logger.error(f"Install failed: {result.stderr}")
+            return False
+    else:
+        result = subprocess.run(
+            [uv, "pip", "install"] + packages,
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            logger.error(f"Install failed: {result.stderr}")
+            return False
+
+    logger.info(f"Extra {extra!r} installed — restart the daemon: talky kill && talky daemon")
     return True
 
 
 def _uv_cmd() -> str | None:
     import shutil
-    return shutil.which("uv")
+    # shutil.which uses PATH which may be stripped in daemon environments.
+    # Check common install locations explicitly as fallback.
+    found = shutil.which("uv")
+    if found:
+        return found
+    for candidate in (
+        "/opt/homebrew/bin/uv",
+        "/usr/local/bin/uv",
+        str(Path.home() / ".cargo/bin/uv"),
+        str(Path.home() / ".local/bin/uv"),
+    ):
+        if Path(candidate).exists():
+            return candidate
+    return None
 
 
 def install_dependencies(providers: Set[str]) -> bool:
