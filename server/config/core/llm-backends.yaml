@@ -32,13 +32,6 @@ llm_backends:
     config:
       provider: "github-copilot"
       model: "gpt-4o"
-  amp:
-    description: "Amp coding agent (streaming JSON, steerable)"
-    service_class: "server.backends.amp.AmpLLMService"
-    greeting: "Amp ready."
-    config:
-      mode: "smart"
-      cwd: null
   claude-code:
     description: "Claude Code via Agent SDK (thread bridge, turn-boundary interrupt)"
     service_class: "server.backends.claude_code.ClaudeCodeLLMService"
