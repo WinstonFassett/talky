@@ -96,9 +96,14 @@ Extension → daemon:
 ### Pi greeted but I want it silent
 **Fix:** Disable greeting at any layer in YAML by setting `greeting: "__none__"`. Sentinel can live on the talky profile, the LLM backend, or `defaults.greeting` in `settings.yaml`.
 
+## See also
+
+The same `/ws/agent` protocol drives Claude — see `extensions/claude-voice/` for the Node-side Claude Agent SDK bridge (foreground `talky claude`).
+
 ## References
 
 - [Pi Extension Docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
 - [Talky Daemon](../mcp-server/)
 - [agent_ext_llm_service.py](../../mcp-server/src/pipecat_mcp_server/agent_ext_llm_service.py)
 - [extensions/pi-voice/extension.ts](../../extensions/pi-voice/extension.ts)
+- [extensions/claude-voice/index.mjs](../../extensions/claude-voice/index.mjs)

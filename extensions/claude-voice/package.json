@@ -1,0 +1,14 @@
+{
+  "name": "talky-claude-voice",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Agent SDK bridge to the talky daemon's /ws/agent endpoint (ticket 5d95 parity with pi-voice)",
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.138"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

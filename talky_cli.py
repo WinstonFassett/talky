@@ -905,7 +905,11 @@ def cmd_launch(args):
         sys.exit(1)
 
     extension_template = launcher.get("extension")
-    extension_arg = launcher.get("extension_arg", "-e")
+    # extension_arg: if set (e.g. "-e"), the launcher appends [arg, extension]
+    # at the end of the rendered command — Pi style. If unset, the agent is
+    # expected to receive the extension path via a {extension} substitution
+    # somewhere in its own command list — Node style: ["node", "{extension}"].
+    extension_arg = launcher.get("extension_arg")
 
     extension_path = ""
     if extension_template:
