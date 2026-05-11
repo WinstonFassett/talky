@@ -716,41 +716,52 @@ def _build_webrtc_routes():
             },
         )
 
-    async def handle_pi_ws(websocket):
-        """WebSocket endpoint for Pi extensions (/ws/pi).
+    async def handle_agent_ws(websocket):
+        """WebSocket endpoint for agent extensions (/ws/agent).
 
-        Accepts a connection from a Pi voice extension, auto-switches the
-        active profile to __pi__, and bridges STT/TTS/abort signals until
+        Any agent CLI (Pi, Claude, etc.) that loads a talky extension connects
+        here. The handler finds the AgentExtensionLLMService instance in the
+        live pipeline (by type), switches to its profile, and bridges until
         the extension disconnects. On disconnect, reverts to __mcp__.
         """
+        import json
+
+        from pipecat_mcp_server.agent_ext_llm_service import AgentExtensionLLMService
         from starlette.websockets import WebSocketDisconnect, WebSocketState
 
         await websocket.accept()
 
-        pi_ext = voice_channel._pi_ext_service
-        if pi_ext is None:
-            import json
-            await websocket.send_text(json.dumps({"type": "error", "message": "no pi ext service — is the browser connected?"}))
+        # Find the AgentExtensionLLMService and its profile name from the
+        # live pipeline's service map. No hardcoded profile names.
+        agent_ext = None
+        agent_profile = None
+        for name, svc in voice_channel._llm_services.items():
+            if isinstance(svc, AgentExtensionLLMService):
+                agent_ext = svc
+                agent_profile = name
+                break
+
+        if agent_ext is None:
+            await websocket.send_text(json.dumps({"type": "error", "message": "no agent-ext backend configured — is the browser connected?"}))
             await websocket.close()
             return
 
-        logger.info("/ws/pi: Pi extension connected")
+        logger.info(f"/ws/agent: extension connected → profile {agent_profile!r}")
 
         try:
-            await voice_channel.switch_to_profile(voice_channel.PI_EXT_PROFILE)
+            await voice_channel.switch_to_profile(agent_profile)
         except Exception as e:
-            import json
-            logger.warning(f"/ws/pi: could not switch to __pi__: {e}")
+            logger.warning(f"/ws/agent: could not switch to {agent_profile!r}: {e}")
             await websocket.send_text(json.dumps({"type": "error", "message": str(e)}))
             await websocket.close()
             return
 
         try:
-            await pi_ext.handle_websocket(websocket)
+            await agent_ext.handle_websocket(websocket)
         except WebSocketDisconnect:
             pass
         finally:
-            logger.info("/ws/pi: Pi extension disconnected — reverting to __mcp__")
+            logger.info(f"/ws/agent: extension disconnected — reverting to {voice_channel.MCP_DRIVER_PROFILE!r}")
             try:
                 if websocket.client_state != WebSocketState.DISCONNECTED:
                     await websocket.close()
@@ -786,7 +797,8 @@ def _build_webrtc_routes():
         # Legacy compat — old CLI may still hit /api/profile.
         Route("/api/profile", handle_get_profile, methods=["GET"]),
         Route("/api/profile", handle_set_profile, methods=["POST"]),
-        WebSocketRoute("/ws/pi", handle_pi_ws),
+        WebSocketRoute("/ws/agent", handle_agent_ws),
+        WebSocketRoute("/ws/pi", handle_agent_ws),  # legacy compat
     ]
     return routes, webrtc_handler
 

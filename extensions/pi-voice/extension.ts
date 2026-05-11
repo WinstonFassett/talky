@@ -19,7 +19,7 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-const DAEMON_WS_URL = process.env.TALKY_PI_WS_URL || "ws://localhost:9090/ws/pi";
+const DAEMON_WS_URL = process.env.TALKY_AGENT_WS_URL || "ws://localhost:9090/ws/agent";
 const RECONNECT_DELAY_MS = 2000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 

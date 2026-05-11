@@ -18,6 +18,9 @@ llm_backends:
       model: "claude-3-5-sonnet-20241022"
       api_key: ""  # Will be loaded from credentials
       session_key: "agent:main:main"  # Default session key
+  agent-ext:
+    description: "Agent extension bridge (WebSocket, any agent CLI)"
+    service_class: "pipecat_mcp_server.agent_ext_llm_service.AgentExtensionLLMService"
   pi:
     description: "Pi coding agent (RPC mode, interruptible)"
     service_class: "server.backends.pi_rpc.PiRPCLLMService"
