@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
+import type { AggregationMetadata, PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
   ConnectButton,
   ConversationPanel,
   // EventsPanel,
   UserAudioControl,
 } from '@pipecat-ai/voice-ui-kit';
 import type { JSX } from 'react';
+import { signal } from '@preact/signals-react';
+import { useSignals } from '@preact/signals-react/runtime';
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
 // Internal transport interface for data channel access (not exposed in public API)
@@ -22,12 +27,6 @@ import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
 
-/**
- * Backends emit `{type:"event", kind, text, payload}` over the agent
- * websocket; the daemon forwards them as AggregatedTextFrame with
- * aggregated_by=kind and text = "<summary>\x00<json>". Split here so
- * each renderer gets both the summary and the structured payload.
- */
 function splitEventContent(content: string): { summary: string; payload: unknown | null } {
   const i = content.indexOf('\x00');
   if (i < 0) return { summary: content, payload: null };
@@ -40,35 +39,98 @@ function splitEventContent(content: string): { summary: string; payload: unknown
   }
 }
 
+function ToolStart({ content }: { content: string }) {
+  const { summary } = splitEventContent(content);
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono py-0.5">
+      <span className="opacity-50">⟳</span>
+      <span>{summary}</span>
+    </div>
+  );
+}
+
+function ToolEnd({ content }: { content: string }) {
+  const { summary, payload } = splitEventContent(content);
+  const p = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : {};
+  const isError = !!p.is_error;
+  const lines = typeof p.result_lines === 'number' ? p.result_lines : null;
+  return (
+    <div className={`flex items-center gap-1.5 text-xs font-mono py-0.5 ${isError ? 'text-destructive' : 'text-muted-foreground'}`}>
+      <span>{isError ? '✗' : '✓'}</span>
+      <span>{summary}{lines != null ? ` (${lines} lines)` : ''}</span>
+    </div>
+  );
+}
+
+// Module-level signal — written by botOutputRenderers, read by ThinkingStream.
+// Each turn appends a new block; deltas accumulate into the last open block.
+interface ThinkingBlock { id: number; text: string }
+let thinkingIdCounter = 0;
+const thinkingBlocks = signal<ThinkingBlock[]>([]);
+
+function appendThinkingDelta(delta: string) {
+  const blocks = thinkingBlocks.value;
+  if (blocks.length === 0) {
+    thinkingBlocks.value = [{ id: ++thinkingIdCounter, text: delta }];
+  } else {
+    const last = blocks[blocks.length - 1];
+    thinkingBlocks.value = [...blocks.slice(0, -1), { ...last, text: last.text + delta }];
+  }
+}
+
+function ThinkingStream() {
+  useSignals();
+  const blocks = thinkingBlocks.value;
+  if (blocks.length === 0) return null;
+  return (
+    <div className="px-4 pb-1 flex flex-col gap-0.5">
+      {blocks.map((block) => (
+        <Collapsible key={block.id}>
+          <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground opacity-50 hover:opacity-100 transition-opacity cursor-pointer select-none py-0.5">
+            <span>▸ thinking</span>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="pl-3 border-l border-muted/40 text-xs italic text-muted-foreground opacity-60 whitespace-pre-wrap mt-0.5 mb-1">
+              {block.text}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      ))}
+    </div>
+  );
+}
+
 const BOT_OUTPUT_RENDERERS: Record<string, (content: string) => JSX.Element> = {
-  tool_start: (content) => (
-    <div className="text-xs font-mono text-muted-foreground opacity-70">{content}</div>
-  ),
-  tool_end: (content) => (
-    <div className="text-xs font-mono text-muted-foreground opacity-70">{content}</div>
-  ),
+  tool_start: (content) => <ToolStart content={content} />,
+  tool_end:   (content) => <ToolEnd content={content} />,
   thinking: (content) => {
-    const { summary } = splitEventContent(content);
-    return (
-      <div className="text-xs italic text-muted-foreground opacity-60">{summary}</div>
-    );
+    appendThinkingDelta(content);
+    return <></>;
   },
   error: (content) => {
     const { summary, payload } = splitEventContent(content);
     return (
-      <div className="text-xs font-mono text-red-500" title={payload ? JSON.stringify(payload) : undefined}>
-        ⚠ {summary}
+      <div className="text-xs font-mono text-destructive py-0.5" title={payload ? JSON.stringify(payload) : undefined}>
+        ✗ {summary}
       </div>
     );
   },
   info: (content) => {
-    const { summary, payload } = splitEventContent(content);
+    const { summary } = splitEventContent(content);
     return (
-      <div className="text-xs text-muted-foreground opacity-70" title={payload ? JSON.stringify(payload) : undefined}>
-        ℹ {summary}
+      <div className="text-xs text-muted-foreground opacity-50 py-0.5">
+        {summary}
       </div>
     );
   },
+};
+
+const AGGREGATION_METADATA: Record<string, AggregationMetadata> = {
+  tool_start: { isSpoken: false, displayMode: 'block' },
+  tool_end:   { isSpoken: false, displayMode: 'block' },
+  thinking:   { isSpoken: false, displayMode: 'block' },
+  error:      { isSpoken: false, displayMode: 'block' },
+  info:       { isSpoken: false, displayMode: 'block' },
 };
 
 // Pre-load the drop cue so it plays instantly on unexpected disconnect.
@@ -141,6 +203,7 @@ export const App = ({
       hasBeenConnected.current = true;
       userInitiatedDisconnect.current = false;
       cuePlayedForThisSession.current = false;
+      thinkingBlocks.value = [];
     }
     if (
       hasBeenConnected.current &&
@@ -283,9 +346,10 @@ export const App = ({
           />
         </div>
       </div>
-      <div className="flex-1 overflow-hidden px-4">
-        <div className="h-full overflow-hidden">
-          <ConversationPanel conversationElementProps={{ botOutputRenderers: BOT_OUTPUT_RENDERERS }} />
+      <div className="flex-1 overflow-hidden flex flex-col">
+        <ThinkingStream />
+        <div className="flex-1 overflow-hidden px-4">
+          <ConversationPanel conversationElementProps={{ botOutputRenderers: BOT_OUTPUT_RENDERERS, aggregationMetadata: AGGREGATION_METADATA }} />
         </div>
       </div>
     </div>

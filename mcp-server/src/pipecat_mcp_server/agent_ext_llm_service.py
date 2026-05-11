@@ -121,14 +121,6 @@ class AgentExtensionLLMService(LLMService):
                         await self.push_frame(TextFrame(text=text))
                 elif msg_type == "tts_end":
                     await self.push_frame(LLMFullResponseEndFrame())
-                elif msg_type == "tool_start":
-                    text = msg.get("text", "")
-                    if text:
-                        await self.push_frame(AggregatedTextFrame(text=text, aggregated_by="tool_start"))
-                elif msg_type == "tool_end":
-                    text = msg.get("text", "")
-                    if text:
-                        await self.push_frame(AggregatedTextFrame(text=text, aggregated_by="tool_end"))
                 elif msg_type == "event":
                     # Generic structured-event envelope. ``kind`` selects the
                     # client-side renderer; ``text`` is the short summary;

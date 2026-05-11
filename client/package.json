@@ -15,6 +15,7 @@
     "@pipecat-ai/client-react": "^1.1.0",
     "@pipecat-ai/small-webrtc-transport": "^1.8.0",
     "@pipecat-ai/voice-ui-kit": "^0.8.2",
+    "@preact/signals-react": "^3.10.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

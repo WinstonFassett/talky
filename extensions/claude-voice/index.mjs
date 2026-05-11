@@ -145,8 +145,7 @@ async function pumpQuery() {
 				if (delta.type === "text_delta") {
 					emitTtsDelta(delta.text);
 				} else if (delta.type === "thinking_delta" && delta.thinking) {
-					// Pipe thinking deltas through the generic event channel
-					// so the client can render them however it wants.
+					process.stderr.write(`[claude-voice] thinking_delta (${delta.thinking.length} chars)\n`);
 					emitEvent("thinking", delta.thinking);
 				}
 			}
@@ -171,7 +170,10 @@ async function pumpQuery() {
 
 		// Rate-limit notices and other status events.
 		if (msg.type === "rate_limit_event") {
-			emitEvent("error", "rate limit", msg);
+			const status = msg.rate_limit_info?.status;
+			if (status === "rejected" || status === "allowed_warning") {
+				emitEvent("error", `rate limit (${status})`, msg.rate_limit_info);
+			}
 			continue;
 		}
 		if (msg.type === "status") {
@@ -190,9 +192,8 @@ async function pumpQuery() {
 				if (block.type === "tool_use") {
 					sawTool = true;
 					const name = block.name || "?";
-					if (block.id) toolNamesById.set(block.id, name);
-					const hint = previewToolInput(name, block.input);
-					send({ type: "tool_start", text: `▶ ${name}${hint}` });
+					if (block.id) toolNamesById.set(block.id, { name, input: block.input });
+					emitEvent("tool_start", name, { tool_use_id: block.id, input: block.input });
 				}
 			}
 			// Pure tool_use turn? Keep TTS open across the boundary
@@ -208,7 +209,8 @@ async function pumpQuery() {
 			for (const block of blocks) {
 				if (block.type !== "tool_result") continue;
 				emitted = true;
-				const name = toolNamesById.get(block.tool_use_id) || "?";
+				const entry = toolNamesById.get(block.tool_use_id) || { name: "?" };
+				const name = entry.name || "?";
 				const txt = Array.isArray(block.content)
 					? block.content
 							.filter((c) => c.type === "text")
@@ -218,9 +220,11 @@ async function pumpQuery() {
 						? block.content
 						: "";
 				const lines = txt ? txt.split("\n").length : 0;
-				const suffix = lines > 0 ? ` (${lines} lines)` : "";
-				const marker = block.is_error ? "✗" : "✓";
-				send({ type: "tool_end", text: `${marker} ${name}${suffix}` });
+				emitEvent("tool_end", name, {
+					tool_use_id: block.tool_use_id,
+					is_error: block.is_error || false,
+					result_lines: lines,
+				});
 				if (block.tool_use_id) toolNamesById.delete(block.tool_use_id);
 			}
 			if (emitted) continue;
