@@ -16,3 +16,8 @@ talky_profiles:
     description: "Pi"
     llm_backend: "pi"
 
+  # Claude Code via Agent SDK
+  claude:
+    description: "Claude"
+    llm_backend: "claude-code"
+

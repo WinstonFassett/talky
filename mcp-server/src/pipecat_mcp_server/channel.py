@@ -505,6 +505,29 @@ class VoiceChannel:
                 f"unknown profile {profile_name!r}; available: {self.available_profiles()}"
             )
 
+        # Install any missing deps for this backend before switching.
+        # If the dep was just installed it won't be importable until restart —
+        # we install it now so the *next* daemon start works, and warn the user.
+        try:
+            from shared.dependency_installer import (
+                _check_extra_installed,
+                get_llm_backend_extra,
+                install_extra_no_reexec,
+            )
+            extra = get_llm_backend_extra(profile_name)
+            if extra:
+                already_installed = _check_extra_installed(extra)
+                if not already_installed:
+                    ok = install_extra_no_reexec(extra)
+                    if ok:
+                        logger.warning(
+                            f"Deps for {profile_name!r} installed — restart the daemon: talky kill && talky daemon"
+                        )
+                    else:
+                        logger.warning(f"Could not install deps for {profile_name!r} (extra: {extra!r})")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Dep check for {profile_name!r} failed: {e}")
+
         if not self.is_live() or self._pipeline_task is None:
             # Soft path: no live pipeline. Store the desired profile and
             # let the next build apply it.

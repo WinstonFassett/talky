@@ -128,7 +128,7 @@ class _ClaudeSDKThread:
             self._put_frame(_TURN_START)
 
             try:
-                async for msg in query(prompt, options=self._options):
+                async for msg in query(prompt=prompt, options=self._options):
                     if self._interrupt_event.is_set():
                         logger.info("Claude SDK: interrupt detected, breaking")
                         break

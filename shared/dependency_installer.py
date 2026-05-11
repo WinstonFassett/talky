@@ -212,6 +212,58 @@ def _missing_extras(providers: Set[str]) -> list[str]:
     ]
 
 
+def get_llm_backend_extra(backend_name: str) -> str | None:
+    """Return the pyproject.toml extra name declared for an LLM backend, or None."""
+    backends_file = _root / "server" / "config" / "core" / "llm-backends.yaml"
+    # Also check user overrides
+    user_file = Path.home() / ".talky" / "llm-backends.yaml"
+    for path in (user_file, backends_file):
+        if not path.exists():
+            continue
+        try:
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+            backend = data.get("llm_backends", {}).get(backend_name, {})
+            if extra := backend.get("extra"):
+                return extra
+        except Exception:
+            pass
+    return None
+
+
+def install_extra_no_reexec(extra: str) -> bool:
+    """Install a single pyproject.toml extra into the current env without re-execing.
+
+    Used at daemon runtime (profile switch). The installed package won't be
+    importable until the daemon restarts — caller must notify the user.
+    Returns True if install succeeded or extra was already present.
+    """
+    if _check_extra_installed(extra):
+        return True
+
+    extras = _read_project_extras()
+    packages = extras.get(extra, [])
+    if not packages:
+        logger.warning(f"No packages defined for extra {extra!r}")
+        return False
+
+    uv = _uv_cmd()
+    if not uv:
+        logger.error("uv not found — cannot install dependencies")
+        return False
+
+    logger.info(f"Installing extra {extra!r}: {packages}")
+    result = subprocess.run(
+        [uv, "pip", "install"] + packages,
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        logger.error(f"Install failed: {result.stderr}")
+        return False
+    logger.info(f"Extra {extra!r} installed — daemon restart required")
+    return True
+
+
 def _uv_cmd() -> str | None:
     import shutil
     return shutil.which("uv")

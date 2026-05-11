@@ -65,6 +65,44 @@ Ports: 9090 is the only port. 7860 and 5173 are dead (ripped in 5098).
 - If you're restarting the daemon from an agent's Bash tool, use `run_in_background=true` with a plain `talky daemon` command. **Do not** try to manually background it with `&` plus a redirect, especially not inside a compound chain like `talky kill && talky daemon > log 2>&1 &`. That shape hangs the Bash tool: `&` backgrounds the whole chain into a subshell, but `> log 2>&1` is scoped only to `talky daemon` — the subshell itself still holds the inherited stdout/stderr pipes open, so the tool never sees EOF and waits forever. The symptom from a voice session is total silence for minutes, because the agent is stuck in the Bash call. If you genuinely need manual backgrounding from one shell line, wrap the group so the redirect covers the subshell too: `(talky kill && sleep 1 && talky daemon) > /tmp/talky_daemon.log 2>&1 &`. But prefer `run_in_background=true`.
 - Check logs first before forming hypotheses.
 
+## Agent integration modalities
+
+Talky supports two ways an agent (Claude, Pi, etc.) can participate in a voice session:
+
+**Foreground (agent-first, default):** Talky launches the agent. The agent runs in its own window, loads its talky skill, and connects to the talky daemon as a participant. User sees both the agent UI and the talky browser UI. This is the preferred end-state.
+
+**Background (app-first):** Talky owns the agent as an embedded subprocess/backend in its pipeline. No agent UI. Used for lightweight sessions where agent visibility isn't needed.
+
+```
+# Foreground
+talky claude              # default
+talky claude --foreground # -f, explicit
+
+# Background  
+talky claude --background # -b
+```
+
+Per-profile config in `~/.talky/talky-profiles.yaml`: `mode: foreground` or `mode: background`. Flags override config.
+
+### Config layer relationships
+
+```
+voice-profiles.yaml      → TTS provider + STT provider + voice settings
+talky-profiles.yaml      → llm_backend reference + mode (fg/bg)
+llm-backends.yaml        → service_class + extra (pyproject dep) + config
+```
+
+A talky profile joins one row from each layer. `talky claude` resolves: talky-profile `claude` → llm_backend `claude-code` → `ClaudeCodeLLMService` + `claude-code` extra.
+
+## Dependencies
+
+Users should never have to install deps they don't need. The project handles this automatically:
+
+- **TTS/STT providers** — installed at daemon/CLI startup via `shared/dependency_installer.py`, which reads voice profiles to discover what's in use.
+- **LLM backends** — installed on-demand at profile switch time. If a backend needs a third-party SDK, declare `extra: <name>` in `llm-backends.yaml` and add the packages under that extra name in `pyproject.toml`. `switch_to_profile` in `channel.py` calls `install_extra_no_reexec()` automatically. Because the daemon can't re-exec mid-run, installed packages take effect after `talky kill && talky daemon`.
+
+Never add LLM backend deps to top-level `pyproject.toml` `dependencies` — that forces every user to pay for them. Never manually install them with `--with` or `uv pip install` either — that bypasses the on-demand system and will be lost on the next tool reinstall.
+
 ## Conventions
 
 - uv only (no pip/venv)

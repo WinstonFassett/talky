@@ -35,6 +35,7 @@ llm_backends:
   claude-code:
     description: "Claude Code via Agent SDK (thread bridge, turn-boundary interrupt)"
     service_class: "server.backends.claude_code.ClaudeCodeLLMService"
+    extra: "claude-code"
     greeting: "Claude here."
     config:
       permission_mode: "acceptEdits"
