@@ -18,6 +18,13 @@ llm_backends:
       model: "claude-3-5-sonnet-20241022"
       api_key: ""  # Will be loaded from credentials
       session_key: "agent:main:main"  # Default session key
+  openclaw-voice:
+    description: "OpenClaw - native Talk API (streaming, barge-in)"
+    service_class: "server.backends.openclaw.OpenClawVoiceLLMService"
+    greeting: "OpenClaw voice channel open."
+    config:
+      session_key: "agent:main:main"
+      talk_mode: "stt-tts/managed-room"
   pi:
     description: "Pi coding agent (RPC mode, interruptible)"
     service_class: "server.backends.pi_rpc.PiRPCLLMService"
@@ -25,3 +32,18 @@ llm_backends:
     config:
       provider: "github-copilot"
       model: "gpt-4o"
+  amp:
+    description: "Amp coding agent (streaming JSON, steerable)"
+    service_class: "server.backends.amp.AmpLLMService"
+    greeting: "Amp ready."
+    config:
+      mode: "smart"
+      cwd: null
+  claude-code:
+    description: "Claude Code via Agent SDK (thread bridge, turn-boundary interrupt)"
+    service_class: "server.backends.claude_code.ClaudeCodeLLMService"
+    greeting: "Claude here."
+    config:
+      permission_mode: "acceptEdits"
+      max_turns: 10
+      cwd: null
