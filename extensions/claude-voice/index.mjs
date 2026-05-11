@@ -107,6 +107,29 @@ function finishTurn() {
 	}
 }
 
+// Tool-use bookkeeping so tool_end can name the tool by id (Claude's tool_use
+// blocks carry an id; the matching tool_result block back-references it).
+const toolNamesById = new Map();
+
+function emitEvent(kind, text, payload) {
+	const msg = { type: "event", kind };
+	if (text) msg.text = text;
+	if (payload !== undefined) msg.payload = payload;
+	send(msg);
+}
+
+function previewToolInput(name, input) {
+	if (!input || typeof input !== "object") return "";
+	if (typeof input.path === "string") return `: ${input.path}`;
+	if (typeof input.command === "string") {
+		const cmd = input.command;
+		return `: ${cmd.slice(0, 60)}${cmd.length > 60 ? "…" : ""}`;
+	}
+	if (typeof input.pattern === "string") return `: ${input.pattern}`;
+	if (typeof input.file_path === "string") return `: ${input.file_path}`;
+	return "";
+}
+
 /**
  * Pump SDK messages → ws frames. Runs for the lifetime of the session;
  * each new user input pushed onto the queue produces an assistant turn
@@ -114,71 +137,93 @@ function finishTurn() {
  */
 async function pumpQuery() {
 	for await (const msg of queryHandle) {
-		// Streaming token deltas — drive TTS as soon as text arrives.
+		// Streaming deltas — drive TTS (text) or thinking surface.
 		if (msg.type === "stream_event") {
 			const ev = msg.event;
-			if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta") {
-				emitTtsDelta(ev.delta.text);
+			const delta = ev?.delta;
+			if (ev?.type === "content_block_delta" && delta) {
+				if (delta.type === "text_delta") {
+					emitTtsDelta(delta.text);
+				} else if (delta.type === "thinking_delta" && delta.thinking) {
+					// Pipe thinking deltas through the generic event channel
+					// so the client can render them however it wants.
+					emitEvent("thinking", delta.thinking);
+				}
 			}
 			continue;
 		}
 
-		// Final assistant message — finalize the TTS turn and surface
-		// any tool-call breadcrumbs. We don't re-emit the assembled text
-		// because stream_event already streamed it.
+		// System init / compaction / status notices.
+		if (msg.type === "system") {
+			if (msg.subtype === "init") {
+				const info = {
+					session_id: msg.session_id,
+					model: msg.model,
+					cwd: msg.cwd,
+					tools: msg.tools,
+				};
+				emitEvent("info", `Claude session ${msg.model || ""}`.trim(), info);
+			} else if (msg.subtype === "compact_boundary") {
+				emitEvent("info", "context compacted", msg.compact_metadata);
+			}
+			continue;
+		}
+
+		// Rate-limit notices and other status events.
+		if (msg.type === "rate_limit_event") {
+			emitEvent("error", "rate limit", msg);
+			continue;
+		}
+		if (msg.type === "status") {
+			emitEvent("info", msg.text || "status", msg);
+			continue;
+		}
+
+		// Final assistant message — surface tool calls + finalize TTS turn.
 		if (msg.type === "assistant") {
+			if (msg.error) {
+				emitEvent("error", `assistant error: ${msg.error}`, { error: msg.error });
+			}
 			const blocks = msg.message?.content || [];
 			let sawTool = false;
 			for (const block of blocks) {
 				if (block.type === "tool_use") {
 					sawTool = true;
 					const name = block.name || "?";
-					const input = block.input || {};
-					let hint = "";
-					if (typeof input.path === "string") hint = `: ${input.path}`;
-					else if (typeof input.command === "string") {
-						const cmd = input.command;
-						hint = `: ${cmd.slice(0, 60)}${cmd.length > 60 ? "…" : ""}`;
-					} else if (typeof input.pattern === "string") hint = `: ${input.pattern}`;
+					if (block.id) toolNamesById.set(block.id, name);
+					const hint = previewToolInput(name, block.input);
 					send({ type: "tool_start", text: `▶ ${name}${hint}` });
 				}
 			}
-			// Only close out the TTS turn if this assistant message
-			// wasn't a pure tool_use turn (tool_use turns are followed
-			// by tool_result and another assistant message — keep TTS
-			// open across that boundary).
+			// Pure tool_use turn? Keep TTS open across the boundary
+			// (tool_result + assistant text turn follow).
 			if (!sawTool) finishTurn();
 			continue;
 		}
 
 		// Tool-result coming back from the SDK runtime.
-		if (msg.type === "user" && msg.tool_use_result) {
-			const r = msg.tool_use_result;
-			let name = "?";
-			let suffix = "";
-			if (Array.isArray(msg.message?.content)) {
-				for (const block of msg.message.content) {
-					if (block.type === "tool_result") {
-						// Best-effort line count for parity with pi-voice.
-						const txt = Array.isArray(block.content)
-							? block.content
-									.filter((c) => c.type === "text")
-									.map((c) => c.text)
-									.join("\n")
-							: typeof block.content === "string"
-								? block.content
-								: "";
-						const lines = txt ? txt.split("\n").length : 0;
-						if (lines > 0) suffix = ` (${lines} lines)`;
-						if (block.is_error) {
-							send({ type: "tool_end", text: `✗ ${name}` });
-							continue;
-						}
-					}
-				}
+		if (msg.type === "user") {
+			const blocks = Array.isArray(msg.message?.content) ? msg.message.content : [];
+			let emitted = false;
+			for (const block of blocks) {
+				if (block.type !== "tool_result") continue;
+				emitted = true;
+				const name = toolNamesById.get(block.tool_use_id) || "?";
+				const txt = Array.isArray(block.content)
+					? block.content
+							.filter((c) => c.type === "text")
+							.map((c) => c.text)
+							.join("\n")
+					: typeof block.content === "string"
+						? block.content
+						: "";
+				const lines = txt ? txt.split("\n").length : 0;
+				const suffix = lines > 0 ? ` (${lines} lines)` : "";
+				const marker = block.is_error ? "✗" : "✓";
+				send({ type: "tool_end", text: `${marker} ${name}${suffix}` });
+				if (block.tool_use_id) toolNamesById.delete(block.tool_use_id);
 			}
-			send({ type: "tool_end", text: `✓ ${name}${suffix}` });
-			continue;
+			if (emitted) continue;
 		}
 
 		// Turn boundary: result message marks end of one full

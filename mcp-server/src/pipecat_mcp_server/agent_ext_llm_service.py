@@ -19,6 +19,16 @@ Protocol (JSON over WebSocket, text frames):
     {"type": "tts_end"}                   — agent response complete
     {"type": "tool_start", "text": "..."}  — tool call began (e.g. "▶ read_file: foo.py")
     {"type": "tool_end",   "text": "..."}  — tool call finished (e.g. "✓ read_file (42 lines)")
+    {"type": "event", "kind": "<string>", "text": "...", "payload": {...}}
+        — Generic structured-event envelope. ``kind`` is an arbitrary string
+        the backend chose (e.g. "thinking", "error", "info", "rate_limit").
+        The daemon forwards it to the pipeline as
+        AggregatedTextFrame(aggregated_by=kind), so the client's
+        botOutputRenderers can dispatch on ``kind`` to a per-kind UI.
+        ``text`` is a short human-readable summary used as the frame text.
+        ``payload`` is optional structured detail; when present it's
+        JSON-stringified into the frame text as ``text + "\\u0000" + json``
+        so renderers that want the structured data can parse it.
 """
 
 from __future__ import annotations
@@ -119,6 +129,21 @@ class AgentExtensionLLMService(LLMService):
                     text = msg.get("text", "")
                     if text:
                         await self.push_frame(AggregatedTextFrame(text=text, aggregated_by="tool_end"))
+                elif msg_type == "event":
+                    # Generic structured-event envelope. ``kind`` selects the
+                    # client-side renderer; ``text`` is the short summary;
+                    # ``payload`` (optional) is JSON detail appended after a
+                    # NUL byte for renderers that want to parse it.
+                    kind = msg.get("kind") or "event"
+                    text = msg.get("text", "")
+                    payload = msg.get("payload")
+                    if payload is not None:
+                        try:
+                            text = (text or "") + "\x00" + json.dumps(payload)
+                        except (TypeError, ValueError):
+                            pass
+                    if text:
+                        await self.push_frame(AggregatedTextFrame(text=text, aggregated_by=kind))
         except WebSocketDisconnect:
             logger.info("AgentExtLLM: extension disconnected")
         except asyncio.CancelledError:

@@ -22,6 +22,24 @@ import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
 
+/**
+ * Backends emit `{type:"event", kind, text, payload}` over the agent
+ * websocket; the daemon forwards them as AggregatedTextFrame with
+ * aggregated_by=kind and text = "<summary>\x00<json>". Split here so
+ * each renderer gets both the summary and the structured payload.
+ */
+function splitEventContent(content: string): { summary: string; payload: unknown | null } {
+  const i = content.indexOf('\x00');
+  if (i < 0) return { summary: content, payload: null };
+  const summary = content.slice(0, i);
+  const rest = content.slice(i + 1);
+  try {
+    return { summary, payload: JSON.parse(rest) };
+  } catch {
+    return { summary, payload: rest };
+  }
+}
+
 const BOT_OUTPUT_RENDERERS: Record<string, (content: string) => JSX.Element> = {
   tool_start: (content) => (
     <div className="text-xs font-mono text-muted-foreground opacity-70">{content}</div>
@@ -29,9 +47,28 @@ const BOT_OUTPUT_RENDERERS: Record<string, (content: string) => JSX.Element> = {
   tool_end: (content) => (
     <div className="text-xs font-mono text-muted-foreground opacity-70">{content}</div>
   ),
-  thinking: (content) => (
-    <div className="text-xs italic text-muted-foreground opacity-60">{content}</div>
-  ),
+  thinking: (content) => {
+    const { summary } = splitEventContent(content);
+    return (
+      <div className="text-xs italic text-muted-foreground opacity-60">{summary}</div>
+    );
+  },
+  error: (content) => {
+    const { summary, payload } = splitEventContent(content);
+    return (
+      <div className="text-xs font-mono text-red-500" title={payload ? JSON.stringify(payload) : undefined}>
+        ⚠ {summary}
+      </div>
+    );
+  },
+  info: (content) => {
+    const { summary, payload } = splitEventContent(content);
+    return (
+      <div className="text-xs text-muted-foreground opacity-70" title={payload ? JSON.stringify(payload) : undefined}>
+        ℹ {summary}
+      </div>
+    );
+  },
 };
 
 // Pre-load the drop cue so it plays instantly on unexpected disconnect.
