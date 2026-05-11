@@ -255,3 +255,6 @@ server/server-*.key
 
 .desloppify/
 scorecard.png
+
+.zig-cache
+zig-out/
