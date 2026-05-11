@@ -25,10 +25,11 @@ class LLMBackend:
     description: str
     service_class: str
     config: Dict[str, Any]
-    # Optional fixed-string greeting spoken via TTS when this backend
-    # becomes the active profile. ``None`` means silent — the previous
-    # behavior. Ticket 8c9d.
-    greeting: Optional[str] = None
+    # Optional fixed-string announcement spoken via TTS when this backend
+    # becomes the active profile via a *manual picker switch*. Impersonal
+    # system cue ("OpenClaw channel"), not a greeting from the agent.
+    # ``None`` means silent. Tickets 8c9d, e540.
+    announcement: Optional[str] = None
     # Optional fixed-string signoff spoken via TTS when an agent using
     # this backend calls ``request_leave``. ``None`` means no phrase —
     # the descending-beep cue is still played. Ticket 0b80.
@@ -155,7 +156,7 @@ class ProfileManager:
                                 **core_backends[name]["config"],
                                 **user_config.get("config", {})
                             },
-                            greeting=user_config.get("greeting", core_backends[name].get("greeting")),
+                            announcement=user_config.get("announcement", user_config.get("greeting", core_backends[name].get("announcement", core_backends[name].get("greeting")))),
                             signoff=user_config.get("signoff", core_backends[name].get("signoff")),
                         )
                     else:
@@ -165,7 +166,7 @@ class ProfileManager:
                             description=user_config.get("description", ""),
                             service_class=user_config.get("service_class", ""),
                             config=user_config.get("config", {}),
-                            greeting=user_config.get("greeting"),
+                            announcement=user_config.get("announcement", user_config.get("greeting")),
                             signoff=user_config.get("signoff"),
                         )
             else:
@@ -176,7 +177,7 @@ class ProfileManager:
                         description=config["description"],
                         service_class=config["service_class"],
                         config=config["config"],
-                        greeting=config.get("greeting"),
+                        announcement=config.get("announcement", config.get("greeting")),
                         signoff=config.get("signoff"),
                     )
 
@@ -188,7 +189,7 @@ class ProfileManager:
                     description=config["description"],
                     service_class=config["service_class"],
                     config=config["config"],
-                    greeting=config.get("greeting"),
+                    announcement=config.get("announcement", config.get("greeting")),
                     signoff=config.get("signoff"),
                 )
         except Exception as e:
@@ -200,7 +201,7 @@ class ProfileManager:
                     description=config["description"],
                     service_class=config["service_class"],
                     config=config["config"],
-                    greeting=config.get("greeting"),
+                    announcement=config.get("announcement", config.get("greeting")),
                     signoff=config.get("signoff"),
                 )
 

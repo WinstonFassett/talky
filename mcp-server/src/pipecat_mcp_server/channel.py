@@ -481,7 +481,7 @@ class VoiceChannel:
             names = set()
         return [self.MCP_DRIVER_PROFILE, *sorted(names)]
 
-    async def switch_to_profile(self, profile_name: str) -> None:
+    async def switch_to_profile(self, profile_name: str, *, announce: bool = True) -> None:
         """Flip the active LLM profile.
 
         If a pipeline is live, queues a ``ManuallySwitchServiceFrame`` to
@@ -489,6 +489,11 @@ class VoiceChannel:
         just stores the desired profile on the channel; the next pipeline
         build will auto-apply it (Phase 2 restore path). Either way,
         ``_active_profile`` is updated.
+
+        ``announce``: when True (default), speak the profile's
+        ``announcement`` cue ("OpenClaw channel"). Callers triggered by
+        an *agent joining* (e.g. /ws/agent) should pass ``announce=False``
+        so the agent owns its own greeting via the TTS stream. Ticket e540.
 
         Raises ``ValueError`` if the profile isn't known.
         """
@@ -527,17 +532,17 @@ class VoiceChannel:
         logger.info(f"VoiceChannel: active profile → {profile_name!r}")
         await self._emit_profile_changed(profile_name)
 
-        # Auto-greeting (ticket 8c9d). If the newly active backend has a
-        # ``greeting`` configured, speak it so the user hears a presence
-        # signal instead of silence. MCPDriver is always silent — the
-        # joining agent is responsible for its own hello.
-        greeting = self._greeting_for_profile(profile_name)
-        if greeting:
-            try:
-                await self.speak(greeting)
-                logger.info(f"VoiceChannel: greeted with {greeting!r}")
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"VoiceChannel: greeting failed for {profile_name!r}: {e}")
+        # System announcement on manual picker switches only (tickets 8c9d, e540).
+        # Agent-join paths pass announce=False — the agent owns its own greeting
+        # via the extension's TTS stream.
+        if announce:
+            announcement = self._announcement_for_profile(profile_name)
+            if announcement:
+                try:
+                    await self.speak(announcement)
+                    logger.info(f"VoiceChannel: announced {announcement!r}")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"VoiceChannel: announcement failed for {profile_name!r}: {e}")
 
     async def _emit_profile_changed(self, profile_name: str) -> None:
         """Push a profileChanged event to the SSE bus."""
@@ -753,12 +758,14 @@ class VoiceChannel:
         except Exception:  # noqa: BLE001
             return False
 
-    def _greeting_for_profile(self, profile_name: str) -> Optional[str]:
-        """Look up the optional fixed-string greeting for a profile.
+    def _announcement_for_profile(self, profile_name: str) -> Optional[str]:
+        """Look up the optional system announcement for a profile.
 
-        Returns ``None`` for the MCP driver profile (agent-driven), for
-        unknown profiles, or for profiles without a ``greeting`` field.
-        Ticket 8c9d.
+        Impersonal cue spoken on *manual* picker-initiated profile switches
+        ("OpenClaw channel"). Not a greeting from the agent — see ticket e540.
+
+        Returns ``None`` for the MCP driver profile, for unknown profiles,
+        or for profiles without an ``announcement`` field. Tickets 8c9d, e540.
         """
         if profile_name == self.MCP_DRIVER_PROFILE:
             return None
@@ -766,16 +773,15 @@ class VoiceChannel:
             from shared.profile_manager import get_profile_manager
 
             pm = get_profile_manager()
-            # Talky profile → resolve to its backend; fall back to direct lookup.
             tp = pm.get_talky_profile(profile_name)
             backend_name = (tp.llm_backend if tp and tp.llm_backend else None) or profile_name
             backend = pm.get_llm_backend(backend_name)
         except Exception as e:  # noqa: BLE001
-            logger.debug(f"VoiceChannel: could not read backend for greeting lookup: {e}")
+            logger.debug(f"VoiceChannel: could not read backend for announcement lookup: {e}")
             return None
         if backend is None:
             return None
-        return getattr(backend, "greeting", None)
+        return getattr(backend, "announcement", None)
 
     def _signoff_for_profile(self, profile_name: Optional[str]) -> Optional[str]:
         """Look up the optional fixed-string signoff phrase for a profile.

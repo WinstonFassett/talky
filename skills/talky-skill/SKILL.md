@@ -67,6 +67,7 @@ Full-duplex, open-channel audio via browser. Echo cancellation, interruptions, v
 
 **Constraints specific to this mode:**
 
+- **Greet the user when you join.** If the user launched you from the CLI (`talky claude`, `talky pi`, etc.), the talky daemon does NOT speak a system greeting on your behalf — the channel is silent until you do. Your first action after `join_convo()` succeeds should be a short `convo_speak()` greeting in your own voice ("Claude here — what's on your mind?"), then `convo_listen()`. Without this the user is left wondering whether you connected.
 - **After every `convo_speak`, call `convo_listen` immediately.** Forgetting is the single most common way to break a conversation — the user is still standing there and you've silently dropped out of voice. Keep the channel alive.
 - **If the pipeline dies ("voice agent process has stopped"), restart it.** Call `start_convo` again, acknowledge the blip in one sentence, continue. (There is no teardown tool — the pipeline rebuilds on reconnect automatically.)
 - **End on signal.** When the user says "that's all," "we're done," etc., call `request_leave()`. Honor `user_interrupted` if it comes back true; otherwise drop back to text. Don't linger.

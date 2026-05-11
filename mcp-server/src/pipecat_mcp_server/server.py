@@ -764,7 +764,9 @@ def _build_webrtc_routes():
         logger.info(f"/ws/agent: extension connected → profile {active_profile!r} (backend {agent_backend_name!r})")
 
         try:
-            await voice_channel.switch_to_profile(active_profile)
+            # Agent owns its own greeting via the TTS stream — no system
+            # announcement on the join. Ticket e540.
+            await voice_channel.switch_to_profile(active_profile, announce=False)
         except Exception as e:
             logger.warning(f"/ws/agent: could not switch to {active_profile!r}: {e}")
             await websocket.send_text(json.dumps({"type": "error", "message": str(e)}))
