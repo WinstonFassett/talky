@@ -936,6 +936,7 @@ def cmd_launch(args):
         client_url = f"http://{host}:{port}?autoconnect=true"
         webbrowser.open(client_url)
 
+    os.environ["TALKY_PROFILE"] = profile_name
     os.chdir(cwd)
     os.execvp(binary, rendered)
 

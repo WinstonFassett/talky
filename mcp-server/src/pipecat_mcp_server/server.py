@@ -750,20 +750,37 @@ def _build_webrtc_routes():
         # set; the early-return on agent_ext is None guarantees this.
         assert agent_backend_name is not None
 
+        # Read optional hello frame the extension sends immediately on open
+        # before the daemon sends ready. Contains {"type":"hello","profile":"..."}
+        # so we can switch to the exact talky profile that launched this agent
+        # (multiple profiles can share the same agent-ext backend, e.g. pi / claude).
+        hello_profile: Optional[str] = None
+        try:
+            import asyncio
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=0.5)
+            first = json.loads(raw)
+            if first.get("type") == "hello" and first.get("profile"):
+                hello_profile = str(first["profile"])
+        except Exception:
+            pass  # No hello or timeout — fall back to lookup below
+
         # Prefer switching via a user-facing talky profile that uses this
         # backend so the picker shows the right label. Fall back to the
         # backend name if no talky profile points at it.
         from shared.profile_manager import get_profile_manager
         pm = get_profile_manager()
         active_profile: str = agent_backend_name
-        try:
-            for tp_name in pm.list_talky_profiles().keys():
-                tp_obj = pm.get_talky_profile(tp_name)
-                if tp_obj and getattr(tp_obj, "llm_backend", None) == agent_backend_name:
-                    active_profile = tp_name
-                    break
-        except Exception as e:
-            logger.warning(f"/ws/agent: talky-profile lookup failed: {e}")
+        if hello_profile and pm.get_talky_profile(hello_profile) is not None:
+            active_profile = hello_profile
+        else:
+            try:
+                for tp_name in pm.list_talky_profiles().keys():
+                    tp_obj = pm.get_talky_profile(tp_name)
+                    if tp_obj and getattr(tp_obj, "llm_backend", None) == agent_backend_name:
+                        active_profile = tp_name
+                        break
+            except Exception as e:
+                logger.warning(f"/ws/agent: talky-profile lookup failed: {e}")
 
         logger.info(f"/ws/agent: extension connected → profile {active_profile!r} (backend {agent_backend_name!r})")
 

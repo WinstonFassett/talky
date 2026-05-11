@@ -248,6 +248,10 @@ function connect() {
 	ws.addEventListener("open", () => {
 		process.stderr.write(`[claude-voice] connected to ${WS_URL}\n`);
 		reconnectDelay = RECONNECT_DELAY_MS;
+		// Identify which talky profile launched us so the daemon can switch
+		// to the right profile (not just any profile using agent-ext backend).
+		const profile = process.env.TALKY_PROFILE;
+		if (profile) ws.send(JSON.stringify({ type: "hello", profile }));
 		// Build a fresh SDK query per connection. Tearing down + recreating
 		// is the simplest way to deal with the "browser disconnected, pipeline
 		// rebuilt, reconnect" case: there's no shared state across sessions.

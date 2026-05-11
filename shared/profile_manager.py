@@ -16,8 +16,8 @@ BUNDLED_DEFAULTS = Path(__file__).parent.parent / "server" / "config" / "default
 # Override globally via `defaults.greeting` in settings.yaml, or per profile
 # / per backend via `greeting:` in the respective YAML.
 BUILTIN_GREETING_INSTRUCTION = (
-    "Greet the user warmly in one short sentence using your own words, "
-    "then ask what they want to work on."
+    "Greet the user warmly in one short sentence. "
+    "Respond with only your greeting — no preamble, no explanation, no narration of what you're about to do."
 )
 
 CONFIG_FILES = [

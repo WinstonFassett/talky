@@ -58,6 +58,8 @@ export default function (pi: ExtensionAPI) {
 		ws.onopen = () => {
 			reconnectDelay = RECONNECT_DELAY_MS;
 			setStatus("🎙 voice: connected");
+			const profile = process.env["TALKY_PROFILE"];
+			if (profile) ws?.send(JSON.stringify({ type: "hello", profile }));
 		};
 
 		ws.onmessage = (event: MessageEvent) => {
