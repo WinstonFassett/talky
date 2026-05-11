@@ -1,11 +1,17 @@
 # LLM Backends — each needs service_class (dotted import path), config.
-# Optional `greeting` is a fixed TTS line spoken when this backend becomes
-# the active profile (ticket 8c9d). Omit for silent switch-in.
+# Optional `announcement` is an impersonal system cue spoken when the user
+# *manually* switches to this profile in the picker (e.g. "OpenClaw channel").
+# It's a "channel changed" UX cue, not a greeting from the agent. Agents that
+# join via the /ws/agent extension speak their own greeting through the TTS
+# stream — no system announcement fires on that path. Tickets 8c9d, e540.
+# Optional `greeting` is the *instruction* handed to the agent on /ws/agent
+# connect so the agent generates its own greeting words. Set to "__none__"
+# to disable. Omit either field for the default behavior. Ticket 5d95.
 llm_backends:
   openclaw:
     description: "OpenClaw - OpenAI-compatible LLM"
     service_class: "server.backends.openclaw.OpenClawLLMService"
-    greeting: "Hey, OpenClaw here. Ready when you are."
+    announcement: "OpenClaw channel."
     config:
       model: "gpt-4o"
       api_key: ""  # Will be loaded from credentials
@@ -13,7 +19,7 @@ llm_backends:
   moltis:
     description: "Moltis - Anthropic Claude"
     service_class: "server.backends.moltis.MoltisLLMService"
-    greeting: "Moltis here, what's up?"
+    announcement: "Moltis channel."
     config:
       model: "claude-3-5-sonnet-20241022"
       api_key: ""  # Will be loaded from credentials
@@ -21,14 +27,19 @@ llm_backends:
   openclaw-voice:
     description: "OpenClaw - native Talk API (streaming, barge-in)"
     service_class: "server.backends.openclaw.OpenClawVoiceLLMService"
-    greeting: "OpenClaw voice channel open."
+    announcement: "OpenClaw voice channel open."
     config:
       session_key: "agent:main:main"
       talk_mode: "stt-tts/managed-room"
+  agent-ext:
+    description: "Agent extension bridge (WebSocket, any agent CLI)"
+    service_class: "pipecat_mcp_server.agent_ext_llm_service.AgentExtensionLLMService"
+    # No announcement — the agent speaks its own greeting via the TTS stream.
+    config: {}
   pi:
     description: "Pi coding agent (RPC mode, interruptible)"
     service_class: "server.backends.pi_rpc.PiRPCLLMService"
-    greeting: "Pi online."
+    announcement: "Pi channel."
     config:
       provider: "github-copilot"
       model: "gpt-4o"
@@ -36,7 +47,7 @@ llm_backends:
     description: "Claude Code via Agent SDK (thread bridge, turn-boundary interrupt)"
     service_class: "server.backends.claude_code.ClaudeCodeLLMService"
     extra: "claude-code"
-    greeting: "Claude here."
+    announcement: "Claude here."
     config:
       permission_mode: "acceptEdits"
       max_turns: 10

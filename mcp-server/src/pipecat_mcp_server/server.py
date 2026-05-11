@@ -716,41 +716,87 @@ def _build_webrtc_routes():
             },
         )
 
-    async def handle_pi_ws(websocket):
-        """WebSocket endpoint for Pi extensions (/ws/pi).
+    async def handle_agent_ws(websocket):
+        """WebSocket endpoint for agent extensions (/ws/agent).
 
-        Accepts a connection from a Pi voice extension, auto-switches the
-        active profile to __pi__, and bridges STT/TTS/abort signals until
+        Any agent CLI (Pi, Claude, etc.) that loads a talky extension connects
+        here. The handler finds the AgentExtensionLLMService instance in the
+        live pipeline (by type), switches to its profile, and bridges until
         the extension disconnects. On disconnect, reverts to __mcp__.
         """
+        import json
+
+        from pipecat_mcp_server.agent_ext_llm_service import AgentExtensionLLMService
         from starlette.websockets import WebSocketDisconnect, WebSocketState
 
         await websocket.accept()
 
-        pi_ext = voice_channel._pi_ext_service
-        if pi_ext is None:
-            import json
-            await websocket.send_text(json.dumps({"type": "error", "message": "no pi ext service — is the browser connected?"}))
+        # Find the AgentExtensionLLMService instance + its backend name
+        # from the live pipeline. No hardcoded names.
+        agent_ext = None
+        agent_backend_name = None
+        for name, svc in voice_channel._llm_services.items():
+            if isinstance(svc, AgentExtensionLLMService):
+                agent_ext = svc
+                agent_backend_name = name
+                break
+
+        if agent_ext is None:
+            await websocket.send_text(json.dumps({"type": "error", "message": "no agent-ext backend configured — is the browser connected?"}))
             await websocket.close()
             return
 
-        logger.info("/ws/pi: Pi extension connected")
+        # agent_backend_name is set in the loop above whenever agent_ext is
+        # set; the early-return on agent_ext is None guarantees this.
+        assert agent_backend_name is not None
+
+        # Prefer switching via a user-facing talky profile that uses this
+        # backend so the picker shows the right label. Fall back to the
+        # backend name if no talky profile points at it.
+        from shared.profile_manager import get_profile_manager
+        pm = get_profile_manager()
+        active_profile: str = agent_backend_name
+        try:
+            for tp_name in pm.list_talky_profiles().keys():
+                tp_obj = pm.get_talky_profile(tp_name)
+                if tp_obj and getattr(tp_obj, "llm_backend", None) == agent_backend_name:
+                    active_profile = tp_name
+                    break
+        except Exception as e:
+            logger.warning(f"/ws/agent: talky-profile lookup failed: {e}")
+
+        logger.info(f"/ws/agent: extension connected → profile {active_profile!r} (backend {agent_backend_name!r})")
 
         try:
-            await voice_channel.switch_to_profile(voice_channel.PI_EXT_PROFILE)
+            # Agent owns its own greeting via the TTS stream — no system
+            # announcement on the join. Ticket e540.
+            await voice_channel.switch_to_profile(active_profile, announce=False)
         except Exception as e:
-            import json
-            logger.warning(f"/ws/pi: could not switch to __pi__: {e}")
+            logger.warning(f"/ws/agent: could not switch to {active_profile!r}: {e}")
             await websocket.send_text(json.dumps({"type": "error", "message": str(e)}))
             await websocket.close()
             return
 
+        # Resolve the greeting *instruction* (talky-profile → backend →
+        # settings → built-in default). The agent generates its own
+        # greeting words from this instruction. Returns None if greeting
+        # is explicitly disabled for this profile.
+        greeting_instruction: Optional[str] = None
         try:
-            await pi_ext.handle_websocket(websocket)
+            greeting_instruction = pm.resolve_greeting_instruction(active_profile)
+            logger.info(
+                f"/ws/agent: greeting instruction resolved for {active_profile!r}: "
+                f"{greeting_instruction!r}"
+            )
+        except Exception as e:
+            logger.warning(f"/ws/agent: greeting resolve failed: {e}")
+
+        try:
+            await agent_ext.handle_websocket(websocket, greeting_instruction=greeting_instruction)
         except WebSocketDisconnect:
             pass
         finally:
-            logger.info("/ws/pi: Pi extension disconnected — reverting to __mcp__")
+            logger.info(f"/ws/agent: extension disconnected — reverting to {voice_channel.MCP_DRIVER_PROFILE!r}")
             try:
                 if websocket.client_state != WebSocketState.DISCONNECTED:
                     await websocket.close()
@@ -786,7 +832,8 @@ def _build_webrtc_routes():
         # Legacy compat — old CLI may still hit /api/profile.
         Route("/api/profile", handle_get_profile, methods=["GET"]),
         Route("/api/profile", handle_set_profile, methods=["POST"]),
-        WebSocketRoute("/ws/pi", handle_pi_ws),
+        WebSocketRoute("/ws/agent", handle_agent_ws),
+        WebSocketRoute("/ws/pi", handle_agent_ws),  # legacy compat
     ]
     return routes, webrtc_handler
 

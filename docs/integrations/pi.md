@@ -2,169 +2,103 @@
 
 ## Overview
 
-Pi is a coding agent with an extension system. This integration adds voice conversation capabilities to Pi via a **Pi extension** that connects to the **talky daemon**. Pi is the main application; Talky provides voice I/O as a service.
-
-This is the reverse of most Talky integrations: instead of Talky starting an LLM subprocess, Pi starts Talky and uses it for voice.
+Pi is a coding agent with an extension system. This integration adds voice conversation capabilities to Pi via a **WebSocket extension** that connects to the **talky daemon**. Pi runs in its own terminal; the talky daemon runs the voice pipeline and serves a browser UI for audio I/O.
 
 ## Architecture
 
 ```mermaid
 graph TB
-    Pi[Pi Agent + Talky Extension] -->|MCP over HTTP| Daemon[Talky Daemon :9090]
+    Pi[Pi Agent + pi-voice extension] -->|ws://localhost:9090/ws/agent| Daemon[Talky Daemon :9090]
     Browser[WebRTC Audio Client] <-->|WebRTC| Daemon
 ```
 
-The talky daemon is a single process on :9090 that embeds the WebRTC handler, serves the browser UI from `client/dist/`, hosts FastMCP tools, and owns the in-process voice pipeline. One port, one process.
+The talky daemon is a single process on `:9090` that embeds the WebRTC handler, serves the browser UI from `client/dist/`, hosts FastMCP tools, and owns the in-process voice pipeline. One port, one process.
 
 **Components:**
-- **Pi extension** (`pi-extension/index.ts`) — Registers voice tools, manages MCP client
-- **Talky daemon** (`talky daemon`) — Runs the voice pipeline + WebRTC + FastMCP tools
-- **Browser** — Connects to the daemon for WebRTC audio I/O (served at `http://localhost:9090`)
+- **pi-voice extension** (`extensions/pi-voice/extension.ts`) — Bridges Pi to the daemon over a single WebSocket. Pi events → daemon STT/abort frames; daemon `stt` / `greet` messages → Pi user messages.
+- **Talky daemon** (`talky daemon`) — Runs the voice pipeline + WebRTC + the `/ws/agent` endpoint
+- **Browser** — Connects to the daemon for WebRTC audio I/O at `http://localhost:9090`
 
-**Protocol:** The extension speaks MCP streamable-HTTP (JSON-RPC 2.0 over HTTP POST) to the talky daemon on port 9090. Responses can be JSON or SSE. The `convo_listen()` call is long-polling — it blocks until the user speaks.
-
-## Installation
-
-### Quick test
-```bash
-pi -e /path/to/talky/pi-extension/index.ts
-```
-
-### Permanent (auto-discovered)
-```bash
-# Symlink into Pi's extension directory
-ln -s /path/to/talky/pi-extension ~/.pi/agent/extensions/talky
-```
-
-Or add to `~/.pi/agent/settings.json`:
-```json
-{
-  "extensions": ["/path/to/talky/pi-extension/index.ts"]
-}
-```
-
-### Prerequisites
-- `talky` CLI installed and in PATH (runs the talky daemon)
-- A browser (for WebRTC audio connection)
+**Protocol:** The extension speaks a minimal JSON-over-WebSocket protocol (see `agent_ext_llm_service.py` docstring). When the user speaks, the daemon sends `{"type":"stt","text":"..."}`; the extension hands that to Pi as a user message. Pi's response token deltas stream back as `{"type":"tts","text":"..."}` frames. On connect the daemon also sends a `{"type":"greet","instruction":"..."}` so the agent speaks first in its own words (ticket 5d95).
 
 ## Usage
 
-### Start a voice conversation
-
-**Option 1 — Command:**
-```
-/voice
+```bash
+talky pi            # Launch Pi with voice, ensures daemon, opens browser
+talky pi --cwd ~/x  # Run Pi in a specific working directory
 ```
 
-**Option 2 — Natural language (auto-detected):**
-```
-I want a voice conversation
-let's talk
-start voice
+`talky pi` is a shortcut for `talky launch pi`, which reads the `launcher:` block from `~/.talky/talky-profiles.yaml`:
+
+```yaml
+pi:
+  description: "Pi"
+  llm_backend: "agent-ext"
+  launcher:
+    mode: foreground
+    command: ["pi"]
+    extension_arg: "-e"
+    extension: "{project_root}/extensions/pi-voice/extension.ts"
+    autoconnect_browser: true
 ```
 
 ### What happens
-1. Extension checks if the talky daemon is running, starts it if not (`talky daemon`)
-2. Calls MCP `start_convo()` to initialize the voice pipeline
-3. Opens your browser to `http://localhost:9090` for WebRTC audio
-4. Injects voice system prompt so Pi uses speak/listen tools
-5. Pi greets you and starts the conversation loop
-
-### Conversation loop
-Pi uses three tools in a loop:
-- `voice_speak(text)` — Speak to you via TTS
-- `voice_listen()` — Wait for your speech, returns transcription
-- `voice_stop()` — End the session
-
-The flow matches the Pipecat MCP skill behavior:
-- Speak → Listen → (do work) → Speak → Listen → …
-- Pi gives voice progress updates during tasks
-- Say "goodbye" to end the conversation
+1. `talky pi` ensures the daemon is running on `:9090`.
+2. Opens the browser at `http://localhost:9090/?autoconnect=true` for WebRTC audio.
+3. Exec's into `pi -e <project_root>/extensions/pi-voice/extension.ts`.
+4. The extension connects to `ws://localhost:9090/ws/agent`. Daemon switches the active LLM to the `agent-ext` backend (so the picker shows "pi").
+5. Daemon sends a `greet` instruction. Pi generates its own greeting words and streams them back via TTS.
+6. Conversation loop: user speaks → STT → daemon → ws `stt` → Pi user message → Pi generates → ws `tts` deltas → daemon TTS → user hears.
 
 ### Stop
-Say "goodbye" or "stop" during the conversation. Pi will confirm, then call `voice_stop()`.
+Close the Pi terminal (`Ctrl+C` or `/quit`) or close the browser tab. The daemon stays running for the next session.
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TALKY_MCP_PORT` | `9090` | Port for the talky daemon (MCP + WebRTC + browser UI, all one port) |
-
-> Note: pre-5098 there was a separate `TALKY_WEBRTC_PORT` for the legacy pipecat standalone. That port is gone. `pi-extension/index.ts` still has a stale default — tracked in ticket `f9d2`.
+| `TALKY_DAEMON_PORT` | `9090` | Port for the talky daemon (legacy: `TALKY_MCP_PORT`) |
+| `TALKY_DAEMON_HOST` | `localhost` | Host for the talky daemon (legacy: `TALKY_MCP_HOST`) |
+| `TALKY_AGENT_WS_URL` | `ws://localhost:9090/ws/agent` | Full ws URL the extension dials (overrides host/port) |
 
 ## Extension Details
 
-### Registered Tools
+### Wire protocol (excerpt — full spec in `agent_ext_llm_service.py`)
 
-| Tool | Description |
-|------|-------------|
-| `voice_speak(text)` | Speak text via TTS (1-2 sentences) |
-| `voice_listen()` | Block until user speaks, return transcription |
-| `voice_stop()` | End voice session |
+Daemon → extension:
+- `{"type":"ready"}` — handshake after accept
+- `{"type":"greet","instruction":"..."}` — agent should greet in its own words
+- `{"type":"stt","text":"..."}` — user speech transcript
+- `{"type":"abort"}` — VAD barge-in, abort current agent turn
 
-### Registered Command
+Extension → daemon:
+- `{"type":"tts_start"}` — agent response starting
+- `{"type":"tts","text":"..."}` — response token delta
+- `{"type":"tts_end"}` — agent response complete
+- `{"type":"tool_start","text":"..."}` / `{"type":"tool_end","text":"..."}` — tool-call breadcrumbs
+
+### Slash command
 
 | Command | Description |
 |---------|-------------|
-| `/voice` | Start a voice conversation |
-
-### Events Handled
-
-| Event | Behavior |
-|-------|----------|
-| `input` | Detects natural language voice triggers |
-| `before_agent_start` | Injects voice system prompt when voice is active |
-| `session_shutdown` | Cleans up voice resources |
-
-### Footer Status
-When voice is active, the footer shows:
-- 🎤 Voice active
-- 👂 Listening…
-- 🔊 Speaking…
-- ❌ Voice error
-
-## MCP Client Protocol
-
-The extension implements a minimal MCP streamable-HTTP client:
-
-1. **Health check**: `GET /mcp` — any response means server is up
-2. **Initialize**: `POST /mcp` with `{"method": "initialize", ...}` → extracts `mcp-session-id` from response header
-3. **Initialized notification**: `POST /mcp` with `{"method": "notifications/initialized"}`
-4. **Tool calls**: `POST /mcp` with `{"method": "tools/call", "params": {"name": "speak", "arguments": {"text": "..."}}}`
-
-Responses can be `application/json` (simple) or `text/event-stream` (SSE for long-blocking calls like `listen()`). The client handles both.
-
-## Testing
-
-```bash
-# Run integration tests (mock MCP server, no audio needed)
-npx tsx pi-extension/test.ts
-```
-
-Tests verify:
-- MCP initialize handshake
-- Tool calls (start, speak, listen, stop) with JSON responses
-- Tool calls with SSE responses
-- Error handling for unknown tools
-- Full conversation flow
-- Reconnection after disconnect
+| `/voice` | Show talky voice connection status (info only) |
 
 ## Troubleshooting
 
 ### Voice never connects
 **Symptom:** Browser opens but no audio
-**Fix:** Check that `talky daemon` started correctly. Look for errors in the terminal where Pi is running, or tail `~/.talky/run/mcp-daemon.log`.
+**Fix:** Confirm the daemon is up — `curl -s localhost:9090/status`. Read `~/.talky/run/talky-daemon.log` for errors.
 
 ### Extension not loading
-**Symptom:** No `/voice` command available
-**Fix:** Ensure the extension path is correct. Try `pi -e /path/to/talky/pi-extension/index.ts` to test.
+**Symptom:** Pi runs but the daemon never sees an extension connect
+**Fix:** Verify the extension path exists and Pi was launched with `-e` pointing at it. `talky pi` does this automatically.
 
-### listen() times out
-**Symptom:** Voice stops working after a long silence
-**Fix:** The `listen()` call has a 10-minute timeout. If the user doesn't speak for 10 minutes, the call will fail. Just restart with `/voice`.
+### Pi greeted but I want it silent
+**Fix:** Disable greeting at any layer in YAML by setting `greeting: "__none__"`. Sentinel can live on the talky profile, the LLM backend, or `defaults.greeting` in `settings.yaml`.
 
 ## References
 
 - [Pi Extension Docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
-- [MCP Streamable HTTP Spec](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http)
 - [Talky Daemon](../mcp-server/)
+- [agent_ext_llm_service.py](../../mcp-server/src/pipecat_mcp_server/agent_ext_llm_service.py)
+- [extensions/pi-voice/extension.ts](../../extensions/pi-voice/extension.ts)

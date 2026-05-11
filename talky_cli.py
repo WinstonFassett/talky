@@ -673,11 +673,26 @@ def main():
     # Shortcut: treat first non-option, non-command arg as a profile name.
     # `talky openclaw` → `talky profile openclaw`. `cmd_profile` ensures
     # the daemon is up.
-    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "pi", "transcribe", "kill", "profile", "voice", "status"}
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
-        profile_name = sys.argv.pop(1)
-        sys.argv.insert(1, "profile")
-        sys.argv.insert(2, profile_name)
+        candidate = sys.argv[1]
+        # If the profile carries a ``launcher:`` block, route through the
+        # generic launcher path. Otherwise treat it as a daemon-side
+        # profile switch (talky <profile>).
+        try:
+            from shared.profile_manager import get_profile_manager as _gpm
+            _pm = _gpm()
+            _tp = _pm.get_talky_profile(candidate)
+        except Exception:
+            _tp = None
+        if _tp is not None and _tp.launcher:
+            sys.argv.pop(1)
+            sys.argv.insert(1, "launch")
+            sys.argv.insert(2, candidate)
+        else:
+            sys.argv.pop(1)
+            sys.argv.insert(1, "profile")
+            sys.argv.insert(2, candidate)
 
     parser = argparse.ArgumentParser(description="Talky Voice Bot CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -772,15 +787,14 @@ def main():
     ls_parser = subparsers.add_parser("ls", help="List profiles")
     ls_parser.set_defaults(func=lambda args: cmd_list_profiles(args))
 
-    # === pi subcommand ===
-    pi_parser = subparsers.add_parser("pi", help="Start Pi coding agent with voice in this terminal")
-    pi_parser.add_argument(
-        "prompt",
-        nargs="?",
-        help="Optional initial message passed to Pi (e.g. 'Let\\'s work on auth')",
+    # === launch subcommand (generic agent launcher, ticket 5d95) ===
+    launch_parser = subparsers.add_parser(
+        "launch",
+        help="Launch the agent associated with a talky profile (uses launcher: block)",
     )
-    pi_parser.add_argument("--cwd", "-d", help="Working directory for Pi (default: current)")
-    pi_parser.set_defaults(func=cmd_pi)
+    launch_parser.add_argument("profile", help="Talky profile name (must define launcher: in YAML)")
+    launch_parser.add_argument("--cwd", "-d", help="Working directory for the agent (default: current)")
+    launch_parser.set_defaults(func=cmd_launch)
 
     # === auth subcommand ===
     auth_parser = subparsers.add_parser("auth", help="Manage provider credentials")
@@ -826,113 +840,100 @@ def main():
     cmd_profile(args)
 
 
-def cmd_pi(args):
-    """Start Pi coding agent with the talky voice extension.
+def _render_launcher_token(token: str, *, extension: str, cwd: str) -> str:
+    """Expand ``{project_root}``, ``{cwd}``, and ``{extension}`` in a token."""
+    return token.format(
+        project_root=str(_root),
+        cwd=cwd,
+        extension=extension,
+    )
 
-    Ensures the daemon is running, opens the browser, then exec's into
-    `pi -e <extension>` so Pi's terminal UI runs in this terminal with
-    voice live from the start.
+
+def cmd_launch(args):
+    """Generic agent launcher (ticket 5d95).
+
+    Resolves a talky profile, ensures the daemon is up, opens the client
+    in a browser (when the profile asks for it), then exec's into the
+    configured agent command. Replaces the old ``cmd_pi`` / ``cmd_claude``
+    / ``cmd_run_client_profile`` / ``AppLauncher`` zoo.
+
+    Required profile config (in ``talky-profiles.yaml``):
+
+      pi:
+        llm_backend: agent-ext
+        launcher:
+          command: ["pi"]
+          extension_arg: "-e"
+          extension: "{project_root}/extensions/pi-voice/extension.ts"
+          autoconnect_browser: true
+          mode: foreground   # foreground = exec; background = TBD
     """
     import shutil
     import webbrowser
 
-    if not ensure_daemon():
-        sys.exit(1)
-
-    ext_path = _root / "extensions" / "pi-voice" / "extension.ts"
-    if not ext_path.exists():
-        print(f"❌ Pi voice extension not found: {ext_path}", file=sys.stderr)
-        sys.exit(1)
-
-    if not shutil.which("pi"):
-        print("❌ `pi` not found in PATH", file=sys.stderr)
-        sys.exit(1)
-
-    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
-    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
-    client_url = f"http://{host}:{port}?autoconnect=true"
-    webbrowser.open(client_url)
-
-    cwd = getattr(args, "cwd", None)
-    if cwd:
-        os.chdir(cwd)
-
-    pi_cmd = ["pi", "-e", str(ext_path)]
-    prompt = getattr(args, "prompt", None)
-    if prompt:
-        pi_cmd.append(prompt)
-
-    # Replace this process with Pi. Pi's terminal UI runs in this terminal;
-    # the voice extension auto-connects to the daemon.
-    os.execvp("pi", pi_cmd)
-
-
-def cmd_run_client_profile(args):
-    """Run an app profile (e.g., 'talky pi', 'talky claude')."""
-    import asyncio
-
     from shared.profile_manager import get_profile_manager
 
-    profile_name = getattr(args, 'profile', None)
+    profile_name = getattr(args, "profile", None)
     if not profile_name:
         print("❌ No profile specified", file=sys.stderr)
         sys.exit(1)
 
     pm = get_profile_manager()
     profile = pm.get_talky_profile(profile_name)
-    if not (profile and hasattr(profile, 'backend') and hasattr(profile, 'app')):
+    if profile is None:
+        print(f"❌ Unknown talky profile: {profile_name!r}", file=sys.stderr)
+        sys.exit(1)
+    launcher = profile.launcher or {}
+    if not launcher:
         print(
-            f"❌ Profile {profile_name!r} is not a backend+app profile. "
-            f"Expected fields: backend, app.",
+            f"❌ Profile {profile_name!r} has no ``launcher:`` block in talky-profiles.yaml — "
+            f"nothing to launch.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    work_dir = getattr(args, 'dir', None)
-    asyncio.run(_run_backend_client_profile(profile, work_dir))
+    mode = launcher.get("mode", "foreground")
+    if mode != "foreground":
+        print(f"❌ launcher mode {mode!r} not yet implemented (only 'foreground' for now).", file=sys.stderr)
+        sys.exit(1)
 
+    cwd = getattr(args, "cwd", None) or os.getcwd()
 
-async def _run_backend_client_profile(profile, work_dir):
-    """Run a new-style backend + app profile."""
-    import asyncio
+    command = list(launcher.get("command") or [])
+    if not command:
+        print(f"❌ Profile {profile_name!r}.launcher.command is empty.", file=sys.stderr)
+        sys.exit(1)
 
-    from shared.client_launcher import AppLauncher, DaemonManager
+    extension_template = launcher.get("extension")
+    extension_arg = launcher.get("extension_arg", "-e")
 
-    print(f"🚀 Starting {profile.app} with {profile.backend} voice backend...")
+    extension_path = ""
+    if extension_template:
+        extension_path = _render_launcher_token(extension_template, extension="", cwd=cwd)
+        if not Path(extension_path).exists():
+            print(f"❌ Extension not found: {extension_path}", file=sys.stderr)
+            sys.exit(1)
 
-    daemon_manager = DaemonManager()
-    app_launcher = AppLauncher(work_dir)
+    rendered = [_render_launcher_token(tok, extension=extension_path, cwd=cwd) for tok in command]
+    if extension_path and extension_arg:
+        rendered.extend([extension_arg, extension_path])
 
-    try:
-        daemon_config = {}
-        if profile.voice_profile:
-            daemon_config["voice_profile"] = profile.voice_profile
+    binary = rendered[0]
+    if not shutil.which(binary):
+        print(f"❌ `{binary}` not found in PATH", file=sys.stderr)
+        sys.exit(1)
 
-        daemon_available = await daemon_manager.ensure_running(daemon_config)
-        if not daemon_available:
-            print("❌ Failed to start talky daemon")
-            return
+    if not ensure_daemon():
+        sys.exit(1)
 
-        app_config = {}
-        await app_launcher.launch_app(profile.app, app_config)
-        await app_launcher.trigger_voice_command(profile.app)
+    if launcher.get("autoconnect_browser", False):
+        host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
+        port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
+        client_url = f"http://{host}:{port}?autoconnect=true"
+        webbrowser.open(client_url)
 
-        print(f"✅ {profile.app.capitalize()} is running. Use Ctrl+C to stop.")
-
-        app_process = app_launcher.processes.get(profile.app)
-        if app_process:
-            await asyncio.get_event_loop().run_in_executor(None, app_process.wait)
-
-        print(f"👋 {profile.app.capitalize()} session completed.")
-
-    except KeyboardInterrupt:
-        print("\n👋 Shutting down...")
-    except Exception as e:
-        print(f"❌ Error: {e}")
-    finally:
-        await app_launcher.stop_all()
-        await daemon_manager.stop()
-        print("✅ Done")
+    os.chdir(cwd)
+    os.execvp(binary, rendered)
 
 
 if __name__ == "__main__":

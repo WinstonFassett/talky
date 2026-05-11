@@ -4,18 +4,19 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-"""PiExtensionLLMService — bridges a Pi extension WebSocket to the voice pipeline.
+"""AgentExtensionLLMService — bridges an agent extension WebSocket to the voice pipeline.
 
 Protocol (JSON over WebSocket, text frames):
   Daemon → extension:
-    {"type": "ready"}                     — handshake after accept
-    {"type": "stt", "text": "..."}        — user speech transcript
-    {"type": "abort"}                     — VAD barge-in, abort current Pi turn
+    {"type": "ready"}                          — handshake after accept
+    {"type": "greet", "instruction": "..."}    — agent should greet in own words
+    {"type": "stt", "text": "..."}             — user speech transcript
+    {"type": "abort"}                          — VAD barge-in, abort current agent turn
 
   Extension → daemon:
-    {"type": "tts_start"}                 — Pi response starting
+    {"type": "tts_start"}                 — agent response starting
     {"type": "tts", "text": "..."}        — response token delta (stream these)
-    {"type": "tts_end"}                   — Pi response complete
+    {"type": "tts_end"}                   — agent response complete
     {"type": "tool_start", "text": "..."}  — tool call began (e.g. "▶ read_file: foo.py")
     {"type": "tool_end",   "text": "..."}  — tool call finished (e.g. "✓ read_file (42 lines)")
 """
@@ -23,7 +24,7 @@ Protocol (JSON over WebSocket, text frames):
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Optional
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -40,13 +41,14 @@ from pipecat.services.llm_service import LLMService
 from pipecat_mcp_server.talky_turn import UserTurnTextFrame
 
 
-class PiExtensionLLMService(LLMService):
-    """LLM slot for a Pi extension connected over WebSocket.
+class AgentExtensionLLMService(LLMService):
+    """LLM slot for an agent extension connected over WebSocket.
 
-    Sits in the LLMSwitcher as the "__pi__" profile. When a Pi extension
-    connects to /ws/pi, it becomes this service's peer. STT text flows
-    to the extension; TTS text flows back from the extension to TTS/Speaker.
-    InterruptionFrames trigger an abort signal to the extension.
+    Sits in the LLMSwitcher under whatever profile name the user configured.
+    When an agent extension connects to /ws/agent, the handler looks up the
+    service by type, switches to its profile, and calls handle_websocket.
+    STT text flows to the extension; TTS text flows back from the extension
+    to TTS/Speaker. InterruptionFrames trigger an abort signal to the extension.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -54,14 +56,23 @@ class PiExtensionLLMService(LLMService):
         self._ws: Any = None  # starlette WebSocket, set by handle_websocket
         self._send_lock: asyncio.Lock = asyncio.Lock()
 
-    async def handle_websocket(self, ws: Any) -> None:
+    @property
+    def connected(self) -> bool:
+        return self._ws is not None
+
+    async def handle_websocket(self, ws: Any, greeting_instruction: Optional[str] = None) -> None:
         """Accept a WebSocket connection and run until it closes.
 
-        Called by the /ws/pi route handler. Blocks until the extension
-        disconnects. Sends {"type":"ready"} immediately after attach.
+        ``greeting_instruction`` (if provided) is sent as a ``greet``
+        message right after the ``ready`` handshake. The agent extension
+        is expected to feed it to its agent as a user message so the
+        agent generates its own greeting words (which then stream back
+        as ``tts`` frames through the normal pipeline).
         """
         self._ws = ws
         await self._send({"type": "ready"})
+        if greeting_instruction:
+            await self._send({"type": "greet", "instruction": greeting_instruction})
         try:
             await self._reader_loop(ws)
         finally:
@@ -75,7 +86,7 @@ class PiExtensionLLMService(LLMService):
                 import json
                 await self._ws.send_text(json.dumps(msg))
             except Exception as e:
-                logger.warning(f"PiExtLLM: WS send failed: {e}")
+                logger.warning(f"AgentExtLLM: WS send failed: {e}")
 
     async def _reader_loop(self, ws: Any) -> None:
         """Read extension → daemon messages and push pipeline frames."""
@@ -108,25 +119,22 @@ class PiExtensionLLMService(LLMService):
                     text = msg.get("text", "")
                     if text:
                         await self.push_frame(AggregatedTextFrame(text=text, aggregated_by="tool_end"))
-                # unknown types silently ignored
         except WebSocketDisconnect:
-            logger.info("PiExtLLM: extension disconnected")
+            logger.info("AgentExtLLM: extension disconnected")
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.info(f"PiExtLLM: reader ended: {e}")
+            logger.info(f"AgentExtLLM: reader ended: {e}")
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
 
         if isinstance(frame, InterruptionFrame):
-            # VAD barge-in — tell the extension to abort its current Pi turn.
             await self._send({"type": "abort"})
             await self.push_frame(frame, direction)
             return
 
         if isinstance(frame, UserTurnTextFrame):
-            # User turn complete — forward transcript to the extension.
             if frame.text:
                 await self._send({"type": "stt", "text": frame.text})
             return
