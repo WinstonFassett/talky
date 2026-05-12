@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { JSX } from 'react';
 
 import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
-import { ConnectButton, UserAudioControl } from '@pipecat-ai/voice-ui-kit';
+import { ConnectButton, ConversationPanel, UserAudioControl } from '@pipecat-ai/voice-ui-kit';
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
 import type { TransportType } from '../config';
@@ -10,8 +11,34 @@ import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
-import { TranscriptPanel } from './TranscriptPanel';
-import { Panel } from '@pipecat-ai/voice-ui-kit';
+import { Reasoning } from './Reasoning';
+
+function splitEventContent(content: string): string {
+  const i = content.indexOf('\x00');
+  return i < 0 ? content : content.slice(0, i);
+}
+
+const BOT_OUTPUT_RENDERERS: Record<string, (content: string, meta: { spoken: string; unspoken: string }) => JSX.Element> = {
+  thinking: (content) => <Reasoning text={content} isStreaming={false} />,
+  tool_start: (content) => (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono py-0.5">
+      <span className="opacity-40">⟳</span>
+      <span className="opacity-70">{splitEventContent(content)}</span>
+    </div>
+  ),
+  tool_end: (content) => (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono py-0.5">
+      <span>✓</span>
+      <span className="opacity-70">{splitEventContent(content)}</span>
+    </div>
+  ),
+  error: (content) => (
+    <div className="text-xs font-mono text-destructive py-0.5">✗ {splitEventContent(content)}</div>
+  ),
+  info: (content) => (
+    <div className="text-xs text-muted-foreground opacity-50 py-0.5">{splitEventContent(content)}</div>
+  ),
+};
 
 interface TransportWithDataChannel {
   dc?: RTCDataChannel;
@@ -189,10 +216,10 @@ export const App = ({
           />
         </div>
       </div>
-      <div className="flex-1 overflow-hidden flex flex-col px-4 pb-4">
-        <Panel className="h-full overflow-hidden flex flex-col">
-          <TranscriptPanel />
-        </Panel>
+      <div className="flex-1 overflow-hidden px-4">
+        <div className="h-full overflow-hidden">
+          <ConversationPanel conversationElementProps={{ botOutputRenderers: BOT_OUTPUT_RENDERERS }} />
+        </div>
       </div>
     </div>
   );
