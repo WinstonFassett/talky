@@ -145,10 +145,7 @@ async function pumpQuery() {
 				if (delta.type === "text_delta") {
 					emitTtsDelta(delta.text);
 				} else if (delta.type === "thinking_delta" && delta.thinking) {
-					process.stderr.write(`[claude-voice] thinking_delta — emitting event (${delta.thinking.length} chars)\n`);
 					emitEvent("thinking", delta.thinking);
-				} else {
-					process.stderr.write(`[claude-voice] stream_event delta type: ${delta?.type ?? '(none)'}, ev type: ${ev?.type}\n`);
 				}
 			}
 			continue;

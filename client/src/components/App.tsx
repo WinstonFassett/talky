@@ -2,17 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { AggregationMetadata, PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
   ConnectButton,
   ConversationPanel,
   // EventsPanel,
   UserAudioControl,
 } from '@pipecat-ai/voice-ui-kit';
 import type { JSX } from 'react';
-import { RTVIEvent } from '@pipecat-ai/client-js';
-import { usePipecatClientTransportState, useRTVIClientEvent } from '@pipecat-ai/client-react';
+import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
 // Internal transport interface for data channel access (not exposed in public API)
 interface TransportWithDataChannel {
@@ -62,10 +58,30 @@ function ToolEnd({ content }: { content: string }) {
 }
 
 
+function ThinkingBlock({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="text-xs text-muted-foreground opacity-60 my-0.5">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1 cursor-pointer hover:opacity-100 transition-opacity select-none"
+      >
+        <span>{open ? '▾' : '▸'}</span>
+        <span>thinking</span>
+      </button>
+      {open && (
+        <div className="pl-3 border-l border-muted/40 italic whitespace-pre-wrap mt-0.5">
+          {content}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const BOT_OUTPUT_RENDERERS: Record<string, (content: string) => JSX.Element> = {
   tool_start: (content) => <ToolStart content={content} />,
   tool_end:   (content) => <ToolEnd content={content} />,
-  thinking: () => <></>,
+  thinking: (content) => <ThinkingBlock content={content} />,
   error: (content) => {
     const { summary, payload } = splitEventContent(content);
     return (
@@ -87,7 +103,7 @@ const BOT_OUTPUT_RENDERERS: Record<string, (content: string) => JSX.Element> = {
 const AGGREGATION_METADATA: Record<string, AggregationMetadata> = {
   tool_start: { isSpoken: false, displayMode: 'block' },
   tool_end:   { isSpoken: false, displayMode: 'block' },
-  thinking:   { isSpoken: false, displayMode: 'block' },
+  thinking:   { isSpoken: false, displayMode: 'inline' },
   error:      { isSpoken: false, displayMode: 'block' },
   info:       { isSpoken: false, displayMode: 'block' },
 };
@@ -118,12 +134,6 @@ export const App = ({
   const userInitiatedDisconnect = useRef(false);
 
   const [devicesReady, setDevicesReady] = useState(false);
-  const [thinkingText, setThinkingText] = useState('');
-
-  useRTVIClientEvent(RTVIEvent.BotOutput, useCallback((data: { text?: string; aggregated_by?: string; spoken?: boolean } | null) => {
-    if (!data || data.spoken || data.aggregated_by !== 'thinking') return;
-    setThinkingText(prev => prev + (data.text ?? ''));
-  }, []));
 
   // Track whether we've ever been connected — the initial state is
   // "disconnected" before the user connects, and we must not fire
@@ -168,7 +178,6 @@ export const App = ({
       hasBeenConnected.current = true;
       userInitiatedDisconnect.current = false;
       cuePlayedForThisSession.current = false;
-      setThinkingText('');
     }
     if (
       hasBeenConnected.current &&
@@ -312,18 +321,6 @@ export const App = ({
         </div>
       </div>
       <div className="flex-1 overflow-hidden flex flex-col">
-        {thinkingText && (
-          <Collapsible className="px-4 pb-1 shrink-0">
-            <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground opacity-50 hover:opacity-100 transition-opacity cursor-pointer select-none py-0.5">
-              ▸ thinking
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="pl-3 border-l border-muted/40 text-xs italic text-muted-foreground opacity-60 whitespace-pre-wrap mt-0.5 mb-1">
-                {thinkingText}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-        )}
         <div className="flex-1 overflow-hidden px-4">
           <ConversationPanel conversationElementProps={{ botOutputRenderers: BOT_OUTPUT_RENDERERS, aggregationMetadata: AGGREGATION_METADATA }} />
         </div>
