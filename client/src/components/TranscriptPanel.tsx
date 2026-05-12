@@ -78,7 +78,14 @@ function buildNodes(messages: ConversationMessage[]): RenderNode[] {
 
       const isSpoken = part.aggregatedBy === 'sentence' || part.aggregatedBy === 'word' || !part.aggregatedBy;
       if (isSpoken) {
-        if (text) nodes.push({ kind: 'bot-text', text, key: `bottext-${mi}-${pi}` });
+        if (text) {
+          const prev = nodes[nodes.length - 1];
+          if (prev?.kind === 'bot-text') {
+            nodes[nodes.length - 1] = { ...prev, text: prev.text + ' ' + text };
+          } else {
+            nodes.push({ kind: 'bot-text', text, key: `bottext-${mi}-${pi}` });
+          }
+        }
         return;
       }
 
