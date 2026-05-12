@@ -11,7 +11,77 @@ import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
-import { Reasoning } from './Reasoning';
+import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
+
+// Each thinking part rendered by botOutputRenderers carries the full accumulated
+// text so far. We track the latest text + streaming state in a module-level store
+// so all React instances for the same logical turn stay in sync.
+type ThinkingListener = (text: string, isStreaming: boolean) => void;
+
+class ThinkingStore {
+  private text = '';
+  private isStreaming = false;
+  private listeners = new Set<ThinkingListener>();
+  private stopTimer: ReturnType<typeof setTimeout> | null = null;
+
+  push(text: string) {
+    this.text = text;
+    this.isStreaming = true;
+    this.notify();
+    if (this.stopTimer) clearTimeout(this.stopTimer);
+    this.stopTimer = setTimeout(() => {
+      this.isStreaming = false;
+      this.notify();
+    }, 300);
+  }
+
+  subscribe(fn: ThinkingListener) {
+    this.listeners.add(fn);
+    fn(this.text, this.isStreaming);
+    return () => this.listeners.delete(fn);
+  }
+
+  private notify() {
+    for (const fn of this.listeners) fn(this.text, this.isStreaming);
+  }
+}
+
+// One store per rendered thinking block. The renderer creates a new store each
+// time it's called for a *new* block — we detect "new block" by whether the
+// incoming content is shorter than what we last saw (i.e. a new turn started).
+let activeStore: ThinkingStore | null = null;
+let lastSeenLength = 0;
+
+function getStore(content: string): ThinkingStore {
+  if (!activeStore || content.length < lastSeenLength) {
+    activeStore = new ThinkingStore();
+    lastSeenLength = 0;
+  }
+  lastSeenLength = content.length;
+  return activeStore;
+}
+
+function ThinkingBlock({ content }: { content: string }) {
+  const store = getStore(content);
+  store.push(content);
+
+  const [text, setText] = useState(content);
+  const [isStreaming, setIsStreaming] = useState(true);
+
+  useEffect(() => {
+    return store.subscribe((t, s) => {
+      setText(t);
+      setIsStreaming(s);
+    });
+  }, [store]);
+
+  return (
+    <Reasoning isStreaming={isStreaming}>
+      <ReasoningTrigger />
+      <ReasoningContent>{text}</ReasoningContent>
+    </Reasoning>
+  );
+}
 
 function splitEventContent(content: string): string {
   const i = content.indexOf('\x00');
@@ -19,7 +89,7 @@ function splitEventContent(content: string): string {
 }
 
 const BOT_OUTPUT_RENDERERS: Record<string, (content: string, meta: { spoken: string; unspoken: string }) => JSX.Element> = {
-  thinking: (content) => <Reasoning text={content} isStreaming={false} />,
+  thinking: (content) => <ThinkingBlock content={content} />,
   tool_start: (content) => (
     <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono py-0.5">
       <span className="opacity-40">⟳</span>
