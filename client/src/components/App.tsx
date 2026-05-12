@@ -11,6 +11,7 @@ import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
 import { TranscriptPanel } from './TranscriptPanel';
+import { Panel } from '@pipecat-ai/voice-ui-kit';
 
 interface TransportWithDataChannel {
   dc?: RTCDataChannel;
@@ -188,8 +189,10 @@ export const App = ({
           />
         </div>
       </div>
-      <div className="flex-1 overflow-hidden flex flex-col px-4">
-        <TranscriptPanel />
+      <div className="flex-1 overflow-hidden flex flex-col px-4 pb-4">
+        <Panel className="h-full overflow-hidden flex flex-col">
+          <TranscriptPanel />
+        </Panel>
       </div>
     </div>
   );
