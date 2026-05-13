@@ -364,6 +364,29 @@ def cmd_profile(args):
             print("no profiles available — connect a browser to localhost:9090 first")
         return
 
+    # If a resume session ID was given, post it to the daemon before switching.
+    resume_id = getattr(args, "resume", None)
+    if resume_id:
+        resume_url = f"{base_url}/api/resume"
+        resume_body = json.dumps({"session_id": resume_id}).encode("utf-8")
+        resume_req = urllib.request.Request(
+            resume_url, data=resume_body, method="POST",
+            headers={"content-type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(resume_req, timeout=3) as resp:
+                json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                err = json.loads(e.read().decode("utf-8"))
+                print(f"❌ resume failed: {err.get('error', e.reason)}")
+            except Exception:
+                print(f"❌ resume failed: HTTP {e.code}")
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            print(f"❌ could not reach talky daemon at {base_url}: {e}")
+            sys.exit(1)
+
     # POST mode: switch to the named profile
     url = f"{base_url}/api/profile"
     body = json.dumps({"profile": name}).encode("utf-8")
@@ -762,6 +785,7 @@ def main():
         nargs="?",
         help="Profile name to switch to (e.g. openclaw, moltis, __mcp__). Omit to list.",
     )
+    profile_parser.add_argument("--resume", "-r", metavar="SESSION_ID", help="Resume a previous agent session by ID")
     profile_parser.set_defaults(func=cmd_profile)
 
     # === voice subcommand ===

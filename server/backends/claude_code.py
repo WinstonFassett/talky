@@ -167,6 +167,7 @@ class ClaudeCodeLLMService(LLMService):
         model: Optional[str] = None,
         permission_mode: str = "acceptEdits",
         max_turns: int = 10,
+        resume: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -179,6 +180,7 @@ class ClaudeCodeLLMService(LLMService):
         self._model = model
         self._permission_mode = permission_mode
         self._max_turns = max_turns
+        self._resume = resume
         self._bridge: Optional[_ClaudeSDKThread] = None
         self._frame_queue: asyncio.Queue = asyncio.Queue()
         self._reader_task: Optional[asyncio.Task] = None
@@ -188,13 +190,19 @@ class ClaudeCodeLLMService(LLMService):
             permission_mode=self._permission_mode,
             max_turns=self._max_turns,
             include_partial_messages=True,  # enables text_delta streaming
-            continue_conversation=True,     # resume last session without re-tokenizing
+            continue_conversation=not self._resume,  # skip if explicit resume given
         )
+        if self._resume:
+            opts.resume = self._resume
         if self._model:
             opts.model = self._model
         if self._cwd:
             opts.cwd = self._cwd
         return opts
+
+    def set_resume(self, session_id: Optional[str]) -> None:
+        """Set a session ID to resume on the next pipeline start. One-shot: clears after use."""
+        self._resume = session_id
 
     async def start(self, frame: StartFrame):
         await super().start(frame)
@@ -203,6 +211,7 @@ class ClaudeCodeLLMService(LLMService):
         loop = asyncio.get_running_loop()
         self._frame_queue = asyncio.Queue()
         self._bridge = _ClaudeSDKThread(self._build_options(), loop, self._frame_queue)
+        self._resume = None  # one-shot: clear after building options
         self._bridge.start()
         self._reader_task = asyncio.create_task(self._drain_frames())
         logger.info("ClaudeCodeLLMService started (thread bridge)")

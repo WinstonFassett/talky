@@ -673,6 +673,41 @@ def _build_webrtc_routes():
             "active": profile,
         })
 
+    async def handle_set_resume(request: Request):
+        """POST /api/resume — set a session ID to resume on the next pipeline start.
+
+        Accepts ``?session_id=UUID`` or JSON ``{"session_id": "UUID"}``.
+        Targets the currently active LLM backend if it supports set_resume().
+        """
+        session_id: Optional[str] = request.query_params.get("session_id")
+        if session_id is None:
+            try:
+                body = await request.json()
+                session_id = body.get("session_id") if isinstance(body, dict) else None
+            except Exception:
+                session_id = None
+
+        if not session_id:
+            return JSONResponse(
+                {"error": "missing 'session_id' — provide ?session_id=UUID or JSON body"},
+                status_code=400,
+            )
+
+        active = voice_channel._active_profile  # noqa: SLF001
+        from shared.profile_manager import get_profile_manager as _gpm
+        _pm = _gpm()
+        _tp = _pm.get_talky_profile(active) if active else None
+        backend_name = (_tp.llm_backend if _tp and _tp.llm_backend else None) or active
+        svc = voice_channel._llm_services.get(backend_name)  # noqa: SLF001
+        if svc is None or not hasattr(svc, "set_resume"):
+            return JSONResponse(
+                {"error": f"active backend {backend_name!r} does not support resume"},
+                status_code=409,
+            )
+
+        svc.set_resume(session_id)
+        return JSONResponse({"status": "ok", "session_id": session_id, "backend": backend_name})
+
     async def handle_events(request: Request):
         """GET /api/events — SSE stream of daemon state changes.
 
@@ -845,6 +880,7 @@ def _build_webrtc_routes():
         Route("/api/profiles/switch", handle_switch_profile, methods=["POST"]),
         Route("/api/voices", handle_get_voices, methods=["GET"]),
         Route("/api/voices/switch", handle_switch_voice, methods=["POST"]),
+        Route("/api/resume", handle_set_resume, methods=["POST"]),
         Route("/api/events", handle_events, methods=["GET"]),
         # Legacy compat — old CLI may still hit /api/profile.
         Route("/api/profile", handle_get_profile, methods=["GET"]),
