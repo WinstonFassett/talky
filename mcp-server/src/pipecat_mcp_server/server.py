@@ -679,13 +679,13 @@ def _build_webrtc_routes():
         Accepts ``?session_id=UUID`` or JSON ``{"session_id": "UUID"}``.
         Targets the currently active LLM backend if it supports set_resume().
         """
-        session_id: Optional[str] = request.query_params.get("session_id")
-        if session_id is None:
-            try:
-                body = await request.json()
-                session_id = body.get("session_id") if isinstance(body, dict) else None
-            except Exception:
-                session_id = None
+        body: dict = {}
+        try:
+            body = await request.json() or {}
+        except Exception:
+            pass
+        session_id: Optional[str] = request.query_params.get("session_id") or body.get("session_id")
+        cwd: Optional[str] = request.query_params.get("cwd") or body.get("cwd")
 
         if not session_id:
             return JSONResponse(
@@ -706,6 +706,8 @@ def _build_webrtc_routes():
             )
 
         svc.set_resume(session_id)
+        if cwd and hasattr(svc, "_cwd"):
+            svc._cwd = cwd  # noqa: SLF001
         return JSONResponse({"status": "ok", "session_id": session_id, "backend": backend_name})
 
     async def handle_events(request: Request):

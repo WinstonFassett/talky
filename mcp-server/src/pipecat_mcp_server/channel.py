@@ -134,12 +134,14 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
     # file only after successful injection so it survives to the right backend.
     startup_path = _Path.home() / ".talky" / "run" / "talky-args.json"
     _startup_resume: str | None = None
+    _startup_cwd: str | None = None
     if startup_path.exists():
         try:
             startup = _json.loads(startup_path.read_text())
             resume_cfg = startup.get("resume") or {}
             if resume_cfg.get("backend") == backend_name:
                 _startup_resume = resume_cfg.get("session_id")
+                _startup_cwd = resume_cfg.get("cwd")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to read talky-args.json: {e}")
 
@@ -152,8 +154,11 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
 
     if _startup_resume:
         import inspect as _inspect
-        if "resume" in _inspect.signature(cls.__init__).parameters:
+        sig = _inspect.signature(cls.__init__).parameters
+        if "resume" in sig:
             config["resume"] = _startup_resume
+            if _startup_cwd and "cwd" in sig:
+                config["cwd"] = _startup_cwd
             try:
                 startup_path.unlink(missing_ok=True)
             except Exception:  # noqa: BLE001

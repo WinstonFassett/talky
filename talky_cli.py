@@ -362,6 +362,7 @@ def cmd_profile(args):
         return
 
     resume_id = getattr(args, "resume", None)
+    cwd_arg = getattr(args, "cwd", None)
     daemon_was_running = talky_daemon_is_running()
 
     if resume_id and not daemon_was_running:
@@ -373,8 +374,11 @@ def cmd_profile(args):
             _backend = (_tp.llm_backend if _tp and _tp.llm_backend else None) or name
         except Exception:
             _backend = name
+        _resume_entry: dict = {"backend": _backend, "session_id": resume_id}
+        if cwd_arg:
+            _resume_entry["cwd"] = str(Path(cwd_arg).expanduser().resolve())
         _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
-        _DAEMON_ARGS_PATH.write_text(json.dumps({"resume": {"backend": _backend, "session_id": resume_id}}))
+        _DAEMON_ARGS_PATH.write_text(json.dumps({"resume": _resume_entry}))
 
     if not ensure_daemon():
         sys.exit(1)
@@ -382,7 +386,10 @@ def cmd_profile(args):
     if resume_id and daemon_was_running:
         # Daemon was already running — post live; startup file not involved.
         resume_url = f"{base_url}/api/resume"
-        resume_body = json.dumps({"session_id": resume_id}).encode("utf-8")
+        _live_resume: dict = {"session_id": resume_id}
+        if cwd_arg:
+            _live_resume["cwd"] = str(Path(cwd_arg).expanduser().resolve())
+        resume_body = json.dumps(_live_resume).encode("utf-8")
         resume_req = urllib.request.Request(
             resume_url, data=resume_body, method="POST",
             headers={"content-type": "application/json"},
@@ -801,6 +808,7 @@ def main():
         help="Profile name to switch to (e.g. openclaw, moltis, __mcp__). Omit to list.",
     )
     profile_parser.add_argument("--resume", "-r", metavar="SESSION_ID", help="Resume a previous agent session by ID")
+    profile_parser.add_argument("--cwd", "-d", metavar="DIR", help="Working directory for the agent session")
     profile_parser.set_defaults(func=cmd_profile)
 
     # === voice subcommand ===
