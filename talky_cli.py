@@ -365,7 +365,19 @@ def cmd_profile(args):
     cwd_arg = getattr(args, "cwd", None)
     daemon_was_running = talky_daemon_is_running()
 
-    if resume_id and not daemon_was_running:
+    # Check if pipeline is live — only post live if services are already built.
+    _pipeline_live = False
+    if daemon_was_running:
+        try:
+            _st_url = f"http://{os.environ.get('TALKY_MCP_HOST', 'localhost')}:{int(os.environ.get('TALKY_MCP_PORT', '9090'))}/status"
+            import urllib.request as _ur
+            with _ur.urlopen(_st_url, timeout=2) as _r:
+                _st = json.loads(_r.read())
+            _pipeline_live = _st.get("channel", {}).get("live", False)
+        except Exception:
+            pass
+
+    if resume_id and not (daemon_was_running and _pipeline_live):
         # Resolve the backend name so the startup file targets only that backend.
         try:
             from shared.profile_manager import get_profile_manager as _gpm
@@ -383,7 +395,7 @@ def cmd_profile(args):
     if not ensure_daemon():
         sys.exit(1)
 
-    if resume_id and daemon_was_running:
+    if resume_id and daemon_was_running and _pipeline_live:
         # Daemon was already running — post live; startup file not involved.
         resume_url = f"{base_url}/api/resume"
         _live_resume: dict = {"session_id": resume_id}

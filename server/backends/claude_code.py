@@ -28,6 +28,7 @@ from typing import Optional
 
 from loguru import logger
 from pipecat.frames.frames import (
+    AggregatedTextFrame,
     CancelFrame,
     EndFrame,
     Frame,
@@ -47,6 +48,7 @@ try:
         AssistantMessage,
         ResultMessage,
         TextBlock,
+        ThinkingBlock,
         ToolUseBlock,
         ClaudeCodeOptions,
         query,
@@ -142,10 +144,12 @@ class _ClaudeSDKThread:
     def _route_message(self, msg):
         if not _SDK_AVAILABLE:
             return
-        if isinstance(msg, AssistantMessage):
+        if isinstance(msg, AssistantMessage):  # type: ignore[possibly-unbound]
             for block in msg.content:
                 if isinstance(block, TextBlock) and block.text:
                     self._put_frame(("text", block.text))
+                elif isinstance(block, ThinkingBlock) and block.thinking:
+                    self._put_frame(("thinking", block.thinking))
                 elif isinstance(block, ToolUseBlock):
                     self._put_frame(("tool_start", block.name))
         elif isinstance(msg, ResultMessage):
