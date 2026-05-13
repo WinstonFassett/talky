@@ -120,16 +120,44 @@ from pipecat_mcp_server.talky_turn import TalkyUserTurnDetector
 
 def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
     """Build a fresh LLM service instance for the named backend."""
+    import json as _json
+    from pathlib import Path as _Path
+
     backend = pm.get_llm_backend(backend_name)
     if backend is None:
         raise ValueError(f"backend {backend_name!r} not configured")
+
+    config = dict(backend.config or {})
+
+    # One-shot startup config: read ~/.talky/run/talky-startup.json if present.
+    # Only inject resume into backends whose constructor accepts it; delete the
+    # file only after successful injection so it survives to the right backend.
+    startup_path = _Path.home() / ".talky" / "run" / "talky-startup.json"
+    _startup_resume: str | None = None
+    if startup_path.exists():
+        try:
+            startup = _json.loads(startup_path.read_text())
+            _startup_resume = (startup.get("resume") or {}).get("session_id")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to read talky-startup.json: {e}")
 
     module_path = ".".join(backend.service_class.split(".")[:-1])
     class_name = backend.service_class.split(".")[-1]
     if not module_path.startswith("server.") and not module_path.startswith("pipecat_mcp_server.") and not module_path.startswith("."):
         module_path = f"server.{module_path}"
     llm_module = importlib.import_module(module_path)
-    return getattr(llm_module, class_name)(**backend.config)
+    cls = getattr(llm_module, class_name)
+
+    if _startup_resume:
+        import inspect as _inspect
+        if "resume" in _inspect.signature(cls.__init__).parameters:
+            config["resume"] = _startup_resume
+            try:
+                startup_path.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    return cls(**config)
 
 
 class VoiceChannel:

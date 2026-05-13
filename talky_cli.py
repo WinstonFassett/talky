@@ -332,9 +332,6 @@ def cmd_profile(args):
     import urllib.error
     import urllib.request
 
-    if not ensure_daemon():
-        sys.exit(1)
-
     host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
     port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
     base_url = f"http://{host}:{port}"
@@ -364,8 +361,17 @@ def cmd_profile(args):
             print("no profiles available — connect a browser to localhost:9090 first")
         return
 
-    # If a resume session ID was given, post it to the daemon before switching.
+    # If a resume session ID was given, write it to the startup file before
+    # ensure_daemon() so a fresh daemon picks it up at pipeline build time.
+    # If the daemon is already running, also post it live via /api/resume.
     resume_id = getattr(args, "resume", None)
+    if resume_id:
+        _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
+        _DAEMON_STARTUP_PATH.write_text(json.dumps({"resume": {"session_id": resume_id}}))
+
+    if not ensure_daemon():
+        sys.exit(1)
+
     if resume_id:
         resume_url = f"{base_url}/api/resume"
         resume_body = json.dumps({"session_id": resume_id}).encode("utf-8")
@@ -583,6 +589,7 @@ _DAEMON_RUN_DIR = Path.home() / ".talky" / "run"
 _DAEMON_READY_PATH = _DAEMON_RUN_DIR / "talky-daemon.ready"
 _DAEMON_PID_PATH = _DAEMON_RUN_DIR / "talky-daemon.pid"
 _DAEMON_LOCK_PATH = _DAEMON_RUN_DIR / "talky-daemon.lock"
+_DAEMON_STARTUP_PATH = _DAEMON_RUN_DIR / "talky-startup.json"
 
 
 def talky_daemon_is_running() -> bool:
