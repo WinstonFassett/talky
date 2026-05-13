@@ -151,23 +151,15 @@ async function pumpQuery() {
 			continue;
 		}
 
-		// System init / compaction / status notices.
+		// System init fires once per turn — use it to track local state, don't surface to UI.
 		if (msg.type === "system") {
-			if (msg.subtype === "init") {
-				const info = {
-					session_id: msg.session_id,
-					model: msg.model,
-					cwd: msg.cwd,
-					tools: msg.tools,
-				};
-				emitEvent("info", `Claude session ${msg.model || ""}`.trim(), info);
-			} else if (msg.subtype === "compact_boundary") {
+			if (msg.subtype === "compact_boundary") {
 				emitEvent("info", "context compacted", msg.compact_metadata);
 			}
 			continue;
 		}
 
-		// Rate-limit notices and other status events.
+		// Rate-limit notices.
 		if (msg.type === "rate_limit_event") {
 			const status = msg.rate_limit_info?.status;
 			if (status === "rejected" || status === "allowed_warning") {
@@ -176,7 +168,6 @@ async function pumpQuery() {
 			continue;
 		}
 		if (msg.type === "status") {
-			emitEvent("info", msg.text || "status", msg);
 			continue;
 		}
 
