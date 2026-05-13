@@ -129,10 +129,10 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
 
     config = dict(backend.config or {})
 
-    # One-shot startup config: read ~/.talky/run/talky-startup.json if present.
+    # One-shot startup config: read ~/.talky/run/talky-args.json if present.
     # Only inject resume into backends whose constructor accepts it; delete the
     # file only after successful injection so it survives to the right backend.
-    startup_path = _Path.home() / ".talky" / "run" / "talky-startup.json"
+    startup_path = _Path.home() / ".talky" / "run" / "talky-args.json"
     _startup_resume: str | None = None
     if startup_path.exists():
         try:
@@ -141,7 +141,7 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
             if resume_cfg.get("backend") == backend_name:
                 _startup_resume = resume_cfg.get("session_id")
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"Failed to read talky-startup.json: {e}")
+            logger.warning(f"Failed to read talky-args.json: {e}")
 
     module_path = ".".join(backend.service_class.split(".")[:-1])
     class_name = backend.service_class.split(".")[-1]

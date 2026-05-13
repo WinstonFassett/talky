@@ -374,7 +374,7 @@ def cmd_profile(args):
         except Exception:
             _backend = name
         _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
-        _DAEMON_STARTUP_PATH.write_text(json.dumps({"resume": {"backend": _backend, "session_id": resume_id}}))
+        _DAEMON_ARGS_PATH.write_text(json.dumps({"resume": {"backend": _backend, "session_id": resume_id}}))
 
     if not ensure_daemon():
         sys.exit(1)
@@ -597,7 +597,7 @@ _DAEMON_RUN_DIR = Path.home() / ".talky" / "run"
 _DAEMON_READY_PATH = _DAEMON_RUN_DIR / "talky-daemon.ready"
 _DAEMON_PID_PATH = _DAEMON_RUN_DIR / "talky-daemon.pid"
 _DAEMON_LOCK_PATH = _DAEMON_RUN_DIR / "talky-daemon.lock"
-_DAEMON_STARTUP_PATH = _DAEMON_RUN_DIR / "talky-startup.json"
+_DAEMON_ARGS_PATH = _DAEMON_RUN_DIR / "talky-args.json"
 
 
 def talky_daemon_is_running() -> bool:
