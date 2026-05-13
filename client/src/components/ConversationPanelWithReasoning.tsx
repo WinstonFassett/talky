@@ -6,7 +6,6 @@ import {
   MessageContainer,
   TextInput,
   usePipecatConversation,
-  cn,
 } from '@pipecat-ai/voice-ui-kit';
 import { MessagesSquareIcon } from 'lucide-react';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
@@ -71,16 +70,11 @@ function stripThinkingParts(message: ConversationMessage): ConversationMessage {
   };
 }
 
-function MessageWithReasoning({ message, isLastAssistant }: { message: ConversationMessage; isLastAssistant: boolean }) {
+function MessageWithReasoning({ message }: { message: ConversationMessage }) {
   const thinkingText = getThinkingText(message);
   const strippedMessage = useMemo(() => stripThinkingParts(message), [message]);
   const onlyThinking = hasOnlyThinking(message);
-
-  // isStreaming: true while this is the last assistant message and it's still growing
-  // We detect "still streaming" by checking if there are thinking parts at all and
-  // the message is the current last assistant turn. The Reasoning component handles
-  // auto-close on its own once isStreaming flips to false.
-  const isStreaming = isLastAssistant && thinkingText.length > 0;
+  const isStreaming = !message.final;
 
   return (
     <div>
@@ -105,14 +99,6 @@ function ConversationMessages() {
   const { messages: allMessages } = usePipecatConversation({ aggregationMetadata: AGGREGATION_METADATA });
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Find index of last assistant message for streaming detection
-  const lastAssistantIdx = useMemo(() => {
-    for (let i = allMessages.length - 1; i >= 0; i--) {
-      if (allMessages[i].role === 'assistant') return i;
-    }
-    return -1;
-  }, [allMessages]);
-
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -131,7 +117,6 @@ function ConversationMessages() {
               <MessageWithReasoning
                 key={`${message.createdAt}-${index}`}
                 message={message}
-                isLastAssistant={index === lastAssistantIdx}
               />
             );
           }
