@@ -849,6 +849,36 @@ def _render_launcher_token(token: str, *, extension: str, cwd: str) -> str:
     )
 
 
+def _ensure_claude_skill_installed() -> None:
+    """Copy the talky skill into ~/.claude/skills/talky/ if not already there."""
+    import shutil
+    skill_dest = Path.home() / ".claude" / "skills" / "talky" / "SKILL.md"
+    if skill_dest.exists():
+        return
+    skill_source = _root / "skills" / "talky-skill" / "SKILL.md"
+    if not skill_source.exists():
+        print(f"⚠️  Talky skill not found at {skill_source} — skipping install", file=sys.stderr)
+        return
+    skill_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(skill_source, skill_dest)
+    print(f"✅ Talky skill installed: {skill_dest}")
+
+
+def _ensure_claude_mcp_connected() -> None:
+    """Add the talky MCP server to Claude's config if not already present."""
+    import subprocess as _sp
+    try:
+        result = _sp.run(["claude", "mcp", "list"], capture_output=True, text=True, timeout=10)
+        if "talky" in result.stdout or "pipecat-mcp-server" in result.stdout:
+            return
+        _sp.run(
+            ["claude", "mcp", "add", "--transport", "http", "talky", "http://localhost:9090/mcp"],
+            capture_output=True, timeout=30,
+        )
+    except Exception as e:
+        print(f"⚠️  Could not auto-configure Claude MCP: {e}", file=sys.stderr)
+
+
 def cmd_launch(args):
     """Generic agent launcher (ticket 5d95).
 
@@ -935,6 +965,12 @@ def cmd_launch(args):
         port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
         client_url = f"http://{host}:{port}?autoconnect=true"
         webbrowser.open(client_url)
+
+    prompt = launcher.get("prompt")
+    if prompt and binary == "claude":
+        _ensure_claude_skill_installed()
+        _ensure_claude_mcp_connected()
+        rendered.append(prompt)
 
     os.environ["TALKY_PROFILE"] = profile_name
     os.chdir(cwd)

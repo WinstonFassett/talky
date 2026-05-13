@@ -31,14 +31,14 @@ talky_profiles:
     description: "Pi (background)"
     llm_backend: "pi"
 
-  # Claude — foreground (Node-side Claude Agent SDK bridge)
+  # Claude — foreground (Claude Code TUI, talky skill auto-installed, voice convo auto-started)
   claude:
     description: "Claude"
     llm_backend: "agent-ext"
     launcher:
       mode: foreground
-      command: ["node", "{extension}"]
-      extension: "{project_root}/extensions/claude-voice/index.mjs"
+      command: ["claude"]
+      prompt: "I want to have a voice conversation"
       autoconnect_browser: true
 
   # Claude — background (daemon-side Agent SDK thread bridge, no terminal)
