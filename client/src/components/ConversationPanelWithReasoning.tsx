@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useRef, useCallback, memo } from 'react';
-import type { ConversationMessage, BotOutputText } from '@pipecat-ai/voice-ui-kit';
+import { useEffect, useMemo, useRef, useCallback, memo, Fragment } from 'react';
+import type { ConversationMessage, BotOutputText, ConversationMessagePart, AggregationMetadata } from '@pipecat-ai/voice-ui-kit';
 import {
   Panel, PanelContent, PanelHeader,
   Tabs, TabsContent, TabsList, TabsTrigger,
-  MessageContainer,
+  MessageRole,
   TextInput,
   usePipecatConversation,
 } from '@pipecat-ai/voice-ui-kit';
 import { MessagesSquareIcon } from 'lucide-react';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
 
-const AGGREGATION_METADATA = {
+const AGGREGATION_METADATA: Record<string, AggregationMetadata> = {
   thinking: { spoken: false, displayMode: 'block' as const },
   tool_start: { spoken: false, displayMode: 'block' as const },
   tool_end: { spoken: false, displayMode: 'block' as const },
@@ -27,21 +27,18 @@ function isBotOutputText(val: unknown): val is BotOutputText {
   return typeof val === 'object' && val !== null && 'spoken' in val && 'unspoken' in val;
 }
 
-function getThinkingText(message: ConversationMessage): string {
-  return message.parts
-    .filter(p => p.aggregatedBy === 'thinking')
-    .map(p => {
-      if (isBotOutputText(p.text)) return (p.text as BotOutputText).spoken + (p.text as BotOutputText).unspoken;
-      return typeof p.text === 'string' ? p.text : '';
-    })
-    .join('');
+function partText(part: ConversationMessagePart): string {
+  if (isBotOutputText(part.text)) return part.text.spoken + part.text.unspoken;
+  return typeof part.text === 'string' ? part.text : '';
 }
 
-function hasOnlyThinking(message: ConversationMessage): boolean {
-  return message.parts.every(p => p.aggregatedBy === 'thinking');
+function splitPayload(part: ConversationMessagePart): { spoken: string; unspoken: string } {
+  if (isBotOutputText(part.text)) return { spoken: part.text.spoken, unspoken: part.text.unspoken };
+  const text = typeof part.text === 'string' ? part.text : '';
+  return { spoken: text, unspoken: '' };
 }
 
-const BOT_OUTPUT_RENDERERS_NO_THINKING: Record<string, (content: string) => React.JSX.Element> = {
+const BLOCK_RENDERERS: Record<string, (content: string) => React.JSX.Element> = {
   tool_start: (content) => (
     <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono py-0.5">
       <span className="opacity-40">⟳</span>
@@ -62,35 +59,70 @@ const BOT_OUTPUT_RENDERERS_NO_THINKING: Record<string, (content: string) => Reac
   ),
 };
 
-// Strip thinking parts out of a message before passing to MessageContainer
-function stripThinkingParts(message: ConversationMessage): ConversationMessage {
-  return {
-    ...message,
-    parts: message.parts.filter(p => p.aggregatedBy !== 'thinking'),
-  };
+function renderPart(part: ConversationMessagePart, idx: number): React.ReactNode {
+  const key = idx;
+  if (part.aggregatedBy === 'thinking') return null;
+
+  const agg = part.aggregatedBy;
+  if (agg && BLOCK_RENDERERS[agg]) {
+    const text = partText(part);
+    return <Fragment key={key}>{BLOCK_RENDERERS[agg](text)}</Fragment>;
+  }
+
+  const { spoken, unspoken } = splitPayload(part);
+  return (
+    <span key={key}>
+      {spoken}
+      {unspoken && <span className="text-muted-foreground">{unspoken}</span>}
+    </span>
+  );
 }
 
-function MessageWithReasoning({ message }: { message: ConversationMessage }) {
-  const thinkingText = getThinkingText(message);
-  const strippedMessage = useMemo(() => stripThinkingParts(message), [message]);
-  const onlyThinking = hasOnlyThinking(message);
+function AssistantMessage({ message }: { message: ConversationMessage }) {
   const isStreaming = !message.final;
 
+  const thinkingText = useMemo(
+    () =>
+      message.parts
+        .filter(p => p.aggregatedBy === 'thinking')
+        .map(p => partText(p))
+        .join(''),
+    [message.parts],
+  );
+
+  const visibleParts = useMemo(
+    () => message.parts.filter(p => p.aggregatedBy !== 'thinking'),
+    [message.parts],
+  );
+
   return (
-    <div>
+    <div className="mb-4">
+      <MessageRole role="assistant" className="mb-1" />
       {thinkingText && (
-        <Reasoning isStreaming={isStreaming} className="mb-1">
+        <Reasoning isStreaming={isStreaming} className="mb-2">
           <ReasoningTrigger />
           <ReasoningContent>{thinkingText}</ReasoningContent>
         </Reasoning>
       )}
-      {!onlyThinking && (
-        <MessageContainer
-          message={strippedMessage}
-          botOutputRenderers={BOT_OUTPUT_RENDERERS_NO_THINKING}
-          aggregationMetadata={AGGREGATION_METADATA}
-        />
+      {visibleParts.length > 0 && (
+        <div className="text-sm">
+          {visibleParts.map((p, i) => renderPart(p, i))}
+        </div>
       )}
+    </div>
+  );
+}
+
+function UserMessage({ message }: { message: ConversationMessage }) {
+  const text = useMemo(
+    () => message.parts.map(p => partText(p)).join(''),
+    [message.parts],
+  );
+
+  return (
+    <div className="mb-4 flex flex-col items-end">
+      <MessageRole role="user" className="mb-1" />
+      <div className="text-sm text-right">{text}</div>
     </div>
   );
 }
@@ -113,21 +145,9 @@ function ConversationMessages() {
       <div ref={scrollRef} className="relative flex-1 overflow-y-auto p-4 pb-2">
         {allMessages.map((message, index) => {
           if (message.role === 'assistant') {
-            return (
-              <MessageWithReasoning
-                key={`${message.createdAt}-${index}`}
-                message={message}
-              />
-            );
+            return <AssistantMessage key={`${message.createdAt}-${index}`} message={message} />;
           }
-          return (
-            <MessageContainer
-              key={`${message.createdAt}-${index}`}
-              message={message}
-              botOutputRenderers={BOT_OUTPUT_RENDERERS_NO_THINKING}
-              aggregationMetadata={AGGREGATION_METADATA}
-            />
-          );
+          return <UserMessage key={`${message.createdAt}-${index}`} message={message} />;
         })}
       </div>
       <div className="p-3 border-t">
