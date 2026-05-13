@@ -794,6 +794,7 @@ def main():
     )
     launch_parser.add_argument("profile", help="Talky profile name (must define launcher: in YAML)")
     launch_parser.add_argument("--cwd", "-d", help="Working directory for the agent (default: current)")
+    launch_parser.add_argument("--resume", "-r", metavar="SESSION_ID", help="Resume a previous agent session by ID")
     launch_parser.set_defaults(func=cmd_launch)
 
     # === auth subcommand ===
@@ -971,6 +972,11 @@ def cmd_launch(args):
         _ensure_claude_skill_installed()
         _ensure_claude_mcp_connected()
         rendered.append(prompt)
+
+    resume_id = getattr(args, "resume", None)
+    if resume_id:
+        resume_arg = launcher.get("resume_arg", "--resume")
+        rendered.extend([resume_arg, resume_id])
 
     os.environ["TALKY_PROFILE"] = profile_name
     os.chdir(cwd)
