@@ -137,7 +137,9 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
     if startup_path.exists():
         try:
             startup = _json.loads(startup_path.read_text())
-            _startup_resume = (startup.get("resume") or {}).get("session_id")
+            resume_cfg = startup.get("resume") or {}
+            if resume_cfg.get("backend") == backend_name:
+                _startup_resume = resume_cfg.get("session_id")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to read talky-startup.json: {e}")
 

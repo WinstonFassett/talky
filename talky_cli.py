@@ -361,18 +361,26 @@ def cmd_profile(args):
             print("no profiles available — connect a browser to localhost:9090 first")
         return
 
-    # If a resume session ID was given, write it to the startup file before
-    # ensure_daemon() so a fresh daemon picks it up at pipeline build time.
-    # If the daemon is already running, also post it live via /api/resume.
     resume_id = getattr(args, "resume", None)
-    if resume_id:
+    daemon_was_running = talky_daemon_is_running()
+
+    if resume_id and not daemon_was_running:
+        # Resolve the backend name so the startup file targets only that backend.
+        try:
+            from shared.profile_manager import get_profile_manager as _gpm
+            _pm = _gpm()
+            _tp = _pm.get_talky_profile(name)
+            _backend = (_tp.llm_backend if _tp and _tp.llm_backend else None) or name
+        except Exception:
+            _backend = name
         _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
-        _DAEMON_STARTUP_PATH.write_text(json.dumps({"resume": {"session_id": resume_id}}))
+        _DAEMON_STARTUP_PATH.write_text(json.dumps({"resume": {"backend": _backend, "session_id": resume_id}}))
 
     if not ensure_daemon():
         sys.exit(1)
 
-    if resume_id:
+    if resume_id and daemon_was_running:
+        # Daemon was already running — post live; startup file not involved.
         resume_url = f"{base_url}/api/resume"
         resume_body = json.dumps({"session_id": resume_id}).encode("utf-8")
         resume_req = urllib.request.Request(
