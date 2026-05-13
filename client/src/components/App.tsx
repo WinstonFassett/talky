@@ -144,14 +144,11 @@ export const App = ({
   }, [client]);
 
   useEffect(() => {
-    if (client) {
-      client.initDevices().then(() => {
-        setDevicesReady(true);
-      }).catch(err => {
-        console.error('Failed to initialize devices:', err);
-        setDevicesReady(true);
-      });
-    }
+    if (!client) return;
+    // Don't call initDevices() proactively — if the mic permission prompt hangs,
+    // the transport stays stuck in "initializing" and handleConnect bails silently.
+    // Let connect() call initDevices() itself. Just gate autoconnect on client existence.
+    setDevicesReady(true);
   }, [client]);
 
   useEffect(() => {
