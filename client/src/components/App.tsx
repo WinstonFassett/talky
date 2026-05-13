@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { JSX } from 'react';
 
 import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
-import { ConnectButton, ConversationPanel, UserAudioControl } from '@pipecat-ai/voice-ui-kit';
+import { ConnectButton, UserAudioControl } from '@pipecat-ai/voice-ui-kit';
+import { ConversationPanelWithReasoning } from './ConversationPanelWithReasoning';
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
 import type { TransportType } from '../config';
@@ -11,104 +11,6 @@ import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
-import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
-
-// Each thinking part rendered by botOutputRenderers carries the full accumulated
-// text so far. We track the latest text + streaming state in a module-level store
-// so all React instances for the same logical turn stay in sync.
-type ThinkingListener = (text: string, isStreaming: boolean) => void;
-
-class ThinkingStore {
-  private text = '';
-  private isStreaming = false;
-  private listeners = new Set<ThinkingListener>();
-  private stopTimer: ReturnType<typeof setTimeout> | null = null;
-
-  push(text: string) {
-    this.text = text;
-    this.isStreaming = true;
-    this.notify();
-    if (this.stopTimer) clearTimeout(this.stopTimer);
-    this.stopTimer = setTimeout(() => {
-      this.isStreaming = false;
-      this.notify();
-    }, 300);
-  }
-
-  subscribe(fn: ThinkingListener) {
-    this.listeners.add(fn);
-    fn(this.text, this.isStreaming);
-    return () => this.listeners.delete(fn);
-  }
-
-  private notify() {
-    for (const fn of this.listeners) fn(this.text, this.isStreaming);
-  }
-}
-
-// One store per rendered thinking block. The renderer creates a new store each
-// time it's called for a *new* block — we detect "new block" by whether the
-// incoming content is shorter than what we last saw (i.e. a new turn started).
-let activeStore: ThinkingStore | null = null;
-let lastSeenLength = 0;
-
-function getStore(content: string): ThinkingStore {
-  if (!activeStore || content.length < lastSeenLength) {
-    activeStore = new ThinkingStore();
-    lastSeenLength = 0;
-  }
-  lastSeenLength = content.length;
-  return activeStore;
-}
-
-function ThinkingBlock({ content }: { content: string }) {
-  const store = getStore(content);
-  store.push(content);
-
-  const [text, setText] = useState(content);
-  const [isStreaming, setIsStreaming] = useState(true);
-
-  useEffect(() => {
-    return store.subscribe((t, s) => {
-      setText(t);
-      setIsStreaming(s);
-    });
-  }, [store]);
-
-  return (
-    <Reasoning isStreaming={isStreaming}>
-      <ReasoningTrigger />
-      <ReasoningContent>{text}</ReasoningContent>
-    </Reasoning>
-  );
-}
-
-function splitEventContent(content: string): string {
-  const i = content.indexOf('\x00');
-  return i < 0 ? content : content.slice(0, i);
-}
-
-const BOT_OUTPUT_RENDERERS: Record<string, (content: string, meta: { spoken: string; unspoken: string }) => JSX.Element> = {
-  thinking: (content) => <ThinkingBlock content={content} />,
-  tool_start: (content) => (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono py-0.5">
-      <span className="opacity-40">⟳</span>
-      <span className="opacity-70">{splitEventContent(content)}</span>
-    </div>
-  ),
-  tool_end: (content) => (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono py-0.5">
-      <span>✓</span>
-      <span className="opacity-70">{splitEventContent(content)}</span>
-    </div>
-  ),
-  error: (content) => (
-    <div className="text-xs font-mono text-destructive py-0.5">✗ {splitEventContent(content)}</div>
-  ),
-  info: (content) => (
-    <div className="text-xs text-muted-foreground opacity-50 py-0.5">{splitEventContent(content)}</div>
-  ),
-};
 
 interface TransportWithDataChannel {
   dc?: RTCDataChannel;
@@ -288,7 +190,7 @@ export const App = ({
       </div>
       <div className="flex-1 overflow-hidden px-4">
         <div className="h-full overflow-hidden">
-          <ConversationPanel conversationElementProps={{ botOutputRenderers: BOT_OUTPUT_RENDERERS }} />
+          <ConversationPanelWithReasoning />
         </div>
       </div>
     </div>
