@@ -9,6 +9,13 @@ import {
 } from '@pipecat-ai/voice-ui-kit';
 import { MessagesSquareIcon } from 'lucide-react';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
+import { cjk } from '@streamdown/cjk';
+import { code } from '@streamdown/code';
+import { math } from '@streamdown/math';
+import { mermaid } from '@streamdown/mermaid';
+import { Streamdown } from 'streamdown';
+
+const streamdownPlugins = { cjk, code, math, mermaid };
 
 const AGGREGATION_METADATA: Record<string, AggregationMetadata> = {
   thinking: { isSpoken: false, displayMode: 'block' as const },
@@ -78,10 +85,10 @@ function renderPart(part: ConversationMessagePart, idx: number): React.ReactNode
 
   const { spoken, unspoken } = splitPayload(part);
   return (
-    <span key={key}>
-      {spoken}
-      {unspoken && <span className="text-muted-foreground">{unspoken}</span>}
-    </span>
+    <Fragment key={key}>
+      {spoken && <Streamdown plugins={streamdownPlugins}>{spoken}</Streamdown>}
+      {unspoken && <span className="text-muted-foreground"><Streamdown plugins={streamdownPlugins}>{unspoken}</Streamdown></span>}
+    </Fragment>
   );
 }
 
