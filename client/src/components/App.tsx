@@ -11,6 +11,7 @@ import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
+import { PermissionBanner } from './PermissionBanner';
 
 interface TransportWithDataChannel {
   dc?: RTCDataChannel;
@@ -162,6 +163,7 @@ export const App = ({
 
   return (
     <div className="flex flex-col w-full h-full">
+      <PermissionBanner />
       <div className="flex items-center justify-between gap-4 p-4">
         <div className="flex items-center gap-4">
           <BotVisualizer client={client} />

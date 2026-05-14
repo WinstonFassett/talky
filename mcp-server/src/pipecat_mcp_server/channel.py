@@ -135,6 +135,7 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
     startup_path = _Path.home() / ".talky" / "run" / "talky-args.json"
     _startup_resume: str | None = None
     _startup_cwd: str | None = None
+    _startup_bypass_permissions: bool = False
     if startup_path.exists():
         try:
             startup = _json.loads(startup_path.read_text())
@@ -142,6 +143,7 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
             if resume_cfg.get("backend") == backend_name:
                 _startup_resume = resume_cfg.get("session_id")
                 _startup_cwd = resume_cfg.get("cwd")
+            _startup_bypass_permissions = bool(startup.get("bypass_permissions", False))
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to read talky-args.json: {e}")
 
@@ -152,9 +154,14 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
     llm_module = importlib.import_module(module_path)
     cls = getattr(llm_module, class_name)
 
+    import inspect as _inspect
+    sig = _inspect.signature(cls.__init__).parameters
+
+    if _startup_bypass_permissions and "permission_mode" in sig:
+        config["permission_mode"] = "bypassPermissions"
+        logger.warning("claude-bg: bypass_permissions=true from talky-args.json — skipping all permission checks")
+
     if _startup_resume:
-        import inspect as _inspect
-        sig = _inspect.signature(cls.__init__).parameters
         if "resume" in sig:
             config["resume"] = _startup_resume
             if _startup_cwd and "cwd" in sig:

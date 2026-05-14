@@ -363,6 +363,7 @@ def cmd_profile(args):
 
     resume_id = getattr(args, "resume", None)
     cwd_arg = getattr(args, "cwd", None)
+    bypass_permissions = getattr(args, "bypass_permissions", False)
     daemon_was_running = talky_daemon_is_running()
 
     # Check if pipeline is live — only post live if services are already built.
@@ -377,7 +378,7 @@ def cmd_profile(args):
         except Exception:
             pass
 
-    if resume_id and not (daemon_was_running and _pipeline_live):
+    if (resume_id or bypass_permissions) and not (daemon_was_running and _pipeline_live):
         # Resolve the backend name so the startup file targets only that backend.
         try:
             from shared.profile_manager import get_profile_manager as _gpm
@@ -386,11 +387,16 @@ def cmd_profile(args):
             _backend = (_tp.llm_backend if _tp and _tp.llm_backend else None) or name
         except Exception:
             _backend = name
-        _resume_entry: dict = {"backend": _backend, "session_id": resume_id}
-        if cwd_arg:
-            _resume_entry["cwd"] = str(Path(cwd_arg).expanduser().resolve())
+        _args_payload: dict = {}
+        if resume_id:
+            _resume_entry: dict = {"backend": _backend, "session_id": resume_id}
+            if cwd_arg:
+                _resume_entry["cwd"] = str(Path(cwd_arg).expanduser().resolve())
+            _args_payload["resume"] = _resume_entry
+        if bypass_permissions:
+            _args_payload["bypass_permissions"] = True
         _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
-        _DAEMON_ARGS_PATH.write_text(json.dumps({"resume": _resume_entry}))
+        _DAEMON_ARGS_PATH.write_text(json.dumps(_args_payload))
 
     if not ensure_daemon():
         sys.exit(1)
@@ -821,6 +827,7 @@ def main():
     )
     profile_parser.add_argument("--resume", "-r", metavar="SESSION_ID", help="Resume a previous agent session by ID")
     profile_parser.add_argument("--cwd", "-d", metavar="DIR", help="Working directory for the agent session")
+    profile_parser.add_argument("--bypass-permissions", action="store_true", help="Skip all Claude permission checks (dangerous)")
     profile_parser.set_defaults(func=cmd_profile)
 
     # === voice subcommand ===

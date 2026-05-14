@@ -710,6 +710,32 @@ def _build_webrtc_routes():
             svc._cwd = cwd  # noqa: SLF001
         return JSONResponse({"status": "ok", "session_id": session_id, "backend": backend_name})
 
+    async def handle_permission_grant(request: Request):
+        """POST /api/permission/grant — resolve a pending claude-bg permission prompt.
+
+        Body: {"allow": true|false}
+        """
+        body: dict = {}
+        try:
+            body = await request.json() or {}
+        except Exception:
+            pass
+        allow = bool(body.get("allow", False))
+
+        # Find the active ClaudeCodeLLMService (by checking all registered services).
+        from server.backends.claude_code import ClaudeCodeLLMService
+
+        resolved = False
+        for svc in voice_channel._llm_services.values():  # noqa: SLF001
+            if isinstance(svc, ClaudeCodeLLMService):
+                resolved = svc.resolve_permission(allow=allow)
+                if resolved:
+                    break
+
+        if not resolved:
+            return JSONResponse({"error": "no pending permission request"}, status_code=409)
+        return JSONResponse({"status": "ok", "allow": allow})
+
     async def handle_events(request: Request):
         """GET /api/events — SSE stream of daemon state changes.
 
@@ -883,6 +909,7 @@ def _build_webrtc_routes():
         Route("/api/voices", handle_get_voices, methods=["GET"]),
         Route("/api/voices/switch", handle_switch_voice, methods=["POST"]),
         Route("/api/resume", handle_set_resume, methods=["POST"]),
+        Route("/api/permission/grant", handle_permission_grant, methods=["POST"]),
         Route("/api/events", handle_events, methods=["GET"]),
         # Legacy compat — old CLI may still hit /api/profile.
         Route("/api/profile", handle_get_profile, methods=["GET"]),

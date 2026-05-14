@@ -11,11 +11,12 @@ import { MessagesSquareIcon } from 'lucide-react';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
 
 const AGGREGATION_METADATA: Record<string, AggregationMetadata> = {
-  thinking: { spoken: false, displayMode: 'block' as const },
-  tool_start: { spoken: false, displayMode: 'block' as const },
-  tool_end: { spoken: false, displayMode: 'block' as const },
-  error: { spoken: false, displayMode: 'block' as const },
-  info: { spoken: false, displayMode: 'block' as const },
+  thinking: { isSpoken: false, displayMode: 'block' as const },
+  tool_start: { isSpoken: false, displayMode: 'block' as const },
+  tool_end: { isSpoken: false, displayMode: 'block' as const },
+  error: { isSpoken: false, displayMode: 'block' as const },
+  info: { isSpoken: false, displayMode: 'block' as const },
+  permission_request: { isSpoken: false, displayMode: 'block' as const },
 };
 
 function splitEventContent(content: string): string {
@@ -56,6 +57,12 @@ const BLOCK_RENDERERS: Record<string, (content: string) => React.JSX.Element> = 
   ),
   info: (content) => (
     <div className="text-xs text-muted-foreground opacity-50 py-0.5">{splitEventContent(content)}</div>
+  ),
+  permission_request: (content) => (
+    <div className="flex items-center gap-1.5 text-xs text-amber-500 font-mono py-0.5">
+      <span>⚠</span>
+      <span>{splitEventContent(content)}</span>
+    </div>
   ),
 };
 

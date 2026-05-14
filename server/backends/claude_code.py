@@ -19,12 +19,17 @@ for Claude.
 
 Session resume: uses continue_conversation=True (last session) rather than explicit
 session_id to avoid the $1+/turn uncached token replay cost.
+
+Permission prompts: when permission_mode="default", can_use_tool callback is wired.
+The SDK thread blocks on a threading.Event; the asyncio side emits an SSE event so
+the chat UI can surface an Allow/Deny banner. resolve_permission(allow) unblocks it.
+Timeout: 120s → auto-deny.
 """
 
 import asyncio
 import queue
 import threading
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -53,14 +58,26 @@ try:
         ClaudeCodeOptions,
         query,
     )
+    from claude_code_sdk._errors import MessageParseError
+    from claude_code_sdk.types import (
+        PermissionResultAllow,
+        PermissionResultDeny,
+        ToolPermissionContext,
+    )
     _SDK_AVAILABLE = True
 except ImportError:
     _SDK_AVAILABLE = False
+
+    class MessageParseError(Exception):  # type: ignore[no-redef]
+        pass
 
 
 # Frame tuple sentinels passed through the asyncio queue
 _TURN_START = ("start",)
 _TURN_END = ("end",)
+
+# Seconds to wait for user grant/deny before auto-denying.
+_PERMISSION_TIMEOUT = 120
 
 
 class _ClaudeSDKThread:
@@ -70,6 +87,7 @@ class _ClaudeSDKThread:
     - prompt_queue (threading.Queue): main thread → SDK thread (str prompts or None sentinel)
     - frame_queue (asyncio.Queue): SDK thread → Pipecat event loop (frame tuples)
     - interrupt_event (threading.Event): main thread → SDK thread (abort current turn)
+    - _perm_event / _perm_allow: permission handshake (SDK thread blocks; asyncio side resolves)
     """
 
     def __init__(self, options: "ClaudeCodeOptions", loop: asyncio.AbstractEventLoop, frame_queue: asyncio.Queue):
@@ -80,6 +98,11 @@ class _ClaudeSDKThread:
         self._interrupt_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_session_id: Optional[str] = None
+
+        # Permission handshake state (guarded by _perm_lock)
+        self._perm_lock = threading.Lock()
+        self._perm_event: Optional[threading.Event] = None
+        self._perm_allow: bool = False
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True, name="claude-sdk")
@@ -98,11 +121,26 @@ class _ClaudeSDKThread:
                 self._prompt_queue.get_nowait()
             except queue.Empty:
                 break
+        # Also unblock any pending permission with a deny so the turn ends cleanly.
+        self.resolve_permission(allow=False)
 
     def stop(self):
         self._prompt_queue.put(None)  # sentinel
+        self.resolve_permission(allow=False)  # unblock any pending permission
         if self._thread:
             self._thread.join(timeout=5)
+
+    def resolve_permission(self, *, allow: bool) -> bool:
+        """Called from the asyncio side to grant or deny a pending permission.
+
+        Returns True if there was a pending permission to resolve, False otherwise.
+        """
+        with self._perm_lock:
+            if self._perm_event is None:
+                return False
+            self._perm_allow = allow
+            self._perm_event.set()
+            return True
 
     def _put_frame(self, item: tuple):
         """Thread-safe: schedule frame_queue.put on the asyncio event loop."""
@@ -130,9 +168,21 @@ class _ClaudeSDKThread:
             self._put_frame(_TURN_START)
 
             try:
-                async for msg in query(prompt=prompt, options=self._options):
+                aiter = query(prompt=self._make_prompt(prompt), options=self._options)
+                while True:
                     if self._interrupt_event.is_set():
                         logger.info("Claude SDK: interrupt detected, breaking")
+                        break
+                    try:
+                        msg = await aiter.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    except MessageParseError as e:  # type: ignore[possibly-unbound]
+                        if "Unknown message type" in str(e):
+                            logger.debug(f"Claude SDK: skipping unknown message type: {e}")
+                            continue
+                        logger.error(f"Claude SDK parse error: {e}", exc_info=True)
+                        self._put_frame(("error", str(e)))
                         break
                     self._route_message(msg)
             except Exception as e:
@@ -140,6 +190,22 @@ class _ClaudeSDKThread:
                 self._put_frame(("error", str(e)))
             finally:
                 self._put_frame(_TURN_END)
+
+    def _make_prompt(self, text: str):
+        """Return the prompt in the form the SDK requires.
+
+        When can_use_tool is set the SDK requires an AsyncIterable[dict] (streaming
+        mode). We always use that form so the code path is consistent regardless of
+        whether the callback is wired.
+        """
+        async def _gen():
+            yield {
+                "type": "user",
+                "message": {"role": "user", "content": text},
+                "parent_tool_use_id": None,
+                "session_id": None,
+            }
+        return _gen()
 
     def _route_message(self, msg):
         if not _SDK_AVAILABLE:
@@ -156,12 +222,36 @@ class _ClaudeSDKThread:
             if msg.session_id:
                 self._last_session_id = msg.session_id
 
+    def _permission_callback_sync(self, tool_name: str, tool_input: dict[str, Any]) -> bool:
+        """Block the SDK thread until asyncio side resolves the permission. Returns True=allow."""
+        evt = threading.Event()
+        with self._perm_lock:
+            self._perm_event = evt
+            self._perm_allow = False
+
+        # Signal the asyncio side to surface the prompt.
+        self._put_frame(("permission_request", tool_name, tool_input))
+
+        granted = evt.wait(timeout=_PERMISSION_TIMEOUT)
+        with self._perm_lock:
+            result = self._perm_allow
+            self._perm_event = None
+        if not granted:
+            logger.warning(f"Permission request timed out for tool {tool_name!r} — denying")
+        return result
+
 
 class ClaudeCodeLLMService(LLMService):
     """Claude Code backend via Agent SDK thread bridge.
 
     Profile name: claude-code
     Switch via: talky claude-code
+
+    permission_mode options:
+      "acceptEdits"       — auto-accept all (default, no UI prompt)
+      "default"           — surface each tool use to chat UI; user grants/denies
+      "bypassPermissions" — skip all permission checks entirely (dangerous)
+      "plan"              — read-only planning mode
     """
 
     def __init__(
@@ -204,9 +294,32 @@ class ClaudeCodeLLMService(LLMService):
             opts.cwd = self._cwd
         return opts
 
+    def _attach_permission_callback(self, opts: "ClaudeCodeOptions", bridge: "_ClaudeSDKThread") -> None:
+        """Wire can_use_tool only when permission_mode="default" (interactive mode)."""
+        if self._permission_mode != "default":
+            return
+        if not _SDK_AVAILABLE:
+            return
+
+        async def can_use_tool(tool_name: str, tool_input: dict[str, Any], ctx: "ToolPermissionContext"):  # type: ignore[possibly-unbound]
+            allow = await asyncio.get_event_loop().run_in_executor(
+                None, bridge._permission_callback_sync, tool_name, tool_input
+            )
+            if allow:
+                return PermissionResultAllow()  # type: ignore[possibly-unbound]
+            return PermissionResultDeny(message="User denied via chat UI")  # type: ignore[possibly-unbound]
+
+        opts.can_use_tool = can_use_tool
+
     def set_resume(self, session_id: Optional[str]) -> None:
         """Set a session ID to resume on the next pipeline start. One-shot: clears after use."""
         self._resume = session_id
+
+    def resolve_permission(self, *, allow: bool) -> bool:
+        """Resolve a pending permission prompt. Returns True if one was pending."""
+        if self._bridge is None:
+            return False
+        return self._bridge.resolve_permission(allow=allow)
 
     async def start(self, frame: StartFrame):
         await super().start(frame)
@@ -214,11 +327,13 @@ class ClaudeCodeLLMService(LLMService):
             return
         loop = asyncio.get_running_loop()
         self._frame_queue = asyncio.Queue()
-        self._bridge = _ClaudeSDKThread(self._build_options(), loop, self._frame_queue)
+        opts = self._build_options()
+        self._bridge = _ClaudeSDKThread(opts, loop, self._frame_queue)
+        self._attach_permission_callback(opts, self._bridge)
         self._resume = None  # one-shot: clear after building options
         self._bridge.start()
         self._reader_task = asyncio.create_task(self._drain_frames())
-        logger.info("ClaudeCodeLLMService started (thread bridge)")
+        logger.info(f"ClaudeCodeLLMService started (thread bridge, permission_mode={self._permission_mode!r})")
 
     async def stop(self, frame: EndFrame):
         await super().stop(frame)
@@ -242,6 +357,8 @@ class ClaudeCodeLLMService(LLMService):
 
     async def _drain_frames(self):
         """Read frame tuples from the queue and push to Pipecat."""
+        from pipecat_mcp_server.event_bus import event_bus
+
         while True:
             item = await self._frame_queue.get()
             kind = item[0]
@@ -249,9 +366,23 @@ class ClaudeCodeLLMService(LLMService):
                 await self.push_frame(LLMFullResponseStartFrame())
             elif kind == "text":
                 await self.push_frame(TextFrame(item[1]))
+            elif kind == "thinking":
+                await self.push_frame(AggregatedTextFrame(text=item[1], aggregated_by="thinking"))
             elif kind == "tool_start":
-                # Brief status without being too chatty
                 logger.info(f"Claude tool: {item[1]}")
+                await self.push_frame(AggregatedTextFrame(text=item[1], aggregated_by="tool_start"))
+            elif kind == "permission_request":
+                tool_name = item[1]
+                tool_input = item[2]
+                logger.info(f"Claude permission request: {tool_name!r}")
+                await self.push_frame(AggregatedTextFrame(
+                    text=f"Permission required: {tool_name}",
+                    aggregated_by="permission_request",
+                ))
+                await event_bus.emit("permissionRequest", {
+                    "tool_name": tool_name,
+                    "tool_input": tool_input,
+                })
             elif kind == "end":
                 await self.push_frame(LLMFullResponseEndFrame())
             elif kind == "error":
