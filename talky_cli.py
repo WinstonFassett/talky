@@ -922,7 +922,7 @@ def _ensure_claude_skill_installed() -> None:
     skill_dest = Path.home() / ".claude" / "skills" / "talky" / "SKILL.md"
     if skill_dest.exists():
         return
-    skill_source = _root / "skills" / "talky-skill" / "SKILL.md"
+    skill_source = _root / "skills" / "talky" / "SKILL.md"
     if not skill_source.exists():
         print(f"⚠️  Talky skill not found at {skill_source} — skipping install", file=sys.stderr)
         return

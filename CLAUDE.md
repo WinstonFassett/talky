@@ -24,7 +24,7 @@ Pipeline shape: `Mic → VAD → STT → LLMSwitcher → TTS → Speaker`. The s
 
 - `server/` — voice daemon (local audio `talky say` / `talky ask`), LLM backends, transcribe, voice client
 - `mcp-server/` — talky daemon entry point, in-process voice channel (`channel.py`), FastMCP tools, embedded WebRTC handler, profile switching
-- `skills/talky-skill/` — agent skill for voice prompt mode + voice conversation
+- `skills/talky/` — agent skill for voice prompt mode + voice conversation
 
 Config: `~/.talky/*.yaml` + `credentials/*.json`. No .env.
 
