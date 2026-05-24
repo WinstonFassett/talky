@@ -21,3 +21,8 @@ talky_profiles:
     description: "Claude"
     llm_backend: "claude-code"
 
+  # Hermes agent (NousResearch) — background, thread bridge, mid-tool interrupt
+  hermes:
+    description: "Hermes"
+    llm_backend: "hermes"
+

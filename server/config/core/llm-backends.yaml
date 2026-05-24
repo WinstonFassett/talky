@@ -52,3 +52,10 @@ llm_backends:
       permission_mode: "acceptEdits"
       max_turns: 10
       cwd: null
+  hermes:
+    description: "Hermes agent (NousResearch) via thread bridge, mid-tool interrupt"
+    service_class: "server.backends.hermes.HermesLLMService"
+    announcement: "Hermes channel."
+    config:
+      cwd: null
+      max_turns: 90
