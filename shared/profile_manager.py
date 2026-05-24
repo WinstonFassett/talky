@@ -169,11 +169,21 @@ class ProfileManager:
             data = self._read_yaml("llm-backends.yaml")
             user_backends = data.get("llm_backends", {})
             
-            if user_backends:  # Check if user_backends is not empty
-                # Merge user backends (deep merge to allow partial overrides)
+            # Always load all core backends first, then apply user overrides on top.
+            for name, config in core_backends.items():
+                self.llm_backends[name] = LLMBackend(
+                    name=name,
+                    description=config["description"],
+                    service_class=config["service_class"],
+                    config=config["config"],
+                    announcement=config.get("announcement"),
+                    signoff=config.get("signoff"),
+                    greeting=config.get("greeting"),
+                )
+            if user_backends:
                 for name, user_config in user_backends.items():
                     if name in core_backends:
-                        # Override existing core backend
+                        # Deep-merge user config on top of core backend.
                         self.llm_backends[name] = LLMBackend(
                             name=name,
                             description=user_config.get("description", core_backends[name]["description"]),
@@ -187,7 +197,7 @@ class ProfileManager:
                             greeting=user_config.get("greeting", core_backends[name].get("greeting")),
                         )
                     else:
-                        # Add new user-defined backend
+                        # Add new user-defined backend.
                         self.llm_backends[name] = LLMBackend(
                             name=name,
                             description=user_config.get("description", ""),
@@ -197,18 +207,6 @@ class ProfileManager:
                             signoff=user_config.get("signoff"),
                             greeting=user_config.get("greeting"),
                         )
-            else:
-                # No user extensions - use core (+ defaults) backends
-                for name, config in core_backends.items():
-                    self.llm_backends[name] = LLMBackend(
-                        name=name,
-                        description=config["description"],
-                        service_class=config["service_class"],
-                        config=config["config"],
-                        announcement=config.get("announcement"),
-                        signoff=config.get("signoff"),
-                        greeting=config.get("greeting"),
-                    )
 
         except FileNotFoundError:
             # No user extensions file - use core (+ defaults) backends
