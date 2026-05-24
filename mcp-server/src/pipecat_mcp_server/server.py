@@ -710,6 +710,44 @@ def _build_webrtc_routes():
             svc._cwd = cwd  # noqa: SLF001
         return JSONResponse({"status": "ok", "session_id": session_id, "backend": backend_name})
 
+    async def handle_get_steer_mode(request: Request):  # noqa: ARG001
+        """GET /api/steer-mode — return active steer mode for hermes backend."""
+        from server.backends.hermes import HermesLLMService
+        for svc in voice_channel._llm_services.values():  # noqa: SLF001
+            if isinstance(svc, HermesLLMService):
+                return JSONResponse({"mode": svc.get_steer_mode()})
+        return JSONResponse({"mode": "steer", "note": "hermes not active"})
+
+    async def handle_set_steer_mode(request: Request):
+        """POST /api/steer-mode — set steer mode on hermes backend."""
+        body: dict = {}
+        try:
+            body = await request.json() or {}
+        except Exception:
+            pass
+        mode = body.get("mode") or request.query_params.get("mode")
+        if mode not in ("steer", "interrupt"):
+            return JSONResponse(
+                {"error": "mode must be 'steer' or 'interrupt'"},
+                status_code=400,
+            )
+
+        from pipecat_mcp_server.event_bus import event_bus
+        from server.backends.hermes import HermesLLMService
+
+        updated = False
+        for svc in voice_channel._llm_services.values():  # noqa: SLF001
+            if isinstance(svc, HermesLLMService):
+                svc.set_steer_mode(mode)
+                updated = True
+                break
+
+        if not updated:
+            return JSONResponse({"error": "hermes backend not found"}, status_code=409)
+
+        asyncio.create_task(event_bus.emit("steerModeChanged", {"mode": mode}))
+        return JSONResponse({"status": "ok", "mode": mode})
+
     async def handle_permission_grant(request: Request):
         """POST /api/permission/grant — resolve a pending claude-bg permission prompt.
 
@@ -751,6 +789,12 @@ def _build_webrtc_routes():
                 # Send initial state as a synthetic event so clients
                 # don't need a separate REST call on connect.
                 from pipecat_mcp_server.event_bus import Event
+                from server.backends.hermes import HermesLLMService
+                hermes_steer_mode = "steer"
+                for _svc in voice_channel._llm_services.values():  # noqa: SLF001
+                    if isinstance(_svc, HermesLLMService):
+                        hermes_steer_mode = _svc.get_steer_mode()
+                        break
 
                 init = Event(
                     type="init",
@@ -758,6 +802,7 @@ def _build_webrtc_routes():
                         "profiles": voice_channel.profiles_info(),
                         "voices": voice_channel.voices_info(),
                         "live": voice_channel.is_live(),
+                        "steerMode": hermes_steer_mode,
                     },
                 )
                 yield init.sse()
@@ -909,6 +954,8 @@ def _build_webrtc_routes():
         Route("/api/voices", handle_get_voices, methods=["GET"]),
         Route("/api/voices/switch", handle_switch_voice, methods=["POST"]),
         Route("/api/resume", handle_set_resume, methods=["POST"]),
+        Route("/api/steer-mode", handle_get_steer_mode, methods=["GET"]),
+        Route("/api/steer-mode", handle_set_steer_mode, methods=["POST"]),
         Route("/api/permission/grant", handle_permission_grant, methods=["POST"]),
         Route("/api/events", handle_events, methods=["GET"]),
         # Legacy compat — old CLI may still hit /api/profile.

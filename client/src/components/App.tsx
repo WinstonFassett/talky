@@ -9,6 +9,7 @@ import type { TransportType } from '../config';
 import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
+import { SteerModeToggle } from './SteerModeToggle';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
 import { PermissionBanner } from './PermissionBanner';
@@ -40,6 +41,7 @@ export const App = ({
   const autoconnectAttempted = useRef(false);
   const userInitiatedDisconnect = useRef(false);
   const [devicesReady, setDevicesReady] = useState(false);
+  const [activeProfile, setActiveProfile] = useState('');
   const hasBeenConnected = useRef(false);
   const transportState = usePipecatClientTransportState();
 
@@ -144,6 +146,25 @@ export const App = ({
     try { client.setLogLevel(level); } catch { /* older SDK */ }
   }, [client]);
 
+  // Track active profile so SteerModeToggle can conditionally render.
+  useEffect(() => {
+    const es = new EventSource('/api/events');
+    es.addEventListener('init', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        const active = (data.profiles as Array<{name: string; active: boolean}> | undefined)?.find(p => p.active);
+        if (active) setActiveProfile(active.name);
+      } catch { /* ignore */ }
+    });
+    es.addEventListener('profileChanged', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === 'llm' && data.profile) setActiveProfile(data.profile as string);
+      } catch { /* ignore */ }
+    });
+    return () => es.close();
+  }, []);
+
   useEffect(() => {
     if (!client) return;
     // Don't call initDevices() proactively — if the mic permission prompt hangs,
@@ -168,6 +189,7 @@ export const App = ({
         <div className="flex items-center gap-4">
           <BotVisualizer client={client} />
           <LLMProfileSelect />
+          <SteerModeToggle activeProfile={activeProfile} />
           <VoiceProfileSelect />
           {showTransportSelector ? (
             <TransportSelect

@@ -22,7 +22,7 @@ import os
 import queue
 import sys
 import threading
-from typing import Optional
+from typing import Literal, Optional
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -76,10 +76,14 @@ class _HermesThread:
         self._thread = threading.Thread(target=self._run, daemon=True, name="hermes-agent")
         self._thread.start()
 
-    def send_prompt(self, text: str):
-        """Steer if a turn is active, otherwise queue as a new prompt."""
+    def send_prompt(self, text: str, steer_mode: str = "steer"):
+        """Route mid-turn input based on steer_mode ("steer" or "interrupt")."""
         if self._turn_active:
-            self._agent.steer(text)
+            if steer_mode == "interrupt":
+                self._agent.interrupt()
+                self._prompt_queue.put(text)
+            else:
+                self._agent.steer(text)
         else:
             self._prompt_queue.put(text)
 
@@ -142,6 +146,7 @@ class HermesLLMService(LLMService):
         self._cwd = cwd
         self._max_turns = max_turns
         self._resume = resume
+        self._steer_mode: Literal["steer", "interrupt"] = "steer"
         self._frame_queue: asyncio.Queue = asyncio.Queue()
         self._bridge: Optional[_HermesThread] = None
         self._drain_task: Optional[asyncio.Task] = None
@@ -183,6 +188,12 @@ class HermesLLMService(LLMService):
         agent.tool_complete_callback = self._on_tool_complete
 
         return agent
+
+    def set_steer_mode(self, mode: Literal["steer", "interrupt"]) -> None:
+        self._steer_mode = mode
+
+    def get_steer_mode(self) -> Literal["steer", "interrupt"]:
+        return self._steer_mode
 
     # --- Callbacks (called from agent thread) ---
 
@@ -284,7 +295,7 @@ class HermesLLMService(LLMService):
 
         if isinstance(frame, UserTurnTextFrame):
             if self._bridge:
-                self._bridge.send_prompt(frame.text)
+                self._bridge.send_prompt(frame.text, steer_mode=self._steer_mode)
             return
 
         await self.push_frame(frame, direction)
