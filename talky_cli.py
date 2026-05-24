@@ -154,6 +154,7 @@ def cmd_ask(args):
         sys.exit(1)
 
     # Ensure daemon is running (auto-start if needed)
+    need_wait = False
     if not voice_daemon_is_running():
         subprocess.Popen(
             [sys.executable, str(server_dir / "voice_daemon.py"), "--start"],
@@ -161,6 +162,7 @@ def cmd_ask(args):
             stderr=subprocess.DEVNULL,
             cwd=server_dir,
         )
+        need_wait = True
 
     # Build voice_client command
     cmd = [
@@ -169,8 +171,8 @@ def cmd_ask(args):
         "--cmd", "ask",
     ]
 
-    if not voice_daemon_is_running():
-        cmd.extend(["--wait", "15"])
+    if need_wait:
+        cmd.extend(["--wait", "30"])
 
     cmd.append(args.text)
 
