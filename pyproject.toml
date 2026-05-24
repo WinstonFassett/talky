@@ -76,6 +76,9 @@ azure = ["pipecat-ai[azure]"]
 fal = ["pipecat-ai[fal]"]
 groq = ["pipecat-ai[groq]"]
 
+# LLM backend extras
+claude-code = ["claude-code-sdk==0.0.25"]
+
 # Convenience groups
 tts = ["pipecat-ai[openai,elevenlabs,cartesia,fish,gradium,hume,lmnt,neuphonic,nvidia,playht,resembleai,rime,sambanova,sarvam,kokoro]"]
 stt = ["pipecat-ai[assemblyai,asyncai,deepgram,fish,gladia,google,hume,inworld,nvidia,openai,resembleai,sarvam,soniox,speechmatics,mlx-whisper]"]

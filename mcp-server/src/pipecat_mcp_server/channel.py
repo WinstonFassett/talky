@@ -113,23 +113,65 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from pipecat_mcp_server.agent_ext_llm_service import AgentExtensionLLMService
 from pipecat_mcp_server.mcp_driver_llm_service import MCPDriverLLMService
-from pipecat_mcp_server.pi_ext_llm_service import PiExtensionLLMService
 from pipecat_mcp_server.talky_turn import TalkyUserTurnDetector
 
 
 def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
     """Build a fresh LLM service instance for the named backend."""
+    import json as _json
+    from pathlib import Path as _Path
+
     backend = pm.get_llm_backend(backend_name)
     if backend is None:
         raise ValueError(f"backend {backend_name!r} not configured")
 
+    config = dict(backend.config or {})
+
+    # One-shot startup config: read ~/.talky/run/talky-args.json if present.
+    # Only inject resume into backends whose constructor accepts it; delete the
+    # file only after successful injection so it survives to the right backend.
+    startup_path = _Path.home() / ".talky" / "run" / "talky-args.json"
+    _startup_resume: str | None = None
+    _startup_cwd: str | None = None
+    _startup_bypass_permissions: bool = False
+    if startup_path.exists():
+        try:
+            startup = _json.loads(startup_path.read_text())
+            resume_cfg = startup.get("resume") or {}
+            if resume_cfg.get("backend") == backend_name:
+                _startup_resume = resume_cfg.get("session_id")
+                _startup_cwd = resume_cfg.get("cwd")
+            _startup_bypass_permissions = bool(startup.get("bypass_permissions", False))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to read talky-args.json: {e}")
+
     module_path = ".".join(backend.service_class.split(".")[:-1])
     class_name = backend.service_class.split(".")[-1]
-    if not module_path.startswith("server.") and not module_path.startswith("."):
+    if not module_path.startswith("server.") and not module_path.startswith("pipecat_mcp_server.") and not module_path.startswith("."):
         module_path = f"server.{module_path}"
     llm_module = importlib.import_module(module_path)
-    return getattr(llm_module, class_name)(**backend.config)
+    cls = getattr(llm_module, class_name)
+
+    import inspect as _inspect
+    sig = _inspect.signature(cls.__init__).parameters
+
+    if _startup_bypass_permissions and "permission_mode" in sig:
+        config["permission_mode"] = "bypassPermissions"
+        logger.warning("claude-bg: bypass_permissions=true from talky-args.json — skipping all permission checks")
+
+    if _startup_resume:
+        if "resume" in sig:
+            config["resume"] = _startup_resume
+            if _startup_cwd and "cwd" in sig:
+                config["cwd"] = _startup_cwd
+            try:
+                startup_path.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    return cls(**config)
 
 
 class VoiceChannel:
@@ -141,13 +183,8 @@ class VoiceChannel:
     live, the new one replaces the old one (last-writer-wins semantics).
     """
 
-    # Special profile name that refers to the MCPDriverLLMService null
-    # passthrough (used for external-agent-driven mode). Chosen so it
-    # can't collide with user-configured LLM backend names.
+    # Internal profile name for the MCPDriverLLMService null passthrough.
     MCP_DRIVER_PROFILE = "__mcp__"
-
-    # Special profile name for a Pi extension connected over /ws/pi.
-    PI_EXT_PROFILE = "__pi__"
 
     def __init__(
         self,
@@ -185,9 +222,6 @@ class VoiceChannel:
         self._llm_switcher: Optional[Any] = None  # LLMSwitcher
         self._llm_services: dict[str, Any] = {}  # profile name → LLMService
         self._active_profile: Optional[str] = None
-
-        # Pi extension service — set per pipeline, read by /ws/pi handler.
-        self._pi_ext_service: Optional[Any] = None  # PiExtensionLLMService
 
         # Speech buffer — written by MCPDriverLLMService, drained by listen()
         self._user_speech_queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -487,9 +521,9 @@ class VoiceChannel:
             names = set(pm.list_talky_profiles().keys()) | set(pm.list_llm_backends().keys())
         except Exception:  # noqa: BLE001
             names = set()
-        return [self.MCP_DRIVER_PROFILE, self.PI_EXT_PROFILE, *sorted(names)]
+        return [self.MCP_DRIVER_PROFILE, *sorted(names)]
 
-    async def switch_to_profile(self, profile_name: str) -> None:
+    async def switch_to_profile(self, profile_name: str, *, announce: bool = True) -> None:
         """Flip the active LLM profile.
 
         If a pipeline is live, queues a ``ManuallySwitchServiceFrame`` to
@@ -498,12 +532,45 @@ class VoiceChannel:
         build will auto-apply it (Phase 2 restore path). Either way,
         ``_active_profile`` is updated.
 
+        ``announce``: when True (default), speak the profile's
+        ``announcement`` cue ("OpenClaw channel"). Callers triggered by
+        an *agent joining* (e.g. /ws/agent) should pass ``announce=False``
+        so the agent owns its own greeting via the TTS stream. Ticket e540.
+
         Raises ``ValueError`` if the profile isn't known.
         """
         if profile_name not in self.available_profiles():
             raise ValueError(
                 f"unknown profile {profile_name!r}; available: {self.available_profiles()}"
             )
+
+        # Install any missing deps for this backend before switching.
+        # If the dep was just installed it won't be importable until restart —
+        # we install it now so the *next* daemon start works, and warn the user.
+        try:
+            from shared.dependency_installer import (
+                _check_extra_installed,
+                get_llm_backend_extra,
+                install_extra_no_reexec,
+            )
+            from shared.profile_manager import get_profile_manager
+            pm = get_profile_manager()
+            # Resolve talky profile → llm_backend name, then look up the extra.
+            tp = pm.get_talky_profile(profile_name)
+            backend_name = (tp.llm_backend if tp else None) or profile_name
+            extra = get_llm_backend_extra(backend_name)
+            if extra:
+                already_installed = _check_extra_installed(extra)
+                if not already_installed:
+                    ok = install_extra_no_reexec(extra)
+                    if ok:
+                        logger.warning(
+                            f"Deps for {profile_name!r} installed — restart the daemon: talky kill && talky daemon"
+                        )
+                    else:
+                        logger.warning(f"Could not install deps for {profile_name!r} (extra: {extra!r})")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Dep check for {profile_name!r} failed: {e}")
 
         if not self.is_live() or self._pipeline_task is None:
             # Soft path: no live pipeline. Store the desired profile and
@@ -517,9 +584,13 @@ class VoiceChannel:
             return
 
         # Live path: queue the switch frame.
-        service = self._llm_services.get(profile_name)
+        # Talky profile names map to backend names — resolve before lookup.
+        from shared.profile_manager import get_profile_manager as _gpm
+        _pm = _gpm()
+        _tp = _pm.get_talky_profile(profile_name)
+        service_key = (_tp.llm_backend if _tp and _tp.llm_backend else None) or profile_name
+        service = self._llm_services.get(service_key)
         if service is None:
-            # Shouldn't happen given the validation above, but be defensive.
             raise ValueError(
                 f"profile {profile_name!r} valid but not in active switcher"
             )
@@ -531,17 +602,17 @@ class VoiceChannel:
         logger.info(f"VoiceChannel: active profile → {profile_name!r}")
         await self._emit_profile_changed(profile_name)
 
-        # Auto-greeting (ticket 8c9d). If the newly active backend has a
-        # ``greeting`` configured, speak it so the user hears a presence
-        # signal instead of silence. MCPDriver is always silent — the
-        # joining agent is responsible for its own hello.
-        greeting = self._greeting_for_profile(profile_name)
-        if greeting:
-            try:
-                await self.speak(greeting)
-                logger.info(f"VoiceChannel: greeted with {greeting!r}")
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"VoiceChannel: greeting failed for {profile_name!r}: {e}")
+        # System announcement on manual picker switches only (tickets 8c9d, e540).
+        # Agent-join paths pass announce=False — the agent owns its own greeting
+        # via the extension's TTS stream.
+        if announce:
+            announcement = self._announcement_for_profile(profile_name)
+            if announcement:
+                try:
+                    await self.speak(announcement)
+                    logger.info(f"VoiceChannel: announced {announcement!r}")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"VoiceChannel: announcement failed for {profile_name!r}: {e}")
 
     async def _emit_profile_changed(self, profile_name: str) -> None:
         """Push a profileChanged event to the SSE bus."""
@@ -650,13 +721,6 @@ class VoiceChannel:
                 "active": active == self.MCP_DRIVER_PROFILE,
                 "healthy": self._health.get(self.MCP_DRIVER_PROFILE),
             },
-            {
-                "name": self.PI_EXT_PROFILE,
-                "label": "Pi (extension)",
-                "description": "Pi coding agent via terminal extension",
-                "active": active == self.PI_EXT_PROFILE,
-                "healthy": self._pi_ext_service is not None,
-            },
         ]
         try:
             pm = get_profile_manager()
@@ -709,13 +773,12 @@ class VoiceChannel:
     async def _check_backend_health(self, name: str) -> bool:
         """Probe a single backend. Returns True if reachable."""
         if name == self.MCP_DRIVER_PROFILE:
-            # MCP driver is always "healthy" — it's a local passthrough.
             return True
 
-        if name == self.PI_EXT_PROFILE:
-            # Pi extension health is whether the service is wired up,
-            # not a TCP probe. profiles_info() tracks this separately.
-            return self._pi_ext_service is not None
+        # AgentExtensionLLMService health = whether an extension is connected.
+        svc = self._llm_services.get(name)
+        if isinstance(svc, AgentExtensionLLMService):
+            return svc.connected
 
         from shared.profile_manager import get_profile_manager
 
@@ -765,27 +828,30 @@ class VoiceChannel:
         except Exception:  # noqa: BLE001
             return False
 
-    def _greeting_for_profile(self, profile_name: str) -> Optional[str]:
-        """Look up the optional fixed-string greeting for a profile.
+    def _announcement_for_profile(self, profile_name: str) -> Optional[str]:
+        """Look up the optional system announcement for a profile.
 
-        Returns ``None`` for the MCP driver profile (agent-driven), for
-        unknown profiles, or for profiles without a ``greeting`` field.
-        Ticket 8c9d.
+        Impersonal cue spoken on *manual* picker-initiated profile switches
+        ("OpenClaw channel"). Not a greeting from the agent — see ticket e540.
+
+        Returns ``None`` for the MCP driver profile, for unknown profiles,
+        or for profiles without an ``announcement`` field. Tickets 8c9d, e540.
         """
         if profile_name == self.MCP_DRIVER_PROFILE:
             return None
-        if profile_name == self.PI_EXT_PROFILE:
-            return "Pi online."
         try:
             from shared.profile_manager import get_profile_manager
 
-            backend = get_profile_manager().get_llm_backend(profile_name)
+            pm = get_profile_manager()
+            tp = pm.get_talky_profile(profile_name)
+            backend_name = (tp.llm_backend if tp and tp.llm_backend else None) or profile_name
+            backend = pm.get_llm_backend(backend_name)
         except Exception as e:  # noqa: BLE001
-            logger.debug(f"VoiceChannel: could not read backend for greeting lookup: {e}")
+            logger.debug(f"VoiceChannel: could not read backend for announcement lookup: {e}")
             return None
         if backend is None:
             return None
-        return getattr(backend, "greeting", None)
+        return getattr(backend, "announcement", None)
 
     def _signoff_for_profile(self, profile_name: Optional[str]) -> Optional[str]:
         """Look up the optional fixed-string signoff phrase for a profile.
@@ -935,7 +1001,6 @@ class VoiceChannel:
         self._transport = None
         self._voice_switcher = None
         self._llm_switcher = None
-        self._pi_ext_service = None
         # Per-pipeline LLM service instances can't be reused across rebuilds
         # (pipecat services are pipeline-bound), so clear them regardless.
         self._llm_services = {}
@@ -1100,13 +1165,10 @@ class VoiceChannel:
         # LLMSwitcher slot: MCPDriver first (default active) then every
         # configured backend. See ticket ea77 / c3a1.
         mcp_driver = MCPDriverLLMService(user_speech_queue=self._user_speech_queue)
-        pi_ext = PiExtensionLLMService()
-        llm_services: list = [mcp_driver, pi_ext]
+        llm_services: list = [mcp_driver]
         profile_map: dict[str, Any] = {
             self.MCP_DRIVER_PROFILE: mcp_driver,
-            self.PI_EXT_PROFILE: pi_ext,
         }
-        self._pi_ext_service = pi_ext
 
         for backend_name in pm.list_llm_backends().keys():
             try:
@@ -1267,7 +1329,12 @@ class VoiceChannel:
         # If the room had a non-default profile active before the disconnect,
         # switch back to it on this new pipeline. Fire-and-forget — the switch
         # frame will be processed as soon as the runner picks it up.
-        if desired_profile != self.MCP_DRIVER_PROFILE and desired_profile in profile_map:
+        # Resolve talky profile name → backend name for profile_map lookup.
+        # Pass the original desired_profile (talky name) to restore so
+        # _active_profile stays consistent with talky profile names.
+        _tp = pm.get_talky_profile(desired_profile) if desired_profile else None
+        resolved_profile = (_tp.llm_backend if _tp and _tp.llm_backend else None) or desired_profile
+        if desired_profile != self.MCP_DRIVER_PROFILE and resolved_profile in profile_map:
             asyncio.create_task(self._restore_profile_on_startup(desired_profile))
 
         # Add a done callback so a crashed runner flips us back to "not live"

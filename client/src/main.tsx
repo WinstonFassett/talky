@@ -38,7 +38,7 @@ export const Main = () => {
   const autoconnect = getAutoconnect();
 
   return (
-    <ThemeProvider disableStorage>
+    <ThemeProvider defaultTheme="dark">
       <FullScreenContainer>
         <PipecatAppBase
           connectParams={connectParams}

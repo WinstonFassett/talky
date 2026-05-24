@@ -673,6 +673,107 @@ def _build_webrtc_routes():
             "active": profile,
         })
 
+    async def handle_set_resume(request: Request):
+        """POST /api/resume — set a session ID to resume on the next pipeline start.
+
+        Accepts ``?session_id=UUID`` or JSON ``{"session_id": "UUID"}``.
+        Targets the currently active LLM backend if it supports set_resume().
+        """
+        body: dict = {}
+        try:
+            body = await request.json() or {}
+        except Exception:
+            pass
+        session_id: Optional[str] = request.query_params.get("session_id") or body.get("session_id")
+        cwd: Optional[str] = request.query_params.get("cwd") or body.get("cwd")
+
+        if not session_id:
+            return JSONResponse(
+                {"error": "missing 'session_id' — provide ?session_id=UUID or JSON body"},
+                status_code=400,
+            )
+
+        active = voice_channel._active_profile  # noqa: SLF001
+        from shared.profile_manager import get_profile_manager as _gpm
+        _pm = _gpm()
+        _tp = _pm.get_talky_profile(active) if active else None
+        backend_name = (_tp.llm_backend if _tp and _tp.llm_backend else None) or active
+        svc = voice_channel._llm_services.get(backend_name)  # noqa: SLF001
+        if svc is None or not hasattr(svc, "set_resume"):
+            return JSONResponse(
+                {"error": f"active backend {backend_name!r} does not support resume"},
+                status_code=409,
+            )
+
+        svc.set_resume(session_id)
+        if cwd and hasattr(svc, "_cwd"):
+            svc._cwd = cwd  # noqa: SLF001
+        return JSONResponse({"status": "ok", "session_id": session_id, "backend": backend_name})
+
+    async def handle_get_steer_mode(request: Request):  # noqa: ARG001
+        """GET /api/steer-mode — return active steer mode for hermes backend."""
+        from server.backends.hermes import HermesLLMService
+        for svc in voice_channel._llm_services.values():  # noqa: SLF001
+            if isinstance(svc, HermesLLMService):
+                return JSONResponse({"mode": svc.get_steer_mode()})
+        return JSONResponse({"mode": "steer", "note": "hermes not active"})
+
+    async def handle_set_steer_mode(request: Request):
+        """POST /api/steer-mode — set steer mode on hermes backend."""
+        body: dict = {}
+        try:
+            body = await request.json() or {}
+        except Exception:
+            pass
+        mode = body.get("mode") or request.query_params.get("mode")
+        if mode not in ("steer", "interrupt"):
+            return JSONResponse(
+                {"error": "mode must be 'steer' or 'interrupt'"},
+                status_code=400,
+            )
+
+        from pipecat_mcp_server.event_bus import event_bus
+        from server.backends.hermes import HermesLLMService
+
+        updated = False
+        for svc in voice_channel._llm_services.values():  # noqa: SLF001
+            if isinstance(svc, HermesLLMService):
+                svc.set_steer_mode(mode)
+                updated = True
+                break
+
+        if not updated:
+            return JSONResponse({"error": "hermes backend not found"}, status_code=409)
+
+        asyncio.create_task(event_bus.emit("steerModeChanged", {"mode": mode}))
+        return JSONResponse({"status": "ok", "mode": mode})
+
+    async def handle_permission_grant(request: Request):
+        """POST /api/permission/grant — resolve a pending claude-bg permission prompt.
+
+        Body: {"allow": true|false}
+        """
+        body: dict = {}
+        try:
+            body = await request.json() or {}
+        except Exception:
+            pass
+        allow = bool(body.get("allow", False))
+
+        # Find the active ClaudeCodeLLMService (by checking all registered services).
+        from server.backends.claude_code import ClaudeCodeLLMService
+
+        resolved = False
+        for svc in voice_channel._llm_services.values():  # noqa: SLF001
+            if isinstance(svc, ClaudeCodeLLMService):
+                resolved = svc.resolve_permission(allow=allow)
+                if resolved:
+                    break
+
+        if not resolved:
+            return JSONResponse({"error": "no pending permission request"}, status_code=409)
+        return JSONResponse({"status": "ok", "allow": allow})
+
     async def handle_events(request: Request):
         """GET /api/events — SSE stream of daemon state changes.
 
@@ -688,6 +789,12 @@ def _build_webrtc_routes():
                 # Send initial state as a synthetic event so clients
                 # don't need a separate REST call on connect.
                 from pipecat_mcp_server.event_bus import Event
+                from server.backends.hermes import HermesLLMService
+                hermes_steer_mode = "steer"
+                for _svc in voice_channel._llm_services.values():  # noqa: SLF001
+                    if isinstance(_svc, HermesLLMService):
+                        hermes_steer_mode = _svc.get_steer_mode()
+                        break
 
                 init = Event(
                     type="init",
@@ -695,6 +802,7 @@ def _build_webrtc_routes():
                         "profiles": voice_channel.profiles_info(),
                         "voices": voice_channel.voices_info(),
                         "live": voice_channel.is_live(),
+                        "steerMode": hermes_steer_mode,
                     },
                 )
                 yield init.sse()
@@ -716,41 +824,104 @@ def _build_webrtc_routes():
             },
         )
 
-    async def handle_pi_ws(websocket):
-        """WebSocket endpoint for Pi extensions (/ws/pi).
+    async def handle_agent_ws(websocket):
+        """WebSocket endpoint for agent extensions (/ws/agent).
 
-        Accepts a connection from a Pi voice extension, auto-switches the
-        active profile to __pi__, and bridges STT/TTS/abort signals until
+        Any agent CLI (Pi, Claude, etc.) that loads a talky extension connects
+        here. The handler finds the AgentExtensionLLMService instance in the
+        live pipeline (by type), switches to its profile, and bridges until
         the extension disconnects. On disconnect, reverts to __mcp__.
         """
+        import json
+
+        from pipecat_mcp_server.agent_ext_llm_service import AgentExtensionLLMService
         from starlette.websockets import WebSocketDisconnect, WebSocketState
 
         await websocket.accept()
 
-        pi_ext = voice_channel._pi_ext_service
-        if pi_ext is None:
-            import json
-            await websocket.send_text(json.dumps({"type": "error", "message": "no pi ext service — is the browser connected?"}))
+        # Find the AgentExtensionLLMService instance + its backend name
+        # from the live pipeline. No hardcoded names.
+        agent_ext = None
+        agent_backend_name = None
+        for name, svc in voice_channel._llm_services.items():
+            if isinstance(svc, AgentExtensionLLMService):
+                agent_ext = svc
+                agent_backend_name = name
+                break
+
+        if agent_ext is None:
+            await websocket.send_text(json.dumps({"type": "error", "message": "no agent-ext backend configured — is the browser connected?"}))
             await websocket.close()
             return
 
-        logger.info("/ws/pi: Pi extension connected")
+        # agent_backend_name is set in the loop above whenever agent_ext is
+        # set; the early-return on agent_ext is None guarantees this.
+        assert agent_backend_name is not None
+
+        # Read optional hello frame the extension sends immediately on open
+        # before the daemon sends ready. Contains {"type":"hello","profile":"..."}
+        # so we can switch to the exact talky profile that launched this agent
+        # (multiple profiles can share the same agent-ext backend, e.g. pi / claude).
+        hello_profile: Optional[str] = None
+        try:
+            import asyncio
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=0.5)
+            first = json.loads(raw)
+            if first.get("type") == "hello" and first.get("profile"):
+                hello_profile = str(first["profile"])
+        except Exception:
+            pass  # No hello or timeout — fall back to lookup below
+
+        # Prefer switching via a user-facing talky profile that uses this
+        # backend so the picker shows the right label. Fall back to the
+        # backend name if no talky profile points at it.
+        from shared.profile_manager import get_profile_manager
+        pm = get_profile_manager()
+        active_profile: str = agent_backend_name
+        if hello_profile and pm.get_talky_profile(hello_profile) is not None:
+            active_profile = hello_profile
+        else:
+            try:
+                for tp_name in pm.list_talky_profiles().keys():
+                    tp_obj = pm.get_talky_profile(tp_name)
+                    if tp_obj and getattr(tp_obj, "llm_backend", None) == agent_backend_name:
+                        active_profile = tp_name
+                        break
+            except Exception as e:
+                logger.warning(f"/ws/agent: talky-profile lookup failed: {e}")
+
+        logger.info(f"/ws/agent: extension connected → profile {active_profile!r} (backend {agent_backend_name!r})")
 
         try:
-            await voice_channel.switch_to_profile(voice_channel.PI_EXT_PROFILE)
+            # Agent owns its own greeting via the TTS stream — no system
+            # announcement on the join. Ticket e540.
+            await voice_channel.switch_to_profile(active_profile, announce=False)
         except Exception as e:
-            import json
-            logger.warning(f"/ws/pi: could not switch to __pi__: {e}")
+            logger.warning(f"/ws/agent: could not switch to {active_profile!r}: {e}")
             await websocket.send_text(json.dumps({"type": "error", "message": str(e)}))
             await websocket.close()
             return
 
+        # Resolve the greeting *instruction* (talky-profile → backend →
+        # settings → built-in default). The agent generates its own
+        # greeting words from this instruction. Returns None if greeting
+        # is explicitly disabled for this profile.
+        greeting_instruction: Optional[str] = None
         try:
-            await pi_ext.handle_websocket(websocket)
+            greeting_instruction = pm.resolve_greeting_instruction(active_profile)
+            logger.info(
+                f"/ws/agent: greeting instruction resolved for {active_profile!r}: "
+                f"{greeting_instruction!r}"
+            )
+        except Exception as e:
+            logger.warning(f"/ws/agent: greeting resolve failed: {e}")
+
+        try:
+            await agent_ext.handle_websocket(websocket, greeting_instruction=greeting_instruction)
         except WebSocketDisconnect:
             pass
         finally:
-            logger.info("/ws/pi: Pi extension disconnected — reverting to __mcp__")
+            logger.info(f"/ws/agent: extension disconnected — reverting to {voice_channel.MCP_DRIVER_PROFILE!r}")
             try:
                 if websocket.client_state != WebSocketState.DISCONNECTED:
                     await websocket.close()
@@ -782,11 +953,16 @@ def _build_webrtc_routes():
         Route("/api/profiles/switch", handle_switch_profile, methods=["POST"]),
         Route("/api/voices", handle_get_voices, methods=["GET"]),
         Route("/api/voices/switch", handle_switch_voice, methods=["POST"]),
+        Route("/api/resume", handle_set_resume, methods=["POST"]),
+        Route("/api/steer-mode", handle_get_steer_mode, methods=["GET"]),
+        Route("/api/steer-mode", handle_set_steer_mode, methods=["POST"]),
+        Route("/api/permission/grant", handle_permission_grant, methods=["POST"]),
         Route("/api/events", handle_events, methods=["GET"]),
         # Legacy compat — old CLI may still hit /api/profile.
         Route("/api/profile", handle_get_profile, methods=["GET"]),
         Route("/api/profile", handle_set_profile, methods=["POST"]),
-        WebSocketRoute("/ws/pi", handle_pi_ws),
+        WebSocketRoute("/ws/agent", handle_agent_ws),
+        WebSocketRoute("/ws/pi", handle_agent_ws),  # legacy compat
     ]
     return routes, webrtc_handler
 

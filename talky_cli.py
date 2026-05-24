@@ -154,6 +154,7 @@ def cmd_ask(args):
         sys.exit(1)
 
     # Ensure daemon is running (auto-start if needed)
+    need_wait = False
     if not voice_daemon_is_running():
         subprocess.Popen(
             [sys.executable, str(server_dir / "voice_daemon.py"), "--start"],
@@ -161,6 +162,7 @@ def cmd_ask(args):
             stderr=subprocess.DEVNULL,
             cwd=server_dir,
         )
+        need_wait = True
 
     # Build voice_client command
     cmd = [
@@ -169,8 +171,8 @@ def cmd_ask(args):
         "--cmd", "ask",
     ]
 
-    if not voice_daemon_is_running():
-        cmd.extend(["--wait", "15"])
+    if need_wait:
+        cmd.extend(["--wait", "30"])
 
     cmd.append(args.text)
 
@@ -332,9 +334,6 @@ def cmd_profile(args):
     import urllib.error
     import urllib.request
 
-    if not ensure_daemon():
-        sys.exit(1)
-
     host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
     port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
     base_url = f"http://{host}:{port}"
@@ -363,6 +362,71 @@ def cmd_profile(args):
         else:
             print("no profiles available — connect a browser to localhost:9090 first")
         return
+
+    resume_id = getattr(args, "resume", None)
+    cwd_arg = getattr(args, "cwd", None)
+    bypass_permissions = getattr(args, "bypass_permissions", False)
+    daemon_was_running = talky_daemon_is_running()
+
+    # Check if pipeline is live — only post live if services are already built.
+    _pipeline_live = False
+    if daemon_was_running:
+        try:
+            _st_url = f"http://{os.environ.get('TALKY_MCP_HOST', 'localhost')}:{int(os.environ.get('TALKY_MCP_PORT', '9090'))}/status"
+            import urllib.request as _ur
+            with _ur.urlopen(_st_url, timeout=2) as _r:
+                _st = json.loads(_r.read())
+            _pipeline_live = _st.get("channel", {}).get("live", False)
+        except Exception:
+            pass
+
+    if (resume_id or bypass_permissions) and not (daemon_was_running and _pipeline_live):
+        # Resolve the backend name so the startup file targets only that backend.
+        try:
+            from shared.profile_manager import get_profile_manager as _gpm
+            _pm = _gpm()
+            _tp = _pm.get_talky_profile(name)
+            _backend = (_tp.llm_backend if _tp and _tp.llm_backend else None) or name
+        except Exception:
+            _backend = name
+        _args_payload: dict = {}
+        if resume_id:
+            _resume_entry: dict = {"backend": _backend, "session_id": resume_id}
+            if cwd_arg:
+                _resume_entry["cwd"] = str(Path(cwd_arg).expanduser().resolve())
+            _args_payload["resume"] = _resume_entry
+        if bypass_permissions:
+            _args_payload["bypass_permissions"] = True
+        _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
+        _DAEMON_ARGS_PATH.write_text(json.dumps(_args_payload))
+
+    if not ensure_daemon():
+        sys.exit(1)
+
+    if resume_id and daemon_was_running and _pipeline_live:
+        # Daemon was already running — post live; startup file not involved.
+        resume_url = f"{base_url}/api/resume"
+        _live_resume: dict = {"session_id": resume_id}
+        if cwd_arg:
+            _live_resume["cwd"] = str(Path(cwd_arg).expanduser().resolve())
+        resume_body = json.dumps(_live_resume).encode("utf-8")
+        resume_req = urllib.request.Request(
+            resume_url, data=resume_body, method="POST",
+            headers={"content-type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(resume_req, timeout=3) as resp:
+                json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                err = json.loads(e.read().decode("utf-8"))
+                print(f"❌ resume failed: {err.get('error', e.reason)}")
+            except Exception:
+                print(f"❌ resume failed: HTTP {e.code}")
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            print(f"❌ could not reach talky daemon at {base_url}: {e}")
+            sys.exit(1)
 
     # POST mode: switch to the named profile
     url = f"{base_url}/api/profile"
@@ -560,6 +624,7 @@ _DAEMON_RUN_DIR = Path.home() / ".talky" / "run"
 _DAEMON_READY_PATH = _DAEMON_RUN_DIR / "talky-daemon.ready"
 _DAEMON_PID_PATH = _DAEMON_RUN_DIR / "talky-daemon.pid"
 _DAEMON_LOCK_PATH = _DAEMON_RUN_DIR / "talky-daemon.lock"
+_DAEMON_ARGS_PATH = _DAEMON_RUN_DIR / "talky-args.json"
 
 
 def talky_daemon_is_running() -> bool:
@@ -673,11 +738,26 @@ def main():
     # Shortcut: treat first non-option, non-command arg as a profile name.
     # `talky openclaw` → `talky profile openclaw`. `cmd_profile` ensures
     # the daemon is up.
-    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "claude", "pi", "transcribe", "kill", "profile", "voice", "status"}
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
-        profile_name = sys.argv.pop(1)
-        sys.argv.insert(1, "profile")
-        sys.argv.insert(2, profile_name)
+        candidate = sys.argv[1]
+        # If the profile carries a ``launcher:`` block, route through the
+        # generic launcher path. Otherwise treat it as a daemon-side
+        # profile switch (talky <profile>).
+        try:
+            from shared.profile_manager import get_profile_manager as _gpm
+            _pm = _gpm()
+            _tp = _pm.get_talky_profile(candidate)
+        except Exception:
+            _tp = None
+        if _tp is not None and _tp.launcher:
+            sys.argv.pop(1)
+            sys.argv.insert(1, "launch")
+            sys.argv.insert(2, candidate)
+        else:
+            sys.argv.pop(1)
+            sys.argv.insert(1, "profile")
+            sys.argv.insert(2, candidate)
 
     parser = argparse.ArgumentParser(description="Talky Voice Bot CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -747,6 +827,9 @@ def main():
         nargs="?",
         help="Profile name to switch to (e.g. openclaw, moltis, __mcp__). Omit to list.",
     )
+    profile_parser.add_argument("--resume", "-r", metavar="SESSION_ID", help="Resume a previous agent session by ID")
+    profile_parser.add_argument("--cwd", "-d", metavar="DIR", help="Working directory for the agent session")
+    profile_parser.add_argument("--bypass-permissions", action="store_true", help="Skip all Claude permission checks (dangerous)")
     profile_parser.set_defaults(func=cmd_profile)
 
     # === voice subcommand ===
@@ -772,35 +855,15 @@ def main():
     ls_parser = subparsers.add_parser("ls", help="List profiles")
     ls_parser.set_defaults(func=lambda args: cmd_list_profiles(args))
 
-    # === pi subcommand ===
-    pi_parser = subparsers.add_parser("pi", help="Start Pi coding agent with voice in this terminal")
-    pi_parser.add_argument(
-        "prompt",
-        nargs="?",
-        help="Optional initial message passed to Pi (e.g. 'Let\\'s work on auth')",
+    # === launch subcommand (generic agent launcher, ticket 5d95) ===
+    launch_parser = subparsers.add_parser(
+        "launch",
+        help="Launch the agent associated with a talky profile (uses launcher: block)",
     )
-    pi_parser.add_argument("--cwd", "-d", help="Working directory for Pi (default: current)")
-    pi_parser.set_defaults(func=cmd_pi)
-
-    # === claude subcommand ===
-    claude_parser = subparsers.add_parser("claude", help="Start Claude with voice")
-    claude_parser.add_argument("--dir", "-d", help="Working directory for app (default: current)")
-    
-    def cmd_claude(args):
-        # Create a simple object with the profile and copy all attributes
-        class Args:
-            def __init__(self, profile, **kwargs):
-                self.profile = profile
-                # Copy all attributes from the original args
-                for key, value in kwargs.items():
-                    setattr(self, key, value)
-        
-        # Copy all attributes from original args
-        args_dict = {k: v for k, v in vars(args).items() if k != 'func'}
-        args_obj = Args('claude', **args_dict)
-        return cmd_run_client_profile(args_obj)
-    
-    claude_parser.set_defaults(func=cmd_claude)
+    launch_parser.add_argument("profile", help="Talky profile name (must define launcher: in YAML)")
+    launch_parser.add_argument("--cwd", "-d", help="Working directory for the agent (default: current)")
+    launch_parser.add_argument("--resume", "-r", metavar="SESSION_ID", help="Resume a previous agent session by ID")
+    launch_parser.set_defaults(func=cmd_launch)
 
     # === auth subcommand ===
     auth_parser = subparsers.add_parser("auth", help="Manage provider credentials")
@@ -846,113 +909,146 @@ def main():
     cmd_profile(args)
 
 
-def cmd_pi(args):
-    """Start Pi coding agent with the talky voice extension.
+def _render_launcher_token(token: str, *, extension: str, cwd: str) -> str:
+    """Expand ``{project_root}``, ``{cwd}``, and ``{extension}`` in a token."""
+    return token.format(
+        project_root=str(_root),
+        cwd=cwd,
+        extension=extension,
+    )
 
-    Ensures the daemon is running, opens the browser, then exec's into
-    `pi -e <extension>` so Pi's terminal UI runs in this terminal with
-    voice live from the start.
+
+def _ensure_claude_skill_installed() -> None:
+    """Copy the talky skill into ~/.claude/skills/talky/ if not already there."""
+    import shutil
+    skill_dest = Path.home() / ".claude" / "skills" / "talky" / "SKILL.md"
+    if skill_dest.exists():
+        return
+    skill_source = _root / "skills" / "talky" / "SKILL.md"
+    if not skill_source.exists():
+        print(f"⚠️  Talky skill not found at {skill_source} — skipping install", file=sys.stderr)
+        return
+    skill_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(skill_source, skill_dest)
+    print(f"✅ Talky skill installed: {skill_dest}")
+
+
+def _ensure_claude_mcp_connected() -> None:
+    """Add the talky MCP server to Claude's config if not already present."""
+    import subprocess as _sp
+    try:
+        result = _sp.run(["claude", "mcp", "list"], capture_output=True, text=True, timeout=10)
+        if "talky" in result.stdout or "pipecat-mcp-server" in result.stdout:
+            return
+        _sp.run(
+            ["claude", "mcp", "add", "--transport", "http", "talky", "http://localhost:9090/mcp"],
+            capture_output=True, timeout=30,
+        )
+    except Exception as e:
+        print(f"⚠️  Could not auto-configure Claude MCP: {e}", file=sys.stderr)
+
+
+def cmd_launch(args):
+    """Generic agent launcher (ticket 5d95).
+
+    Resolves a talky profile, ensures the daemon is up, opens the client
+    in a browser (when the profile asks for it), then exec's into the
+    configured agent command. Replaces the old ``cmd_pi`` / ``cmd_claude``
+    / ``cmd_run_client_profile`` / ``AppLauncher`` zoo.
+
+    Required profile config (in ``talky-profiles.yaml``):
+
+      pi:
+        llm_backend: agent-ext
+        launcher:
+          command: ["pi"]
+          extension_arg: "-e"
+          extension: "{project_root}/extensions/pi-voice/extension.ts"
+          autoconnect_browser: true
+          mode: foreground   # foreground = exec; background = TBD
     """
     import shutil
     import webbrowser
 
-    if not ensure_daemon():
-        sys.exit(1)
-
-    ext_path = _root / "extensions" / "pi-voice" / "extension.ts"
-    if not ext_path.exists():
-        print(f"❌ Pi voice extension not found: {ext_path}", file=sys.stderr)
-        sys.exit(1)
-
-    if not shutil.which("pi"):
-        print("❌ `pi` not found in PATH", file=sys.stderr)
-        sys.exit(1)
-
-    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
-    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
-    client_url = f"http://{host}:{port}?autoconnect=true"
-    webbrowser.open(client_url)
-
-    cwd = getattr(args, "cwd", None)
-    if cwd:
-        os.chdir(cwd)
-
-    pi_cmd = ["pi", "-e", str(ext_path)]
-    prompt = getattr(args, "prompt", None)
-    if prompt:
-        pi_cmd.append(prompt)
-
-    # Replace this process with Pi. Pi's terminal UI runs in this terminal;
-    # the voice extension auto-connects to the daemon.
-    os.execvp("pi", pi_cmd)
-
-
-def cmd_run_client_profile(args):
-    """Run an app profile (e.g., 'talky pi', 'talky claude')."""
-    import asyncio
-
     from shared.profile_manager import get_profile_manager
 
-    profile_name = getattr(args, 'profile', None)
+    profile_name = getattr(args, "profile", None)
     if not profile_name:
         print("❌ No profile specified", file=sys.stderr)
         sys.exit(1)
 
     pm = get_profile_manager()
     profile = pm.get_talky_profile(profile_name)
-    if not (profile and hasattr(profile, 'backend') and hasattr(profile, 'app')):
+    if profile is None:
+        print(f"❌ Unknown talky profile: {profile_name!r}", file=sys.stderr)
+        sys.exit(1)
+    launcher = profile.launcher or {}
+    if not launcher:
         print(
-            f"❌ Profile {profile_name!r} is not a backend+app profile. "
-            f"Expected fields: backend, app.",
+            f"❌ Profile {profile_name!r} has no ``launcher:`` block in talky-profiles.yaml — "
+            f"nothing to launch.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    work_dir = getattr(args, 'dir', None)
-    asyncio.run(_run_backend_client_profile(profile, work_dir))
+    mode = launcher.get("mode", "foreground")
+    if mode != "foreground":
+        print(f"❌ launcher mode {mode!r} not yet implemented (only 'foreground' for now).", file=sys.stderr)
+        sys.exit(1)
 
+    cwd = getattr(args, "cwd", None) or os.getcwd()
 
-async def _run_backend_client_profile(profile, work_dir):
-    """Run a new-style backend + app profile."""
-    import asyncio
+    command = list(launcher.get("command") or [])
+    if not command:
+        print(f"❌ Profile {profile_name!r}.launcher.command is empty.", file=sys.stderr)
+        sys.exit(1)
 
-    from shared.client_launcher import AppLauncher, DaemonManager
+    extension_template = launcher.get("extension")
+    # extension_arg: if set (e.g. "-e"), the launcher appends [arg, extension]
+    # at the end of the rendered command — Pi style. If unset, the agent is
+    # expected to receive the extension path via a {extension} substitution
+    # somewhere in its own command list — Node style: ["node", "{extension}"].
+    extension_arg = launcher.get("extension_arg")
 
-    print(f"🚀 Starting {profile.app} with {profile.backend} voice backend...")
+    extension_path = ""
+    if extension_template:
+        extension_path = _render_launcher_token(extension_template, extension="", cwd=cwd)
+        if not Path(extension_path).exists():
+            print(f"❌ Extension not found: {extension_path}", file=sys.stderr)
+            sys.exit(1)
 
-    daemon_manager = DaemonManager()
-    app_launcher = AppLauncher(work_dir)
+    rendered = [_render_launcher_token(tok, extension=extension_path, cwd=cwd) for tok in command]
+    if extension_path and extension_arg:
+        rendered.extend([extension_arg, extension_path])
 
-    try:
-        daemon_config = {}
-        if profile.voice_profile:
-            daemon_config["voice_profile"] = profile.voice_profile
+    binary = rendered[0]
+    if not shutil.which(binary):
+        print(f"❌ `{binary}` not found in PATH", file=sys.stderr)
+        sys.exit(1)
 
-        daemon_available = await daemon_manager.ensure_running(daemon_config)
-        if not daemon_available:
-            print("❌ Failed to start talky daemon")
-            return
+    if not ensure_daemon():
+        sys.exit(1)
 
-        app_config = {}
-        await app_launcher.launch_app(profile.app, app_config)
-        await app_launcher.trigger_voice_command(profile.app)
+    if launcher.get("autoconnect_browser", False):
+        host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
+        port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
+        client_url = f"http://{host}:{port}?autoconnect=true"
+        webbrowser.open(client_url)
 
-        print(f"✅ {profile.app.capitalize()} is running. Use Ctrl+C to stop.")
+    prompt = launcher.get("prompt")
+    if prompt and binary == "claude":
+        _ensure_claude_skill_installed()
+        _ensure_claude_mcp_connected()
+        rendered.append(prompt)
 
-        app_process = app_launcher.processes.get(profile.app)
-        if app_process:
-            await asyncio.get_event_loop().run_in_executor(None, app_process.wait)
+    resume_id = getattr(args, "resume", None)
+    if resume_id:
+        resume_arg = launcher.get("resume_arg", "--resume")
+        rendered.extend([resume_arg, resume_id])
 
-        print(f"👋 {profile.app.capitalize()} session completed.")
-
-    except KeyboardInterrupt:
-        print("\n👋 Shutting down...")
-    except Exception as e:
-        print(f"❌ Error: {e}")
-    finally:
-        await app_launcher.stop_all()
-        await daemon_manager.stop()
-        print("✅ Done")
+    os.environ["TALKY_PROFILE"] = profile_name
+    os.chdir(cwd)
+    os.execvp(binary, rendered)
 
 
 if __name__ == "__main__":

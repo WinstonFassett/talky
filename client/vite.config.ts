@@ -1,5 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import path from 'path';
 
 // Get allowed hosts from environment or use defaults
 const getAllowedHosts = (): string[] => {
@@ -18,17 +20,18 @@ const getHost = (): string => {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: { alias: { '@': path.resolve(__dirname, './src') } },
   server: {
     host: getHost(),
     port: 5173,
     allowedHosts: getAllowedHosts(),
     proxy: {
-      // Forward all API/WebRTC/SSE calls to the talky daemon on :9090.
-      '/api': 'http://localhost:9090',
+      '/api': { target: 'http://localhost:9090', ws: true },
       '/start': 'http://localhost:9090',
       '/status': 'http://localhost:9090',
-      '/sessions': 'http://localhost:9090',
+      '/sessions': { target: 'http://localhost:9090', ws: true },
+      '/ws': { target: 'http://localhost:9090', ws: true },
     },
   },
 });

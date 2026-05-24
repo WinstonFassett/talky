@@ -80,7 +80,7 @@ async def test_live_switch_queues_manually_switch_service_frame(ch, known_profil
         pass
 
     monkeypatch.setattr(VoiceChannel, "_emit_profile_changed", fake_emit)
-    monkeypatch.setattr(VoiceChannel, "_greeting_for_profile", lambda self, name: None)
+    monkeypatch.setattr(VoiceChannel, "_announcement_for_profile", lambda self, name: None)
 
     await ch.switch_to_profile("openclaw")
 

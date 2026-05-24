@@ -1,42 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
-import {
-  ConnectButton,
-  ConversationPanel,
-  // EventsPanel,
-  UserAudioControl,
-} from '@pipecat-ai/voice-ui-kit';
-import type { JSX } from 'react';
+import { ConnectButton, UserAudioControl } from '@pipecat-ai/voice-ui-kit';
+import { ConversationPanelWithReasoning } from './ConversationPanelWithReasoning';
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
-
-// Internal transport interface for data channel access (not exposed in public API)
-interface TransportWithDataChannel {
-  dc?: RTCDataChannel;
-}
 
 import type { TransportType } from '../config';
 import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
+import { SteerModeToggle } from './SteerModeToggle';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
+import { PermissionBanner } from './PermissionBanner';
 
-const BOT_OUTPUT_RENDERERS: Record<string, (content: string) => JSX.Element> = {
-  tool_start: (content) => (
-    <div className="text-xs font-mono text-muted-foreground opacity-70">{content}</div>
-  ),
-  tool_end: (content) => (
-    <div className="text-xs font-mono text-muted-foreground opacity-70">{content}</div>
-  ),
-  thinking: (content) => (
-    <div className="text-xs italic text-muted-foreground opacity-60">{content}</div>
-  ),
-};
+interface TransportWithDataChannel {
+  dc?: RTCDataChannel;
+}
 
 // Pre-load the drop cue so it plays instantly on unexpected disconnect.
-// The WAV is generated from shared/audio_cues.stop_cue_pcm (three
-// descending beeps). Ticket 6b60 problem B.
 const dropCueAudio = new Audio('/cues/drop.wav');
 dropCueAudio.volume = 0.7;
 
@@ -58,28 +40,17 @@ export const App = ({
 }: AppProps) => {
   const autoconnectAttempted = useRef(false);
   const userInitiatedDisconnect = useRef(false);
-
   const [devicesReady, setDevicesReady] = useState(false);
-
-  // Track whether we've ever been connected — the initial state is
-  // "disconnected" before the user connects, and we must not fire
-  // the drop cue for that initial state.
+  const [activeProfile, setActiveProfile] = useState('');
   const hasBeenConnected = useRef(false);
-
   const transportState = usePipecatClientTransportState();
 
-  // Wrap handleDisconnect to flag user-initiated disconnects so the
-  // drop-cue logic can distinguish them from unexpected drops.
   const wrappedDisconnect = useCallback(() => {
     userInitiatedDisconnect.current = true;
     handleDisconnect?.();
   }, [handleDisconnect]);
 
-  // Play drop cue on unexpected disconnect (ticket 6b60 problem B).
-  // Two detection paths:
-  //   1. Transport state → disconnected/error (pipecat SDK, can be slow)
-  //   2. HTTP heartbeat to the daemon (fast, 2s detection)
-  // Either one fires the cue if the user didn't click disconnect.
+  // Drop cue on unexpected disconnect (ticket 6b60 problem B).
   const cuePlayedForThisSession = useRef(false);
 
   const playDropCue = useCallback(() => {
@@ -93,9 +64,7 @@ export const App = ({
   }, []);
 
   // Path 1: transport state change (slow but authoritative).
-  // Requires at least 5s of being connected before firing — avoids
-  // false positives from transient state changes during initial
-  // WebRTC negotiation.
+  // Requires at least 5s of being connected before firing.
   const connectedSince = useRef(0);
 
   useEffect(() => {
@@ -116,18 +85,9 @@ export const App = ({
     }
   }, [transportState, playDropCue]);
 
-  // Path 2: data-channel pong tracking (fast, on the actual WebRTC
-  // channel — not a side-channel HTTP request). The server echoes
-  // {"type":"pong"} on the data channel for every client ping (1/s).
-  // If pongs stop arriving for >3s, the server is dead. Ticket 6b60.
+  // Path 2: data-channel pong tracking (fast — ticket 6b60).
   const lastPongRef = useRef(0);
 
-  // Listen for pong messages directly on the WebRTC data channel.
-  // The pipecat SDK routes pongs through its RTVI handler but drops
-  // them as "Unrecognized message type" without emitting an event.
-  // So we add our own listener on the underlying data channel.
-  // Polls for the data channel to appear since it's created async
-  // during WebRTC negotiation.
   useEffect(() => {
     if (transportState !== 'connected' && transportState !== 'ready') return;
 
@@ -135,7 +95,6 @@ export const App = ({
     let cancelled = false;
 
     const attach = () => {
-      // Access the data channel through the transport internals.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const transport = (client as unknown as { _transport?: TransportWithDataChannel })?._transport;
       const dc: RTCDataChannel | undefined = transport?.dc;
@@ -145,19 +104,14 @@ export const App = ({
         if (typeof ev.data !== 'string') return;
         try {
           const msg = JSON.parse(ev.data);
-          if (msg.type === 'pong') {
-            lastPongRef.current = Date.now();
-          }
-        } catch {
-          // Ignore non-JSON messages
-        }
+          if (msg.type === 'pong') lastPongRef.current = Date.now();
+        } catch { /* ignore */ }
       };
       dc.addEventListener('message', handler);
       cleanupFn = () => dc.removeEventListener('message', handler);
       return true;
     };
 
-    // Try immediately, then poll briefly if not ready yet.
     let pollInterval: ReturnType<typeof setInterval> | null = null;
     if (!attach() && !cancelled) {
       pollInterval = setInterval(() => {
@@ -171,29 +125,20 @@ export const App = ({
       cancelled = true;
       if (pollInterval) clearInterval(pollInterval);
       cleanupFn?.();
-      // Reset pong tracking to prevent stale values on reconnect
       lastPongRef.current = 0;
     };
   }, [client, transportState]);
 
   useEffect(() => {
     if (transportState !== 'connected' && transportState !== 'ready') return;
-
-    // Don't start checking until the first pong arrives — avoids
-    // false positives during initial connection when the pong path
-    // may not be established yet.
     const interval = setInterval(() => {
       if (lastPongRef.current > 0 && Date.now() - lastPongRef.current > 3000) {
         playDropCue();
       }
     }, 1000);
-
     return () => clearInterval(interval);
   }, [transportState, playDropCue]);
 
-  // Pipecat SDK log level. Default WARN to suppress per-second
-  // "received message" noise. Override with VITE_PIPECAT_LOG_LEVEL
-  // (none/error/warn/info/debug) for troubleshooting.
   useEffect(() => {
     if (!client) return;
     const levels: Record<string, number> = { none: 0, error: 1, warn: 2, info: 3, debug: 4 };
@@ -201,15 +146,31 @@ export const App = ({
     try { client.setLogLevel(level); } catch { /* older SDK */ }
   }, [client]);
 
+  // Track active profile so SteerModeToggle can conditionally render.
   useEffect(() => {
-    if (client) {
-      client?.initDevices().then(() => {
-        setDevicesReady(true);
-      }).catch(err => {
-        console.error('Failed to initialize devices:', err);
-        setDevicesReady(true); // Still try to connect even if devices fail
-      });
-    }
+    const es = new EventSource('/api/events');
+    es.addEventListener('init', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        const active = (data.profiles as Array<{name: string; active: boolean}> | undefined)?.find(p => p.active);
+        if (active) setActiveProfile(active.name);
+      } catch { /* ignore */ }
+    });
+    es.addEventListener('profileChanged', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === 'llm' && data.profile) setActiveProfile(data.profile as string);
+      } catch { /* ignore */ }
+    });
+    return () => es.close();
+  }, []);
+
+  useEffect(() => {
+    if (!client) return;
+    // Don't call initDevices() proactively — if the mic permission prompt hangs,
+    // the transport stays stuck in "initializing" and handleConnect bails silently.
+    // Let connect() call initDevices() itself. Just gate autoconnect on client existence.
+    setDevicesReady(true);
   }, [client]);
 
   useEffect(() => {
@@ -223,10 +184,12 @@ export const App = ({
 
   return (
     <div className="flex flex-col w-full h-full">
+      <PermissionBanner />
       <div className="flex items-center justify-between gap-4 p-4">
         <div className="flex items-center gap-4">
           <BotVisualizer client={client} />
           <LLMProfileSelect />
+          <SteerModeToggle activeProfile={activeProfile} />
           <VoiceProfileSelect />
           {showTransportSelector ? (
             <TransportSelect
@@ -248,7 +211,7 @@ export const App = ({
       </div>
       <div className="flex-1 overflow-hidden px-4">
         <div className="h-full overflow-hidden">
-          <ConversationPanel conversationElementProps={{ botOutputRenderers: BOT_OUTPUT_RENDERERS }} />
+          <ConversationPanelWithReasoning />
         </div>
       </div>
     </div>

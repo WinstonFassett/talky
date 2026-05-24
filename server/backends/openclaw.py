@@ -567,3 +567,157 @@ class OpenClawLLMService(LLMService):
         except Exception as e:
             logger.error(f"Error in _process_user_text: {e}", exc_info=True)
             await self.push_frame(LLMFullResponseEndFrame())
+
+
+class OpenClawVoiceLLMService(OpenClawLLMService):
+    """OpenClaw LLM service using the Talk API for native voice support.
+
+    Upgrades the base class from chat.send (full-response accumulation) to
+    talk.session.* (streaming deltas + barge-in via cancelOutput + steer).
+
+    This is the preferred backend for voice sessions. Use OpenClawLLMService
+    only if the Talk API is unavailable.
+    """
+
+    def __init__(self, *, talk_mode: str = "stt-tts/managed-room", **kwargs):
+        super().__init__(**kwargs)
+        self._talk_mode = talk_mode
+        self._talk_session_id: str | None = None
+        # pending interrupted text to steer after cancelOutput
+        self._pending_steer_text: str | None = None
+
+    # ------------------------------------------------------------------
+    # Talk session lifecycle
+    # ------------------------------------------------------------------
+
+    async def _create_talk_session(self) -> str:
+        """Create a voice session via talk.session.create."""
+        req_id = str(self._next_id())
+        await self._ws.send(json.dumps({
+            "type": "req",
+            "id": req_id,
+            "method": "talk.session.create",
+            "params": {
+                "agentId": self.agent_id,
+                "sessionKey": self.session_key,
+                "mode": self._talk_mode,
+            },
+        }))
+        # Response comes through the message handler; we wait for session ID
+        # via a one-shot event rather than blocking here.
+        self._talk_session_ready = asyncio.Event()
+        self._talk_session_id = None
+        await asyncio.wait_for(self._talk_session_ready.wait(), timeout=10)
+        if not self._talk_session_id:
+            raise RuntimeError("talk.session.create: no sessionId in response")
+        logger.info(f"✅ OpenClaw talk session: {self._talk_session_id}")
+        return self._talk_session_id
+
+    async def _ensure_talk_session(self):
+        if not self._connected:
+            await self._connect()
+        if not self._talk_session_id:
+            await self._create_talk_session()
+
+    async def _send_talk_req(self, method: str, extra_params: dict | None = None):
+        params = {"sessionId": self._talk_session_id}
+        if extra_params:
+            params.update(extra_params)
+        await self._ws.send(json.dumps({
+            "type": "req",
+            "id": str(self._next_id()),
+            "method": method,
+            "params": params,
+        }))
+
+    # ------------------------------------------------------------------
+    # Override message handler to route talk.session events
+    # ------------------------------------------------------------------
+
+    async def _handle_messages(self):
+        """Handle incoming WebSocket messages — extends parent with Talk events."""
+        try:
+            async for message in self._ws:
+                data = json.loads(message)
+                event = data.get("event", "")
+
+                # Filter noisy events
+                if event not in ("tick", "health"):
+                    logger.debug(f"📨 Received: {message[:200]}")
+
+                # talk.session.create response — extract session ID
+                if data.get("type") == "res" and data.get("id"):
+                    result = data.get("result", {})
+                    if "sessionId" in result and hasattr(self, "_talk_session_ready"):
+                        self._talk_session_id = result["sessionId"]
+                        self._talk_session_ready.set()
+
+                # Streaming text delta from talk session
+                elif data.get("type") == "event" and event == "talk.session.outputDelta":
+                    delta = data.get("payload", {}).get("delta", "")
+                    if delta:
+                        await self.push_frame(TextFrame(delta))
+
+                # Turn complete
+                elif data.get("type") == "event" and event == "talk.session.outputDone":
+                    await self.push_frame(LLMFullResponseEndFrame())
+
+                # Error from talk session
+                elif data.get("type") == "event" and event == "talk.session.error":
+                    err = data.get("payload", {}).get("error", "unknown")
+                    logger.error(f"❌ Talk session error: {err}")
+                    await self.push_frame(LLMFullResponseEndFrame())
+
+                # Fallthrough: non-talk events handled by parent logic
+                else:
+                    # Re-use parent queue-based flow for any non-talk events
+                    if data.get("type") == "res" and not data.get("ok"):
+                        logger.error(f"❌ Request failed: {json.dumps(data.get('error', {}))}")
+
+        except Exception as e:
+            logger.error(f"Message handler error: {e}", exc_info=True)
+            self._connected = False
+
+    # ------------------------------------------------------------------
+    # Override frame processing
+    # ------------------------------------------------------------------
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        # Skip grandparent and handle everything ourselves
+        from pipecat.processors.frame_processor import FrameProcessor
+        await FrameProcessor.process_frame(self, frame, direction)
+
+        if isinstance(frame, InterruptionFrame):
+            if self._talk_session_id:
+                logger.info("🛑 OpenClaw barge-in: cancelOutput + steer")
+                await self._send_talk_req("talk.session.cancelOutput")
+                # Steer happens in next UserTurnTextFrame with the interrupted speech
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, UserTurnTextFrame):
+            await self._ensure_talk_session()
+            await self.push_frame(LLMFullResponseStartFrame())
+
+            # Format with voice guidance
+            formatted = format_voice_message(frame.text)
+            logger.info(f"🗣️ User (Talk): {frame.text[:80]}...")
+
+            # Send as appendMessage (we do our own STT)
+            await self._send_talk_req("talk.session.appendMessage", {
+                "message": {"role": "user", "content": formatted},
+            })
+            # Response arrives via talk.session.outputDelta events
+            return
+
+        await self.push_frame(frame, direction)
+
+    async def stop(self, frame):
+        """Close talk session before disconnecting."""
+        if self._talk_session_id:
+            try:
+                await self._send_talk_req("talk.session.close")
+            except Exception:
+                pass
+            self._talk_session_id = None
+        await super().stop(frame) if hasattr(super(), "stop") else None

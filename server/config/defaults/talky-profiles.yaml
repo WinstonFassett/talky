@@ -1,26 +1,47 @@
-# Talky Profiles Template - Empty for new users
-# New users get this copied to ~/.talky/ then extend with their own configs
-# This extends the core profiles from server/config/core/talky-profiles.yaml
+# Talky Profiles Template - Copied to ~/.talky/ for new users
+# Extends the core profiles in server/config/core/talky-profiles.yaml
+#
+# Profiles with a `launcher:` block are foreground: `talky <profile>` execs
+# into the agent's CLI binary with the voice extension loaded. Profiles
+# without a launcher block are background / remote: `talky <profile>` just
+# switches the daemon's active LLM (the browser drives the conversation).
 
 talky_profiles:
 
-  # OpenClaw
   openclaw:
     description: "OpenClaw"
 
-  # Moltis
   moltis:
     description: "Moltis"
     llm_backend: "moltis"
 
-  # Pi coding agent (RPC mode, interruptible)
+  # Pi — foreground (exec into Pi terminal with voice extension)
   pi:
     description: "Pi"
+    llm_backend: "agent-ext"
+    launcher:
+      mode: foreground
+      command: ["pi"]
+      extension_arg: "-e"
+      extension: "{project_root}/extensions/pi-voice/extension.ts"
+      autoconnect_browser: true
+
+  # Pi — background RPC mode (no terminal, interruptible)
+  pi-bg:
+    description: "Pi (background)"
     llm_backend: "pi"
 
-  # Claude with MCP voice (future)
+  # Claude — foreground (Claude Code TUI, talky skill auto-installed, voice convo auto-started)
   claude:
-    description: "Claude with voice"
-    backend: "mcp"
-    app: "claude"
-    voice_profile: null  # Use default
+    description: "Claude"
+    llm_backend: "agent-ext"
+    launcher:
+      mode: foreground
+      command: ["claude"]
+      prompt: "I want to have a voice conversation"
+      autoconnect_browser: true
+
+  # Claude — background (daemon-side Agent SDK thread bridge, no terminal)
+  claude-bg:
+    description: "Claude (background)"
+    llm_backend: "claude-code"
