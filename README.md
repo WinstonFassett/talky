@@ -1,6 +1,6 @@
 # Talky
 
-Voice interface for AI. Talk to OpenClaw, Moltis or Pi. Or use MCP to talk to Claude.
+Voice interface for AI. Talk to OpenClaw, Moltis, Hermes or Pi. Or use MCP to talk to Claude.
 
 <a href="screenshots/main.png" target="_blank">
   <img src="screenshots/main.png" alt="Talky Demo" width="450">
@@ -15,6 +15,7 @@ brew install portaudio                # required for local audio (talky say)
 uv tool install --editable .
 talky openclaw                    # Talk to OpenClaw
 talky moltis                      # Talk to Moltis  
+talky hermes                      # Talk to Hermes (NousResearch)
 talky pi                          # Talk to Pi
 talky say "Hello world"           # Test voice output
 ```
@@ -24,6 +25,7 @@ talky say "Hello world"           # Test voice output
 **Talk to AI**
 - `talky openclaw` - OpenClaw assistant
 - `talky moltis` - Moltis assistant  
+- `talky hermes` - Hermes agent (NousResearch)
 - `talky pi` - Pi coding assistant
 - Opens browser at `localhost:9090` for voice chat
 

@@ -5,9 +5,10 @@ pattern as claude_code.py: run it in a dedicated OS thread, bridge frames
 to Pipecat's asyncio event loop via an asyncio.Queue.
 
 Interrupt semantics:
-  - InterruptionFrame → agent.interrupt() — propagates to tool worker threads
-    mid-execution (better than Claude's turn-boundary-only interrupt)
-  - Next UserTurnTextFrame queues a new prompt; bridge clears interrupt state
+  - InterruptionFrame → passed through (no hard stop)
+  - UserTurnTextFrame mid-turn → agent.steer(text) — non-interrupting injection;
+    hermes finishes the current tool batch then sees the new user message
+  - UserTurnTextFrame between turns → queued as a new prompt
 
 Model: configurable via profile config. Defaults to anthropic/claude-sonnet-4-6
 via Hermes' built-in provider routing. Can point at any OpenAI-compatible endpoint.
@@ -40,6 +41,7 @@ from pipecat.services.llm_service import LLMService
 from pipecat_mcp_server.talky_turn import UserTurnTextFrame
 
 _HERMES_DIR = os.path.expanduser("~/.hermes/hermes-agent")
+_HERMES_CONFIG = os.path.expanduser("~/.hermes/config.yaml")
 
 try:
     if _HERMES_DIR not in sys.path:
@@ -68,23 +70,18 @@ class _HermesThread:
         self._frame_queue = frame_queue
         self._prompt_queue: queue.Queue = queue.Queue()
         self._thread: Optional[threading.Thread] = None
+        self._turn_active = False
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True, name="hermes-agent")
         self._thread.start()
 
     def send_prompt(self, text: str):
-        self._agent.clear_interrupt()
-        self._prompt_queue.put(text)
-
-    def interrupt(self):
-        self._agent.interrupt()
-        # Drain any queued prompts that arrived before the interrupt.
-        while True:
-            try:
-                self._prompt_queue.get_nowait()
-            except queue.Empty:
-                break
+        """Steer if a turn is active, otherwise queue as a new prompt."""
+        if self._turn_active:
+            self._agent.steer(text)
+        else:
+            self._prompt_queue.put(text)
 
     def stop(self):
         self._prompt_queue.put(None)
@@ -101,6 +98,7 @@ class _HermesThread:
             if prompt is None:
                 break
             self._agent.clear_interrupt()
+            self._turn_active = True
             self._put_frame(_TURN_START)
             try:
                 result = self._agent.run_conversation(prompt, conversation_history=history)
@@ -108,6 +106,7 @@ class _HermesThread:
             except Exception as e:
                 logger.error(f"Hermes run_conversation error: {e}", exc_info=True)
             finally:
+                self._turn_active = False
                 self._put_frame(_TURN_END)
 
 
@@ -129,6 +128,7 @@ class HermesLLMService(LLMService):
         provider: Optional[str] = None,
         cwd: Optional[str] = None,
         max_turns: int = 90,
+        resume: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -141,19 +141,35 @@ class HermesLLMService(LLMService):
         self._provider = provider
         self._cwd = cwd
         self._max_turns = max_turns
+        self._resume = resume
         self._frame_queue: asyncio.Queue = asyncio.Queue()
         self._bridge: Optional[_HermesThread] = None
         self._drain_task: Optional[asyncio.Task] = None
 
+    @staticmethod
+    def _hermes_defaults() -> tuple[str, str]:
+        """Read model/provider defaults from ~/.hermes/config.yaml."""
+        try:
+            import yaml  # type: ignore[import]
+            with open(_HERMES_CONFIG) as f:
+                cfg = yaml.safe_load(f) or {}
+            model_cfg = cfg.get("model", {}) or {}
+            return model_cfg.get("default", ""), model_cfg.get("provider", "")
+        except Exception:
+            return "", ""
+
     def _build_agent(self) -> "AIAgent":
+        default_model, default_provider = self._hermes_defaults()
         kwargs: dict = dict(
             max_iterations=self._max_turns,
             quiet_mode=True,
         )
-        if self._model:
-            kwargs["model"] = self._model
-        if self._provider:
-            kwargs["provider"] = self._provider
+        if self._model or default_model:
+            kwargs["model"] = self._model or default_model
+        if self._provider or default_provider:
+            kwargs["provider"] = self._provider or default_provider
+        if self._resume:
+            kwargs["session_id"] = self._resume
 
         agent = AIAgent(**kwargs)
 
@@ -263,8 +279,6 @@ class HermesLLMService(LLMService):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, InterruptionFrame):
-            if self._bridge:
-                self._bridge.interrupt()
             await self.push_frame(frame, direction)
             return
 
