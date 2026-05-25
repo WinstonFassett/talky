@@ -26,3 +26,8 @@ talky_profiles:
     description: "Hermes"
     llm_backend: "hermes"
 
+  # Opencode (sst/opencode) — HTTP server backend with first-class permission asks
+  opencode:
+    description: "Opencode"
+    llm_backend: "opencode"
+

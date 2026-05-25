@@ -760,14 +760,25 @@ def _build_webrtc_routes():
             pass
         allow = bool(body.get("allow", False))
 
-        # Find the active ClaudeCodeLLMService (by checking all registered services).
+        # Find any backend with a pending permission. Both claude-code and opencode
+        # expose ``resolve_permission(allow=...)`` — but claude-code's is sync and
+        # opencode's is async. Handle both.
         from server.backends.claude_code import ClaudeCodeLLMService
+
+        try:
+            from server.backends.opencode import OpencodeLLMService  # type: ignore
+        except ImportError:
+            OpencodeLLMService = None  # type: ignore[assignment]
 
         resolved = False
         for svc in voice_channel._llm_services.values():  # noqa: SLF001
             if isinstance(svc, ClaudeCodeLLMService):
-                resolved = svc.resolve_permission(allow=allow)
-                if resolved:
+                if svc.resolve_permission(allow=allow):
+                    resolved = True
+                    break
+            if OpencodeLLMService is not None and isinstance(svc, OpencodeLLMService):
+                if await svc.resolve_permission(allow=allow):
+                    resolved = True
                     break
 
         if not resolved:

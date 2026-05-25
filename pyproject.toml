@@ -78,6 +78,7 @@ groq = ["pipecat-ai[groq]"]
 
 # LLM backend extras
 claude-code = ["claude-code-sdk==0.0.25"]
+opencode = ["opencode-ai>=0.1.0a36", "httpx>=0.27"]
 
 # Convenience groups
 tts = ["pipecat-ai[openai,elevenlabs,cartesia,fish,gradium,hume,lmnt,neuphonic,nvidia,playht,resembleai,rime,sambanova,sarvam,kokoro]"]

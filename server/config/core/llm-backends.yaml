@@ -59,3 +59,21 @@ llm_backends:
     config:
       cwd: null
       max_turns: 90
+  opencode:
+    description: "Opencode (sst/opencode) via HTTP server, streaming + permission asks"
+    service_class: "server.backends.opencode.OpencodeLLMService"
+    extra: "opencode"
+    announcement: "Opencode channel."
+    config:
+      # Where opencode serve is listening. Auto-spawned if auto_spawn=true and nothing answers.
+      base_url: "http://127.0.0.1:4096"
+      auto_spawn: true
+      cwd: null
+      # Leave provider_id/model_id null to defer to opencode's /config defaults.
+      provider_id: "opencode"
+      model_id: "claude-haiku-4-5"
+      # Per-session permission ruleset. Each entry: {permission, pattern, action}
+      # where action ∈ allow|deny|ask. Empty list = no asks.
+      permissions:
+        - {permission: "bash", pattern: "*", action: "ask"}
+        - {permission: "edit", pattern: "*", action: "ask"}
