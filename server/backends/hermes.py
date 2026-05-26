@@ -33,8 +33,8 @@ from pipecat.frames.frames import (
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
+    LLMTextFrame,
     StartFrame,
-    TextFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
@@ -272,7 +272,7 @@ class HermesLLMService(LLMService):
                 else:
                     kind, payload = item
                     if kind == "text":
-                        await self.push_frame(TextFrame(payload))
+                        await self.push_frame(LLMTextFrame(payload))
                     elif kind == "reasoning":
                         await self.push_frame(AggregatedTextFrame(text=payload, aggregated_by="thinking"))
                     elif kind == "tool_start":
