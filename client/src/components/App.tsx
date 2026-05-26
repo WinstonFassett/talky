@@ -1,8 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
-import { ConnectButton, UserAudioControl } from '@pipecat-ai/voice-ui-kit';
+import {
+  ConnectButton,
+  ConversationPanel,
+  EventsPanel,
+  UserAudioControl,
+} from '@pipecat-ai/voice-ui-kit';
 import { ConversationPanelWithReasoning } from './ConversationPanelWithReasoning';
+
+const STOCK_BOT_OUTPUT_RENDERERS: Record<string, (content: string) => React.JSX.Element> = {
+  tool_start: (content) => (
+    <div className="text-xs font-mono text-muted-foreground opacity-70">⟳ {content}</div>
+  ),
+  tool_end: (content) => (
+    <div className="text-xs font-mono text-muted-foreground opacity-70">✓ {content}</div>
+  ),
+  thinking: (content) => (
+    <div className="text-xs italic text-muted-foreground opacity-60">{content}</div>
+  ),
+  permission_request: (content) => (
+    <div className="text-xs font-mono text-amber-500">⚠ {content}</div>
+  ),
+};
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
 import type { TransportType } from '../config';
@@ -210,8 +230,20 @@ export const App = ({
         </div>
       </div>
       <div className="flex-1 overflow-hidden px-4">
-        <div className="h-full overflow-hidden">
-          <ConversationPanelWithReasoning />
+        <div className="h-full grid grid-cols-2 gap-4 overflow-hidden">
+          <div className="overflow-hidden">
+            <ConversationPanelWithReasoning />
+          </div>
+          <div className="grid grid-rows-[1fr_1fr] gap-4 overflow-hidden">
+            <div className="overflow-hidden">
+              <ConversationPanel
+                conversationElementProps={{ botOutputRenderers: STOCK_BOT_OUTPUT_RENDERERS }}
+              />
+            </div>
+            <div className="overflow-hidden">
+              <EventsPanel />
+            </div>
+          </div>
         </div>
       </div>
     </div>
