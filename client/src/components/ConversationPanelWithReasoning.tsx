@@ -136,24 +136,6 @@ function KaraokePart({
   );
 }
 
-function RawKaraokeBaseline({ parts }: { parts: ConversationMessagePart[] }) {
-  return (
-    <span>
-      {parts.map((p, i) => {
-        if (p.aggregatedBy === 'thinking') return null;
-        if (p.aggregatedBy && BLOCK_RENDERERS[p.aggregatedBy]) return null;
-        const { spoken, unspoken } = splitPayload(p);
-        return (
-          <Fragment key={i}>
-            {spoken}
-            {unspoken && <span className="text-muted-foreground">{unspoken}</span>}
-          </Fragment>
-        );
-      })}
-    </span>
-  );
-}
-
 function AssistantMessage({ message }: { message: ConversationMessage }) {
   const isStreaming = !message.final;
 
@@ -178,28 +160,21 @@ function AssistantMessage({ message }: { message: ConversationMessage }) {
         </Reasoning>
       )}
       {chunks.length > 0 && (
-        <>
-          <div className="text-xs text-muted-foreground opacity-60 mb-1 font-mono">[raw baseline]</div>
-          <div className="text-sm mb-3">
-            <RawKaraokeBaseline parts={message.parts} />
-          </div>
-          <div className="text-xs text-muted-foreground opacity-60 mb-1 font-mono">[markdown + karaoke]</div>
-          <div className="text-sm">
-            {chunks.map((c, i) =>
-              c.kind === 'block' ? (
-                <Fragment key={c.key}>{BLOCK_RENDERERS[c.agg](c.content)}</Fragment>
-              ) : (
-                <KaraokePart
-                  key={c.key}
-                  spoken={c.spoken}
-                  unspoken={c.unspoken}
-                  isStreaming={isStreaming}
-                  isLast={i === chunks.length - 1}
-                />
-              ),
-            )}
-          </div>
-        </>
+        <div className="text-sm">
+          {chunks.map((c, i) =>
+            c.kind === 'block' ? (
+              <Fragment key={c.key}>{BLOCK_RENDERERS[c.agg](c.content)}</Fragment>
+            ) : (
+              <KaraokePart
+                key={c.key}
+                spoken={c.spoken}
+                unspoken={c.unspoken}
+                isStreaming={isStreaming}
+                isLast={i === chunks.length - 1}
+              />
+            ),
+          )}
+        </div>
       )}
     </div>
   );
