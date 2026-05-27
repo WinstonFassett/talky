@@ -639,32 +639,14 @@ class VoiceChannel:
                 if self._voice_switcher
                 else pm.get_default_voice_profile() or None
             )
-            out = []
-            for name, _desc in pm.list_voice_profiles().items():
-                p = pm.get_voice_profile(name)
-                if p is None:
-                    continue
-                tts_label = (
-                    f"{p.tts_provider} · {p.tts_voice}"
-                    if p.tts_voice
-                    else p.tts_provider
-                )
-                stt_label = (
-                    f"{p.stt_provider} · {p.stt_model}"
-                    if p.stt_model
-                    else p.stt_provider
-                )
-                out.append(
-                    {
-                        "name": name,
-                        "description": p.description,
-                        "active": name == current,
-                        "tts": tts_label,
-                        "stt": stt_label,
-                        "provider": p.tts_provider,
-                    }
-                )
-            return out
+            return [
+                {
+                    "name": name,
+                    "description": desc,
+                    "active": name == current,
+                }
+                for name, desc in pm.list_voice_profiles().items()
+            ]
         except Exception:  # noqa: BLE001
             return []
 
