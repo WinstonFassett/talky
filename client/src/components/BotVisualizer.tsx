@@ -3,6 +3,7 @@ import { usePipecatClientMediaTrack } from '@pipecat-ai/client-react';
 import { CircularWaveform } from '@pipecat-ai/voice-ui-kit';
 import { useEffect, useState } from 'react';
 
+import { useUrlParam } from '../fixtures/harness';
 
 interface BotVisualizerProps {
   client: PipecatClient | null;
@@ -11,8 +12,9 @@ interface BotVisualizerProps {
 export const BotVisualizer = ({ client }: BotVisualizerProps) => {
   const [isBotThinking, setIsBotThinking] = useState(false);
   const [isBotSpeaking, setIsBotSpeaking] = useState(false);
-  
+
   const botAudioTrack = usePipecatClientMediaTrack('audio', 'bot');
+  const voiceStateOverride = useUrlParam('voiceState');
 
   useEffect(() => {
     if (!client) return;
@@ -41,15 +43,19 @@ export const BotVisualizer = ({ client }: BotVisualizerProps) => {
     };
   }, [client]);
 
+  const thinking = voiceStateOverride === 'thinking' || (!voiceStateOverride && isBotThinking);
+  const speaking = voiceStateOverride === 'speaking' || (!voiceStateOverride && isBotSpeaking);
+  const audioTrack = voiceStateOverride ? null : (isBotSpeaking ? botAudioTrack : null);
+
   return (
-    <CircularWaveform 
+    <CircularWaveform
       size={60}
-      audioTrack={isBotSpeaking ? botAudioTrack : null}
-      isThinking={isBotThinking}            
+      audioTrack={audioTrack}
+      isThinking={thinking}
       color1="#615fff"
       color2="#EC4899"
       backgroundColor="transparent"
-      rotationEnabled={!isBotSpeaking}
+      rotationEnabled={!speaking}
       numBars={32}
       barWidth={1}
       sensitivity={2}

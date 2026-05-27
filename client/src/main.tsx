@@ -18,6 +18,8 @@ import {
   DEFAULT_TRANSPORT,
   TRANSPORT_CONFIG,
 } from './config';
+import { DevPicker } from './fixtures/DevPicker';
+import { isDevRoute } from './fixtures/harness';
 import './index.css';
 
 // Parse URL parameters
@@ -35,7 +37,8 @@ export const Main = () => {
     useState<TransportType>(DEFAULT_TRANSPORT);
 
   const connectParams = TRANSPORT_CONFIG[transportType];
-  const autoconnect = getAutoconnect();
+  const dev = isDevRoute();
+  const autoconnect = !dev && getAutoconnect();
 
   return (
     <ThemeProvider defaultTheme="dark">
@@ -68,6 +71,7 @@ export const Main = () => {
             );
           }}
         </PipecatAppBase>
+        {dev && <DevPicker />}
       </FullScreenContainer>
     </ThemeProvider>
   );

@@ -1,16 +1,9 @@
 import { useEffect, useMemo, useRef, useCallback, memo, Fragment } from 'react';
-import type {
-  ConversationMessage,
-  BotOutputText,
-  ConversationMessagePart,
-  AggregationMetadata,
-} from '@pipecat-ai/voice-ui-kit';
 import {
   Panel, PanelContent, PanelHeader,
   Tabs, TabsContent, TabsList, TabsTrigger,
   MessageRole,
   TextInput,
-  usePipecatConversation,
 } from '@pipecat-ai/voice-ui-kit';
 import { MessagesSquareIcon } from 'lucide-react';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
@@ -20,82 +13,53 @@ import { math } from '@streamdown/math';
 import { mermaid } from '@streamdown/mermaid';
 import { Streamdown } from 'streamdown';
 
+import { useTalkyMessages } from '../messages/useTalkyMessages';
+import type { TalkyMessage, TalkyPart } from '../messages/types';
+
 const streamdownPlugins = { cjk, code, math, mermaid };
 
-const AGGREGATION_METADATA: Record<string, AggregationMetadata> = {
-  thinking: { isSpoken: false, displayMode: 'block' as const },
-  tool_start: { isSpoken: false, displayMode: 'block' as const },
-  tool_end: { isSpoken: false, displayMode: 'block' as const },
-  error: { isSpoken: false, displayMode: 'block' as const },
-  info: { isSpoken: false, displayMode: 'block' as const },
-  permission_request: { isSpoken: false, displayMode: 'block' as const },
-};
-
-function splitEventContent(content: string): string {
-  const i = content.indexOf('\x00');
-  return i < 0 ? content : content.slice(0, i);
-}
-
-function isBotOutputText(val: unknown): val is BotOutputText {
-  return typeof val === 'object' && val !== null && 'spoken' in val && 'unspoken' in val;
-}
-
-function partText(part: ConversationMessagePart): string {
-  if (isBotOutputText(part.text)) return part.text.spoken + part.text.unspoken;
-  return typeof part.text === 'string' ? part.text : '';
-}
-
-function splitPayload(part: ConversationMessagePart): { spoken: string; unspoken: string } {
-  if (isBotOutputText(part.text)) return { spoken: part.text.spoken, unspoken: part.text.unspoken };
-  const text = typeof part.text === 'string' ? part.text : '';
-  return { spoken: text, unspoken: '' };
-}
+type TextChunk = { kind: 'text'; spoken: string; unspoken: string; key: number };
+type BlockChunk = { kind: 'block'; part: TalkyPart; key: number };
+type RenderChunk = TextChunk | BlockChunk;
 
 const BLOCK_RENDERERS: Record<string, (content: string) => React.JSX.Element> = {
   tool_start: (content) => (
     <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono py-0.5">
       <span className="opacity-40">⟳</span>
-      <span className="opacity-70">{splitEventContent(content)}</span>
+      <span className="opacity-70">{content}</span>
     </div>
   ),
   tool_end: (content) => (
     <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono py-0.5">
       <span>✓</span>
-      <span className="opacity-70">{splitEventContent(content)}</span>
+      <span className="opacity-70">{content}</span>
     </div>
   ),
   error: (content) => (
-    <div className="text-xs font-mono text-destructive py-0.5">✗ {splitEventContent(content)}</div>
+    <div className="text-xs font-mono text-destructive py-0.5">✗ {content}</div>
   ),
   info: (content) => (
-    <div className="text-xs text-muted-foreground opacity-50 py-0.5">{splitEventContent(content)}</div>
-  ),
-  permission_request: (content) => (
-    <div className="flex items-center gap-1.5 text-xs text-amber-500 font-mono py-0.5">
-      <span>⚠</span>
-      <span>{splitEventContent(content)}</span>
-    </div>
+    <div className="text-xs text-muted-foreground opacity-50 py-0.5">{content}</div>
   ),
 };
 
-type RenderChunk =
-  | { kind: 'block'; agg: string; content: string; key: number }
-  | { kind: 'text'; spoken: string; unspoken: string; key: number };
-
-function buildChunks(parts: ConversationMessagePart[]): RenderChunk[] {
+function buildChunks(parts: TalkyPart[]): RenderChunk[] {
   const chunks: RenderChunk[] = [];
   parts.forEach((part, i) => {
-    const agg = part.aggregatedBy;
-    if (agg === 'thinking') return;
-    if (agg && BLOCK_RENDERERS[agg]) {
-      chunks.push({ kind: 'block', agg, content: partText(part), key: i });
+    if (part.kind === 'thinking') return;
+    if (part.kind === 'text') {
+      if (!part.spoken && !part.unspoken) return;
+      chunks.push({ kind: 'text', spoken: part.spoken, unspoken: part.unspoken, key: i });
       return;
     }
-    const { spoken, unspoken } = splitPayload(part);
-    if (!spoken && !unspoken) return;
-    chunks.push({ kind: 'text', spoken, unspoken, key: i });
+    chunks.push({ kind: 'block', part, key: i });
   });
   return chunks;
+}
+
+function blockContent(part: TalkyPart): string {
+  if (part.kind === 'text' || part.kind === 'thinking') return '';
+  return part.content;
 }
 
 function KaraokePart({
@@ -136,14 +100,14 @@ function KaraokePart({
   );
 }
 
-function AssistantMessage({ message }: { message: ConversationMessage }) {
+function AssistantMessage({ message }: { message: TalkyMessage }) {
   const isStreaming = !message.final;
 
   const thinkingText = useMemo(
     () =>
       message.parts
-        .filter((p) => p.aggregatedBy === 'thinking')
-        .map((p) => partText(p))
+        .filter((p): p is Extract<TalkyPart, { kind: 'thinking' }> => p.kind === 'thinking')
+        .map((p) => p.content)
         .join(''),
     [message.parts],
   );
@@ -163,7 +127,11 @@ function AssistantMessage({ message }: { message: ConversationMessage }) {
         <div className="text-sm">
           {chunks.map((c, i) =>
             c.kind === 'block' ? (
-              <Fragment key={c.key}>{BLOCK_RENDERERS[c.agg](c.content)}</Fragment>
+              <Fragment key={c.key}>
+                {(BLOCK_RENDERERS[c.part.kind] ?? ((s: string) => <span>{s}</span>))(
+                  blockContent(c.part),
+                )}
+              </Fragment>
             ) : (
               <KaraokePart
                 key={c.key}
@@ -180,9 +148,13 @@ function AssistantMessage({ message }: { message: ConversationMessage }) {
   );
 }
 
-function UserMessage({ message }: { message: ConversationMessage }) {
+function UserMessage({ message }: { message: TalkyMessage }) {
   const text = useMemo(
-    () => message.parts.map((p) => partText(p)).join(' '),
+    () =>
+      message.parts
+        .filter((p): p is Extract<TalkyPart, { kind: 'text' }> => p.kind === 'text')
+        .map((p) => p.spoken + p.unspoken)
+        .join(' '),
     [message.parts],
   );
 
@@ -194,78 +166,8 @@ function UserMessage({ message }: { message: ConversationMessage }) {
   );
 }
 
-function buildFixtureMessages(name: string): ConversationMessage[] {
-  const now = new Date().toISOString();
-  const m = (text: string): ConversationMessage => ({
-    role: 'assistant',
-    final: true,
-    createdAt: now,
-    parts: [{ text: { spoken: text, unspoken: '' }, final: true, createdAt: now }],
-  });
-  const u = (text: string): ConversationMessage => ({
-    role: 'user',
-    final: true,
-    createdAt: now,
-    parts: [{ text, final: true, createdAt: now }],
-  });
-  const sets: Record<string, ConversationMessage[]> = {
-    haiku: [
-      u('give me a haiku in md with a title and each line is a bullet'),
-      m('# Morning Light\n\n- Cherry blossoms fall\n- Dew glistens on silent grass\n- New day awakens'),
-    ],
-    'haiku-no-nl': [
-      u('give me a haiku in md with a title and each line is a bullet (no newlines)'),
-      m('# Morning Light - Cherry blossoms fall - Dew glistens on silent grass - New day awakens'),
-    ],
-    prose: [
-      u('tell me a joke'),
-      m("Why don't scientists trust atoms?\n\nBecause they make up everything!"),
-    ],
-    'prose-no-nl': [
-      u('tell me a joke'),
-      m("Why don't scientists trust atoms? Because they make up everything!"),
-    ],
-    code: [
-      u('show a python function'),
-      m('Here is a tiny example:\n\n```python\ndef hello(name):\n    return f"Hello, {name}!"\n```\n\nThat\'s it.'),
-    ],
-    karaoke: [
-      u('tell me a long story so I can see the cursor mid-stream'),
-      {
-        role: 'assistant',
-        final: false,
-        createdAt: now,
-        parts: [{
-          text: {
-            spoken:
-              'Once upon a time, in a small village at the edge of an ancient forest, ' +
-              'there lived a humble baker who loved to wake before dawn. ',
-            unspoken:
-              'Every morning she kneaded her dough by candlelight, listening to the soft ' +
-              'creaking of the timbers and the distant call of an owl returning home. ' +
-              'On this particular morning, however, something was different — a faint ' +
-              'silver light spilled under her door, and a hush had fallen over the whole street.',
-          },
-          final: false,
-          createdAt: now,
-        }],
-      },
-    ],
-  };
-  return sets[name] ?? sets.haiku;
-}
-
 function ConversationMessages() {
-  const live = usePipecatConversation({ aggregationMetadata: AGGREGATION_METADATA });
-  const fixtureName = useMemo(() => {
-    if (typeof window === 'undefined') return null;
-    return new URLSearchParams(window.location.search).get('fixture');
-  }, []);
-  const fixtureMessages = useMemo(
-    () => (fixtureName ? buildFixtureMessages(fixtureName) : null),
-    [fixtureName],
-  );
-  const allMessages = fixtureMessages ?? live.messages;
+  const messages = useTalkyMessages();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -275,16 +177,19 @@ function ConversationMessages() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [allMessages, scrollToBottom]);
+  }, [messages, scrollToBottom]);
 
   return (
     <div className="relative h-full flex flex-col">
       <div ref={scrollRef} className="relative flex-1 overflow-y-auto p-4 pb-2">
-        {allMessages.map((message, index) => {
+        {messages.map((message) => {
           if (message.role === 'assistant') {
-            return <AssistantMessage key={`${message.createdAt}-${index}`} message={message} />;
+            return <AssistantMessage key={message.id} message={message} />;
           }
-          return <UserMessage key={`${message.createdAt}-${index}`} message={message} />;
+          if (message.role === 'user') {
+            return <UserMessage key={message.id} message={message} />;
+          }
+          return null;
         })}
       </div>
       <div className="p-3 border-t">
