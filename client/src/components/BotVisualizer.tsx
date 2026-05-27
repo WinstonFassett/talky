@@ -3,6 +3,20 @@ import { usePipecatClientMediaTrack } from '@pipecat-ai/client-react';
 import { CircularWaveform } from '@pipecat-ai/voice-ui-kit';
 import { useEffect, useLayoutEffect, useState } from 'react';
 
+function useMediaQuery(query: string): boolean {
+  const [match, setMatch] = useState(() =>
+    typeof window === 'undefined' ? false : window.matchMedia(query).matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const handler = (e: MediaQueryListEvent) => setMatch(e.matches);
+    mq.addEventListener('change', handler);
+    setMatch(mq.matches);
+    return () => mq.removeEventListener('change', handler);
+  }, [query]);
+  return match;
+}
+
 import { useUrlParam } from '../fixtures/harness';
 
 function readAccent(): string {
@@ -62,9 +76,11 @@ export const BotVisualizer = ({ client }: BotVisualizerProps) => {
   const speaking = voiceStateOverride === 'speaking' || (!voiceStateOverride && isBotSpeaking);
   const audioTrack = voiceStateOverride ? null : (isBotSpeaking ? botAudioTrack : null);
 
+  const isNarrow = useMediaQuery('(max-width: 640px)');
+
   return (
     <CircularWaveform
-      size={72}
+      size={isNarrow ? 48 : 72}
       audioTrack={audioTrack}
       isThinking={thinking}
       color1={accent}

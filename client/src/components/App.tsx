@@ -16,6 +16,7 @@ import { useVoiceState } from './useVoiceState';
 import { MoreMenu } from './MoreMenu';
 import { EmptyState } from './EmptyState';
 import { isDevRoute, useUrlParam } from '../fixtures/harness';
+import { PhoneIcon, PhoneOffIcon } from 'lucide-react';
 
 interface TransportWithDataChannel {
   dc?: RTCDataChannel;
@@ -30,6 +31,20 @@ interface AppProps extends PipecatBaseChildProps {
   onTransportChange: (type: TransportType) => void;
   availableTransports: TransportType[];
   autoconnect?: boolean;
+}
+
+function useMediaQuery(query: string): boolean {
+  const [match, setMatch] = useState(() =>
+    typeof window === 'undefined' ? false : window.matchMedia(query).matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const handler = (e: MediaQueryListEvent) => setMatch(e.matches);
+    mq.addEventListener('change', handler);
+    setMatch(mq.matches);
+    return () => mq.removeEventListener('change', handler);
+  }, [query]);
+  return match;
 }
 
 export const App = ({
@@ -186,6 +201,7 @@ export const App = ({
   const showTransportSelector = availableTransports.length > 1;
   const transportConnected = transportState === 'connected' || transportState === 'ready';
   const voiceState = useVoiceState(client, transportConnected);
+  const isNarrow = useMediaQuery('(max-width: 640px)');
 
   // Show transcript (over EmptyState) whenever we're connected OR a dev fixture is mounted.
   const fixtureName = useUrlParam('fixture');
@@ -202,16 +218,18 @@ export const App = ({
         }}
       >
         {/* Left: visualizer (flush, sets header height) + status */}
-        <div className="flex items-center gap-3 shrink-0 min-w-0 pr-3">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0 pr-2 sm:pr-3">
           <BotVisualizer client={client} />
-          <StatusBadge state={voiceState} />
+          <div className="hidden sm:block">
+            <StatusBadge state={voiceState} />
+          </div>
         </div>
 
-        {/* Center: profile + voice profile */}
-        <div className="flex items-center gap-2 flex-1 justify-center min-w-0 px-3">
-          <LLMProfileSelect />
-          <VoiceProfileSelect />
-          {showTransportSelector ? (
+        {/* Center: LLM picker always; voice + transport hide on mobile (in MoreMenu instead) */}
+        <div className="flex items-center gap-2 flex-1 justify-center min-w-0 px-2 sm:px-3">
+          <LLMProfileSelect compact={isNarrow} />
+          {!isNarrow && <VoiceProfileSelect />}
+          {showTransportSelector && !isNarrow ? (
             <TransportSelect
               transportType={transportType}
               onTransportChange={onTransportChange}
@@ -221,44 +239,44 @@ export const App = ({
         </div>
 
         {/* Right: audio + connect + more */}
-        <div className="flex items-center gap-2 shrink-0 pr-4 pl-3">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 pr-2 pl-1 sm:pr-4 sm:pl-3">
           <UserAudioControl
-            size="md"
+            size={isNarrow ? 'sm' : 'md'}
             variant="ghost"
-            noVisualizer
+            noVisualizer={isNarrow}
           />
           <ConnectButton
-            size="md"
+            size={isNarrow ? 'sm' : 'md'}
             onConnect={handleConnect}
             onDisconnect={wrappedDisconnect}
             stateContent={{
               disconnected: {
-                children: 'Connect',
+                children: isNarrow ? <PhoneIcon size={16} /> : 'Connect',
                 variant: 'active',
-                className: 'connect-go',
+                className: isNarrow ? 'connect-go aspect-square px-0' : 'connect-go',
               },
               initialized: {
-                children: 'Connect',
+                children: isNarrow ? <PhoneIcon size={16} /> : 'Connect',
                 variant: 'active',
-                className: 'connect-go',
+                className: isNarrow ? 'connect-go aspect-square px-0' : 'connect-go',
               },
               ready: {
-                children: 'Disconnect',
+                children: isNarrow ? <PhoneOffIcon size={16} /> : 'Disconnect',
                 variant: 'destructive',
-                className: 'connect-stop',
+                className: isNarrow ? 'connect-stop aspect-square px-0' : 'connect-stop',
               },
               connected: {
-                children: 'Disconnect',
+                children: isNarrow ? <PhoneOffIcon size={16} /> : 'Disconnect',
                 variant: 'destructive',
-                className: 'connect-stop',
+                className: isNarrow ? 'connect-stop aspect-square px-0' : 'connect-stop',
               },
-              connecting: { children: 'Connecting…', variant: 'secondary' },
-              initializing: { children: 'Initializing…', variant: 'secondary' },
-              disconnecting: { children: 'Disconnecting…', variant: 'secondary' },
+              connecting: { children: isNarrow ? '…' : 'Connecting…', variant: 'secondary' },
+              initializing: { children: isNarrow ? '…' : 'Initializing…', variant: 'secondary' },
+              disconnecting: { children: isNarrow ? '…' : 'Disconnecting…', variant: 'secondary' },
               error: { children: 'Error', variant: 'destructive' },
             }}
           />
-          <MoreMenu />
+          <MoreMenu showVoiceProfile={isNarrow} />
         </div>
       </header>
 

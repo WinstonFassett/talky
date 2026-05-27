@@ -4,6 +4,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -18,6 +21,7 @@ import {
   MoonIcon,
   MoreVerticalIcon,
   SunIcon,
+  VolumeIcon,
 } from 'lucide-react';
 
 import { useTalkyMessages } from '../messages/useTalkyMessages';
@@ -28,11 +32,13 @@ import {
   toJsonl,
   toMarkdown,
 } from '../messages/export';
+import { inferProvider, useVoiceProfiles } from './useVoiceProfiles';
 
-export const MoreMenu = () => {
+export const MoreMenu = ({ showVoiceProfile = false }: { showVoiceProfile?: boolean } = {}) => {
   const messages = useTalkyMessages();
   const { resolvedTheme, setTheme } = useTheme();
   const [copied, setCopied] = useState(false);
+  const { voices, activeVoice, switchVoice } = useVoiceProfiles();
 
   const isDark = resolvedTheme === 'dark';
   const hasMessages = messages.length > 0;
@@ -63,7 +69,48 @@ export const MoreMenu = () => {
           <MoreVerticalIcon size={16} />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[200px]">
+      <DropdownMenuContent align="end" className="min-w-[220px]">
+        {showVoiceProfile && voices.length > 0 && (
+          <>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <VolumeIcon size={14} />
+                <span>Voice</span>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-h-[60vh] overflow-y-auto min-w-[240px]">
+                <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-mute)]">
+                  Voice profile
+                </DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={activeVoice} onValueChange={switchVoice}>
+                  {voices.map((v) => {
+                    const prov = inferProvider(v);
+                    return (
+                      <DropdownMenuRadioItem key={v.name} value={v.name}>
+                        <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate">{v.description || v.name}</span>
+                            {prov && (
+                              <span className="font-mono text-[10px] uppercase tracking-wider opacity-50 shrink-0">
+                                {prov}
+                              </span>
+                            )}
+                          </div>
+                          {(v.tts || v.stt) && (
+                            <div className="flex flex-wrap gap-x-2 text-[10px] text-muted-foreground font-mono">
+                              {v.tts && <span><span className="opacity-60">TTS</span> {v.tts}</span>}
+                              {v.stt && <span><span className="opacity-60">STT</span> {v.stt}</span>}
+                            </div>
+                          )}
+                        </div>
+                      </DropdownMenuRadioItem>
+                    );
+                  })}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuItem onClick={handleCopy} disabled={!hasMessages}>
           {copied ? (
             <CheckIcon size={14} style={{ color: 'var(--color-success)' }} />
