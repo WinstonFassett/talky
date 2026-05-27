@@ -10,10 +10,12 @@ import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
-import { TranscriptExport } from './TranscriptExport';
 import { PermissionBanner } from './PermissionBanner';
 import { StatusBadge } from './StatusBadge';
 import { useVoiceState } from './useVoiceState';
+import { MoreMenu } from './MoreMenu';
+import { EmptyState } from './EmptyState';
+import { isDevRoute, useUrlParam } from '../fixtures/harness';
 
 interface TransportWithDataChannel {
   dc?: RTCDataChannel;
@@ -185,6 +187,10 @@ export const App = ({
   const transportConnected = transportState === 'connected' || transportState === 'ready';
   const voiceState = useVoiceState(client, transportConnected);
 
+  // Show transcript (over EmptyState) whenever we're connected OR a dev fixture is mounted.
+  const fixtureName = useUrlParam('fixture');
+  const showTranscript = transportConnected || isDevRoute() || !!fixtureName;
+
   return (
     <div className="flex flex-col w-full h-full bg-background text-foreground">
       <PermissionBanner />
@@ -214,21 +220,32 @@ export const App = ({
           ) : null}
         </div>
 
-        {/* Right: audio + connect + export */}
+        {/* Right: audio + connect + more */}
         <div className="flex items-center gap-2 shrink-0 pr-4 pl-3">
-          <TranscriptExport />
           <UserAudioControl size="lg" />
           <ConnectButton
             size="lg"
             onConnect={handleConnect}
             onDisconnect={wrappedDisconnect}
           />
+          <MoreMenu />
         </div>
       </header>
 
-      <main className="flex-1 overflow-hidden">
-        <div className="h-full mx-auto" style={{ maxWidth: 600 }}>
-          <ConversationPanelWithReasoning activeProfile={activeProfile} />
+      <main className="flex-1 overflow-hidden flex flex-col">
+        <div className="h-full mx-auto flex flex-col w-full" style={{ maxWidth: 600 }}>
+          {showTranscript ? (
+            <ConversationPanelWithReasoning activeProfile={activeProfile} />
+          ) : (
+            <EmptyState
+              profileLabel={
+                activeProfile
+                  ? activeProfile.charAt(0).toUpperCase() + activeProfile.slice(1)
+                  : undefined
+              }
+              onConnect={handleConnect}
+            />
+          )}
         </div>
       </main>
     </div>

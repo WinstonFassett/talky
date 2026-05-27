@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useCallback, useState, memo, Fragment } from 'react';
-import { TextInput } from '@pipecat-ai/voice-ui-kit';
+import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 import { ChevronRightIcon, CopyIcon, CheckIcon } from 'lucide-react';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
+import { TalkyTextInput } from './TalkyTextInput';
 import { cjk } from '@streamdown/cjk';
 import { code } from '@streamdown/code';
 import { math } from '@streamdown/math';
@@ -250,6 +251,8 @@ function MessageRow({ message }: { message: TalkyMessage }) {
 // ─── TRANSCRIPT ────────────────────────────────────────────────────────
 function ConversationMessages({ activeProfile }: { activeProfile: string }) {
   const messages = useTalkyMessages();
+  const transportState = usePipecatClientTransportState();
+  const connected = transportState === 'connected' || transportState === 'ready';
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -276,9 +279,7 @@ function ConversationMessages({ activeProfile }: { activeProfile: string }) {
         }}
       >
         <SteerModeChip activeProfile={activeProfile} />
-        <div className="flex-1">
-          <TextInput classNames={{ container: 'items-center' }} />
-        </div>
+        <TalkyTextInput connected={connected} />
       </div>
     </div>
   );

@@ -1,10 +1,33 @@
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@pipecat-ai/voice-ui-kit';
 import { useEffect, useState } from 'react';
+import { CheckIcon, ChevronsUpDownIcon, Volume2Icon } from 'lucide-react';
+
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxTrigger,
+} from './kibo-ui/combobox';
 
 interface VoiceProfile {
   name: string;
   description: string;
   active: boolean;
+  /** Provider hint (e.g. cartesia, kokoro). Optional — derived from description if absent. */
+  provider?: string;
+  /** STT engine label, if surfaced. Optional. */
+  stt?: string;
+}
+
+function inferProvider(v: VoiceProfile): string {
+  if (v.provider) return v.provider;
+  // Best-effort: first token of the name before a dash, e.g. "cartesia-keith" -> "cartesia".
+  const dash = v.name.indexOf('-');
+  if (dash > 0) return v.name.slice(0, dash);
+  return '';
 }
 
 export const VoiceProfileSelect = () => {
@@ -12,10 +35,11 @@ export const VoiceProfileSelect = () => {
   const [activeVoice, setActiveVoice] = useState<string>('');
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    let eventSource: EventSource | null = null;
     let mounted = true;
+    let eventSource: EventSource | null = null;
 
     const applyVoices = (data: VoiceProfile[]) => {
       setVoices(data);
@@ -23,19 +47,12 @@ export const VoiceProfileSelect = () => {
       if (active) setActiveVoice(active.name);
     };
 
-    // Initial REST fetch.
     fetch('/api/voices')
       .then((r) => r.json())
-      .then((data) => {
-        if (mounted) applyVoices(data.voices);
-      })
-      .catch(() => {
-        if (mounted) setError('Cannot reach daemon');
-      });
+      .then((data) => mounted && applyVoices(data.voices))
+      .catch(() => mounted && setError('Cannot reach daemon'));
 
-    // SSE subscription — reuse the same /api/events stream.
     eventSource = new EventSource('/api/events');
-
     eventSource.addEventListener('init', (e: MessageEvent) => {
       if (!mounted) return;
       try {
@@ -46,33 +63,22 @@ export const VoiceProfileSelect = () => {
         setError('Invalid server response');
       }
     });
-
     eventSource.addEventListener('peerConnected', (e: MessageEvent) => {
       if (!mounted) return;
       try {
         const data = JSON.parse(e.data);
         if (data.voices) applyVoices(data.voices);
-      } catch {
-        // Ignore malformed events
-      }
+      } catch { /* ignore */ }
     });
-
     eventSource.addEventListener('voiceChanged', (e: MessageEvent) => {
       if (!mounted) return;
       try {
         const data = JSON.parse(e.data);
         setActiveVoice(data.profile);
-        setVoices((prev) =>
-          prev.map((v) => ({ ...v, active: v.name === data.profile }))
-        );
-      } catch {
-        // Ignore malformed events
-      }
+        setVoices((prev) => prev.map((v) => ({ ...v, active: v.name === data.profile })));
+      } catch { /* ignore */ }
     });
-
-    eventSource.onerror = () => {
-      if (mounted) setError('Connection lost - reconnecting...');
-    };
+    eventSource.onerror = () => mounted && setError('Connection lost - reconnecting...');
 
     return () => {
       mounted = false;
@@ -80,24 +86,18 @@ export const VoiceProfileSelect = () => {
     };
   }, []);
 
-  const handleSwitch = async (profileName: string) => {
-    if (profileName === activeVoice || switching) return;
-
+  const handleSwitch = async (next: string) => {
+    if (!next || next === activeVoice || switching) return;
     setSwitching(true);
     setError('');
-
     try {
       const resp = await fetch('/api/voices/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile: profileName }),
+        body: JSON.stringify({ profile: next }),
       });
       const data = await resp.json();
-
-      if (!resp.ok) {
-        setError(data.error || 'Switch failed');
-      }
-      // SSE voiceChanged event updates state on success.
+      if (!resp.ok) setError(data.error || 'Switch failed');
     } catch {
       setError('Switch request failed');
     } finally {
@@ -105,40 +105,81 @@ export const VoiceProfileSelect = () => {
     }
   };
 
-  if (voices.length === 0 && !error) return null;
-
-  if (error) {
-    return (
-      <div className="flex items-center gap-2 text-red-500 text-sm">
-        <span>{error}</span>
-      </div>
-    );
+  if (error && voices.length === 0) {
+    return <span className="text-xs text-destructive">{error}</span>;
   }
+  if (voices.length === 0) return null;
+
+  const current = voices.find((v) => v.name === activeVoice) ?? voices[0];
+  const currentProvider = inferProvider(current);
+  const comboData = voices.map((v) => ({ value: v.name, label: v.description || v.name }));
 
   return (
-    <div className="flex items-center gap-2">
-      <label htmlFor="voice-profile-select" className="text-sm font-medium text-gray-700">
-        Voice:
-      </label>
-      <Select
-        value={activeVoice}
-        onValueChange={handleSwitch}
+    <Combobox
+      data={comboData}
+      type="voice"
+      value={activeVoice}
+      onValueChange={handleSwitch}
+      open={open}
+      onOpenChange={setOpen}
+    >
+      <ComboboxTrigger
+        size="sm"
         disabled={switching}
+        className="h-8 gap-2 font-medium"
+        title="Switch voice profile"
       >
-        <SelectTrigger className="w-48" id="voice-profile-select">
-          <SelectValue placeholder="Select voice" />
-        </SelectTrigger>
-        <SelectContent>
-          {voices.map((voice) => (
-            <SelectItem key={voice.name} value={voice.name} textValue={voice.name}>
-              <div className="flex flex-col">
-                <span className="font-medium">{voice.name}</span>
-                <span className="text-xs text-gray-500">{voice.description}</span>
-              </div>
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+        <Volume2Icon size={12} className="opacity-60 shrink-0" />
+        <span className="max-w-[140px] truncate">{current.description || current.name}</span>
+        {currentProvider && (
+          <span className="font-mono text-[10px] uppercase tracking-wider opacity-50">
+            {currentProvider}
+          </span>
+        )}
+        <ChevronsUpDownIcon size={12} className="shrink-0 opacity-50" />
+      </ComboboxTrigger>
+      <ComboboxContent className="min-w-[320px]" popoverOptions={{ align: 'start' }}>
+        <ComboboxInput placeholder="Search voices, providers…" />
+        <ComboboxList>
+          <ComboboxEmpty />
+          <ComboboxGroup heading="Voice profile">
+            {voices.map((v) => {
+              const selected = v.name === activeVoice;
+              const provider = inferProvider(v);
+              return (
+                <ComboboxItem
+                  key={v.name}
+                  value={v.name}
+                  className="flex items-start gap-2 py-2"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm">{v.description || v.name}</span>
+                      {provider && (
+                        <span className="font-mono text-[10px] uppercase tracking-wider opacity-50">
+                          {provider}
+                        </span>
+                      )}
+                      {selected && (
+                        <CheckIcon
+                          size={13}
+                          className="ml-auto"
+                          style={{ color: 'var(--color-accent)' }}
+                        />
+                      )}
+                    </div>
+                    {v.stt && (
+                      <span className="text-[11px] text-muted-foreground">
+                        STT: {v.stt}
+                      </span>
+                    )}
+                  </div>
+                </ComboboxItem>
+              );
+            })}
+          </ComboboxGroup>
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
   );
 };

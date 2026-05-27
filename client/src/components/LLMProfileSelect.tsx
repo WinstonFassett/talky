@@ -1,5 +1,16 @@
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@pipecat-ai/voice-ui-kit';
 import { useEffect, useState } from 'react';
+import { CheckIcon, ChevronsUpDownIcon } from 'lucide-react';
+
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxTrigger,
+} from './kibo-ui/combobox';
 
 interface LLMProfile {
   name: string;
@@ -19,11 +30,11 @@ export const LLMProfileSelect = () => {
   const [activeProfile, setActiveProfile] = useState<string>('');
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
 
-  // Fetch profiles on mount, subscribe to SSE for live updates.
   useEffect(() => {
-    let eventSource: EventSource | null = null;
     let mounted = true;
+    let eventSource: EventSource | null = null;
 
     const applyProfiles = (data: ProfilesResponse) => {
       setProfiles(data.profiles);
@@ -31,19 +42,14 @@ export const LLMProfileSelect = () => {
       if (active) setActiveProfile(active.name);
     };
 
-    // Initial REST fetch (fast, reliable).
     fetch('/api/profiles')
       .then((r) => r.json())
       .then((data: ProfilesResponse) => {
         if (mounted) applyProfiles(data);
       })
-      .catch(() => {
-        if (mounted) setError('Cannot reach daemon');
-      });
+      .catch(() => mounted && setError('Cannot reach daemon'));
 
-    // SSE subscription for live push.
     eventSource = new EventSource('/api/events');
-
     eventSource.addEventListener('init', (e: MessageEvent) => {
       if (!mounted) return;
       try {
@@ -53,7 +59,6 @@ export const LLMProfileSelect = () => {
         setError('Invalid server response');
       }
     });
-
     eventSource.addEventListener('profileChanged', (e: MessageEvent) => {
       if (!mounted) return;
       try {
@@ -61,41 +66,25 @@ export const LLMProfileSelect = () => {
         if (data.type === 'llm') {
           setActiveProfile(data.profile);
           setProfiles((prev) =>
-            prev.map((p) => ({ ...p, active: p.name === data.profile }))
+            prev.map((p) => ({ ...p, active: p.name === data.profile })),
           );
         }
-      } catch {
-        // Ignore malformed events
-      }
+      } catch { /* ignore */ }
     });
-
     eventSource.addEventListener('peerConnected', (e: MessageEvent) => {
       if (!mounted) return;
-      try {
-        applyProfiles(JSON.parse(e.data));
-      } catch {
-        // Ignore malformed events
-      }
+      try { applyProfiles(JSON.parse(e.data)); } catch { /* ignore */ }
     });
-
     eventSource.addEventListener('healthChanged', (e: MessageEvent) => {
       if (!mounted) return;
       try {
         const data = JSON.parse(e.data);
         setProfiles((prev) =>
-          prev.map((p) =>
-            p.name === data.backend ? { ...p, healthy: data.healthy } : p
-          )
+          prev.map((p) => (p.name === data.backend ? { ...p, healthy: data.healthy } : p)),
         );
-      } catch {
-        // Ignore malformed events
-      }
+      } catch { /* ignore */ }
     });
-
-    eventSource.onerror = () => {
-      // EventSource auto-reconnects.
-      if (mounted) setError('Connection lost - reconnecting...');
-    };
+    eventSource.onerror = () => mounted && setError('Connection lost - reconnecting...');
 
     return () => {
       mounted = false;
@@ -103,24 +92,20 @@ export const LLMProfileSelect = () => {
     };
   }, []);
 
-  const handleSwitch = async (profileName: string) => {
-    if (profileName === activeProfile || switching) return;
-
+  const handleSwitch = async (next: string) => {
+    if (!next || next === activeProfile || switching) return;
+    const target = profiles.find((p) => p.name === next);
+    if (target?.healthy === false) return;
     setSwitching(true);
     setError('');
-
     try {
       const resp = await fetch('/api/profiles/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile: profileName }),
+        body: JSON.stringify({ profile: next }),
       });
       const data = await resp.json();
-
-      if (!resp.ok) {
-        setError(data.error || 'Switch failed');
-      }
-      // On success the SSE profileChanged event updates state.
+      if (!resp.ok) setError(data.error || 'Switch failed');
     } catch {
       setError('Switch request failed');
     } finally {
@@ -128,45 +113,87 @@ export const LLMProfileSelect = () => {
     }
   };
 
-  if (profiles.length === 0 && !error) return null;
-
-  if (error) {
-    return (
-      <div className="flex items-center gap-2 text-red-500 text-sm">
-        <span>{error}</span>
-      </div>
-    );
+  if (error && profiles.length === 0) {
+    return <span className="text-xs text-destructive">{error}</span>;
   }
+  if (profiles.length === 0) return null;
+
+  const current = profiles.find((p) => p.name === activeProfile) ?? profiles[0];
+  const comboData = profiles.map((p) => ({ value: p.name, label: p.label }));
 
   return (
-    <div className="flex items-center gap-2">
-      <label htmlFor="llm-profile-select" className="text-sm font-medium text-gray-700">
-        Profile:
-      </label>
-      <Select
-        value={activeProfile}
-        onValueChange={handleSwitch}
+    <Combobox
+      data={comboData}
+      type="profile"
+      value={activeProfile}
+      onValueChange={handleSwitch}
+      open={open}
+      onOpenChange={setOpen}
+    >
+      <ComboboxTrigger
+        size="sm"
         disabled={switching}
+        className="h-8 gap-2 font-medium"
+        title="Switch profile"
       >
-        <SelectTrigger className="w-48" id="llm-profile-select">
-          <SelectValue placeholder="Select profile" />
-        </SelectTrigger>
-        <SelectContent>
-          {profiles.map((profile) => (
-            <SelectItem
-              key={profile.name}
-              value={profile.name}
-              disabled={profile.healthy === false}
-              textValue={profile.label}
-            >
-              <div className="flex flex-col">
-                <span className="font-medium">{profile.label}</span>
-                <span className="text-xs text-gray-500">{profile.description}</span>
-              </div>
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+        <StatusDot healthy={current.healthy} />
+        <span className="max-w-[140px] truncate">{current.label}</span>
+        <ChevronsUpDownIcon size={12} className="shrink-0 opacity-50" />
+      </ComboboxTrigger>
+      <ComboboxContent className="min-w-[280px]" popoverOptions={{ align: 'start' }}>
+        <ComboboxInput placeholder="Search profiles…" />
+        <ComboboxList>
+          <ComboboxEmpty />
+          <ComboboxGroup heading="Profile">
+            {profiles.map((p) => {
+              const unhealthy = p.healthy === false;
+              const selected = p.name === activeProfile;
+              return (
+                <ComboboxItem
+                  key={p.name}
+                  value={p.name}
+                  disabled={unhealthy}
+                  className="flex items-start gap-2 py-2"
+                >
+                  <StatusDot healthy={p.healthy} className="mt-1.5" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm">{p.label}</span>
+                      {selected && (
+                        <CheckIcon
+                          size={13}
+                          className="ml-auto"
+                          style={{ color: 'var(--color-accent)' }}
+                        />
+                      )}
+                    </div>
+                    {p.description && (
+                      <span className="text-[11px] text-muted-foreground">
+                        {p.description}
+                      </span>
+                    )}
+                  </div>
+                </ComboboxItem>
+              );
+            })}
+          </ComboboxGroup>
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
   );
 };
+
+function StatusDot({ healthy, className }: { healthy: boolean | null; className?: string }) {
+  const color =
+    healthy === false
+      ? 'var(--color-warning)'
+      : healthy === null
+        ? 'var(--color-text-mute)'
+        : 'var(--color-success)';
+  return (
+    <span
+      className={`inline-block size-1.5 rounded-full shrink-0 ${className ?? ''}`}
+      style={{ backgroundColor: color }}
+    />
+  );
+}
