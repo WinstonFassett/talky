@@ -3,17 +3,28 @@ import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 import { ChevronRightIcon, CopyIcon, CheckIcon } from 'lucide-react';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
 import { TalkyTextInput } from './TalkyTextInput';
-import { cjk } from '@streamdown/cjk';
-import { code } from '@streamdown/code';
-import { math } from '@streamdown/math';
-import { mermaid } from '@streamdown/mermaid';
 import { Streamdown } from 'streamdown';
 
 import { useTalkyMessages } from '../messages/useTalkyMessages';
 import type { TalkyMessage, TalkyPart } from '../messages/types';
 import { SteerModeChip } from './SteerModeChip';
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+// Streamdown plugins are heavy (Shiki for code, KaTeX for math, Mermaid for
+// diagrams). Only code is useful here, and it's lazy-loaded so first paint
+// doesn't pay for it. Mermaid / math / cjk are dropped — voice transcripts
+// almost never contain them.
+type StreamdownPlugins = NonNullable<Parameters<typeof Streamdown>[0]['plugins']>;
+let codePluginPromise: Promise<StreamdownPlugins> | null = null;
+function useCodePlugin(): StreamdownPlugins | undefined {
+  const [plugins, setPlugins] = useState<StreamdownPlugins | undefined>(undefined);
+  useEffect(() => {
+    codePluginPromise ??= import('@streamdown/code').then((m) => ({ code: m.code }));
+    let cancelled = false;
+    codePluginPromise.then((p) => { if (!cancelled) setPlugins(p); });
+    return () => { cancelled = true; };
+  }, []);
+  return plugins;
+}
 
 type TextChunk = { kind: 'text'; spoken: string; unspoken: string; key: number };
 type BlockChunk = { kind: 'block'; part: TalkyPart; key: number };
@@ -69,22 +80,20 @@ function KaraokePart({
   spoken,
   unspoken,
   isStreaming,
-  isLast,
 }: {
   spoken: string;
   unspoken: string;
   isStreaming: boolean;
-  isLast: boolean;
 }) {
+  const plugins = useCodePlugin();
   return (
     <span className="karaoke-part">
       {spoken && (
         <Streamdown
           className="karaoke-spoken"
-          plugins={streamdownPlugins}
+          plugins={plugins}
           parseIncompleteMarkdown={isStreaming}
           isAnimating={isStreaming && !unspoken}
-          caret={isStreaming && !unspoken && isLast ? 'block' : undefined}
         >
           {spoken}
         </Streamdown>
@@ -92,7 +101,7 @@ function KaraokePart({
       {unspoken && (
         <Streamdown
           className="karaoke-unspoken text-muted-foreground"
-          plugins={streamdownPlugins}
+          plugins={plugins}
           parseIncompleteMarkdown={isStreaming}
           isAnimating={false}
         >
@@ -230,7 +239,7 @@ function MessageRow({ message }: { message: TalkyMessage }) {
       )}
 
       <div className="text-[15px] leading-relaxed max-w-[65ch]">
-        {chunks.map((c, i) =>
+        {chunks.map((c) =>
           c.kind === 'block' ? (
             <Fragment key={c.key}>{renderBlock(c.part)}</Fragment>
           ) : (
@@ -239,7 +248,6 @@ function MessageRow({ message }: { message: TalkyMessage }) {
               spoken={c.spoken}
               unspoken={c.unspoken}
               isStreaming={isStreaming}
-              isLast={i === chunks.length - 1}
             />
           ),
         )}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CheckIcon, ChevronsUpDownIcon } from 'lucide-react';
+import { CheckIcon, ChevronDownIcon } from 'lucide-react';
 
 import {
   Combobox,
@@ -11,7 +11,7 @@ import {
   ComboboxList,
   ComboboxTrigger,
 } from './kibo-ui/combobox';
-import { Button } from './ui/button';
+import { PickerTrigger } from './PickerTrigger';
 
 interface LLMProfile {
   name: string;
@@ -132,17 +132,19 @@ export const LLMProfileSelect = () => {
       onOpenChange={setOpen}
     >
       <ComboboxTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
+        <PickerTrigger
+          open={open}
           disabled={switching}
-          className="h-8 gap-2 font-medium"
           title="Switch profile"
         >
           <StatusDot healthy={current.healthy} />
           <span className="max-w-[140px] truncate">{current.label}</span>
-          <ChevronsUpDownIcon size={12} className="shrink-0 opacity-50" />
-        </Button>
+          <ChevronDownIcon
+            size={11}
+            style={{ color: 'var(--color-text-mute)' }}
+            className="shrink-0"
+          />
+        </PickerTrigger>
       </ComboboxTrigger>
       <ComboboxContent className="min-w-[280px]" popoverOptions={{ align: 'start' }}>
         <ComboboxInput placeholder="Search profiles…" />

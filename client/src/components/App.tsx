@@ -222,11 +222,41 @@ export const App = ({
 
         {/* Right: audio + connect + more */}
         <div className="flex items-center gap-2 shrink-0 pr-4 pl-3">
-          <UserAudioControl size="lg" />
+          <UserAudioControl
+            size="md"
+            variant="ghost"
+            noVisualizer
+          />
           <ConnectButton
-            size="lg"
+            size="md"
             onConnect={handleConnect}
             onDisconnect={wrappedDisconnect}
+            stateContent={{
+              disconnected: {
+                children: 'Connect',
+                variant: 'active',
+                className: 'connect-go',
+              },
+              initialized: {
+                children: 'Connect',
+                variant: 'active',
+                className: 'connect-go',
+              },
+              ready: {
+                children: 'Disconnect',
+                variant: 'destructive',
+                className: 'connect-stop',
+              },
+              connected: {
+                children: 'Disconnect',
+                variant: 'destructive',
+                className: 'connect-stop',
+              },
+              connecting: { children: 'Connecting…', variant: 'secondary' },
+              initializing: { children: 'Initializing…', variant: 'secondary' },
+              disconnecting: { children: 'Disconnecting…', variant: 'secondary' },
+              error: { children: 'Error', variant: 'destructive' },
+            }}
           />
           <MoreMenu />
         </div>

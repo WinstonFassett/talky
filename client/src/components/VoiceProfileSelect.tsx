@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CheckIcon, ChevronsUpDownIcon, Volume2Icon } from 'lucide-react';
+import { CheckIcon, ChevronDownIcon, VolumeIcon } from 'lucide-react';
 
 import {
   Combobox,
@@ -11,7 +11,7 @@ import {
   ComboboxList,
   ComboboxTrigger,
 } from './kibo-ui/combobox';
-import { Button } from './ui/button';
+import { PickerTrigger } from './PickerTrigger';
 
 interface VoiceProfile {
   name: string;
@@ -125,22 +125,30 @@ export const VoiceProfileSelect = () => {
       onOpenChange={setOpen}
     >
       <ComboboxTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
+        <PickerTrigger
+          open={open}
           disabled={switching}
-          className="h-8 gap-2 font-medium"
           title="Switch voice profile"
         >
-          <Volume2Icon size={12} className="opacity-60 shrink-0" />
-          <span className="max-w-[140px] truncate">{current.description || current.name}</span>
+          <VolumeIcon
+            size={12}
+            style={{ color: 'var(--color-text-mute)' }}
+            className="shrink-0"
+          />
+          <span className="max-w-[140px] truncate">
+            {current.description || current.name}
+          </span>
           {currentProvider && (
-            <span className="font-mono text-[10px] uppercase tracking-wider opacity-50">
+            <span className="font-mono text-[10px] uppercase tracking-[0.04em] text-[var(--color-text-mute)]">
               {currentProvider}
             </span>
           )}
-          <ChevronsUpDownIcon size={12} className="shrink-0 opacity-50" />
-        </Button>
+          <ChevronDownIcon
+            size={11}
+            style={{ color: 'var(--color-text-mute)' }}
+            className="shrink-0"
+          />
+        </PickerTrigger>
       </ComboboxTrigger>
       <ComboboxContent className="min-w-[320px]" popoverOptions={{ align: 'start' }}>
         <ComboboxInput placeholder="Search voices, providers…" />
