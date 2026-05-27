@@ -11,6 +11,7 @@ import {
   ComboboxList,
   ComboboxTrigger,
 } from './kibo-ui/combobox';
+import { Button } from './ui/button';
 
 interface LLMProfile {
   name: string;
@@ -130,15 +131,18 @@ export const LLMProfileSelect = () => {
       open={open}
       onOpenChange={setOpen}
     >
-      <ComboboxTrigger
-        size="sm"
-        disabled={switching}
-        className="h-8 gap-2 font-medium"
-        title="Switch profile"
-      >
-        <StatusDot healthy={current.healthy} />
-        <span className="max-w-[140px] truncate">{current.label}</span>
-        <ChevronsUpDownIcon size={12} className="shrink-0 opacity-50" />
+      <ComboboxTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={switching}
+          className="h-8 gap-2 font-medium"
+          title="Switch profile"
+        >
+          <StatusDot healthy={current.healthy} />
+          <span className="max-w-[140px] truncate">{current.label}</span>
+          <ChevronsUpDownIcon size={12} className="shrink-0 opacity-50" />
+        </Button>
       </ComboboxTrigger>
       <ComboboxContent className="min-w-[280px]" popoverOptions={{ align: 'start' }}>
         <ComboboxInput placeholder="Search profiles…" />
