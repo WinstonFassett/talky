@@ -2,6 +2,7 @@ import { type VoiceState, VOICE_STATE_LABELS } from './useVoiceState';
 
 export const StatusBadge = ({ state }: { state: VoiceState }) => {
   const isActive = state === 'listening' || state === 'thinking' || state === 'speaking';
+  const isDisconnected = state === 'disconnected';
   const animation =
     state === 'thinking'
       ? 'pulse 1.2s ease-in-out infinite'
@@ -11,6 +12,13 @@ export const StatusBadge = ({ state }: { state: VoiceState }) => {
           ? 'pulse 1.6s ease-in-out infinite'
           : 'none';
 
+  // disconnected = dim/muted; idle = quietly live (text-dim); active = accent
+  const color = isActive
+    ? 'var(--color-accent)'
+    : isDisconnected
+      ? 'var(--color-text-mute)'
+      : 'var(--color-text-dim)';
+
   return (
     <div
       aria-label={`Voice status: ${VOICE_STATE_LABELS[state]}`}
@@ -19,14 +27,14 @@ export const StatusBadge = ({ state }: { state: VoiceState }) => {
       <div
         className="size-1.5 rounded-full shrink-0 transition-colors"
         style={{
-          backgroundColor: isActive ? 'var(--color-accent)' : 'var(--color-text-mute)',
+          backgroundColor: color,
           boxShadow: isActive ? '0 0 6px color-mix(in srgb, var(--color-accent) 35%, transparent)' : 'none',
           animation,
         }}
       />
       <span
         className="font-mono text-[10px] font-semibold tracking-widest uppercase whitespace-nowrap overflow-hidden text-ellipsis transition-colors"
-        style={{ color: isActive ? 'var(--color-accent)' : 'var(--color-text-mute)' }}
+        style={{ color }}
       >
         {VOICE_STATE_LABELS[state]}
       </span>

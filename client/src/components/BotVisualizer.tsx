@@ -1,9 +1,15 @@
 import type { PipecatClient } from '@pipecat-ai/client-js';
 import { usePipecatClientMediaTrack } from '@pipecat-ai/client-react';
 import { CircularWaveform } from '@pipecat-ai/voice-ui-kit';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 
 import { useUrlParam } from '../fixtures/harness';
+
+function readAccent(): string {
+  if (typeof window === 'undefined') return '#8ab4d8';
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim();
+  return v || '#8ab4d8';
+}
 
 interface BotVisualizerProps {
   client: PipecatClient | null;
@@ -15,6 +21,15 @@ export const BotVisualizer = ({ client }: BotVisualizerProps) => {
 
   const botAudioTrack = usePipecatClientMediaTrack('audio', 'bot');
   const voiceStateOverride = useUrlParam('voiceState');
+  const [accent, setAccent] = useState<string>(() => readAccent());
+
+  // Re-read accent after mount + on theme changes (data-theme attribute flip).
+  useLayoutEffect(() => {
+    setAccent(readAccent());
+    const obs = new MutationObserver(() => setAccent(readAccent()));
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+    return () => obs.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!client) return;
@@ -52,8 +67,8 @@ export const BotVisualizer = ({ client }: BotVisualizerProps) => {
       size={72}
       audioTrack={audioTrack}
       isThinking={thinking}
-      color1="var(--color-accent)"
-      color2="var(--color-accent)"
+      color1={accent}
+      color2={accent}
       backgroundColor="transparent"
       rotationEnabled={!speaking}
       numBars={32}

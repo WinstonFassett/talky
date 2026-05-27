@@ -189,21 +189,20 @@ export const App = ({
     <div className="flex flex-col w-full h-full bg-background text-foreground">
       <PermissionBanner />
       <header
-        className="flex items-center gap-3 px-4 py-2.5 shrink-0 border-b"
+        className="flex items-center shrink-0 border-b"
         style={{
           borderColor: 'var(--color-border-soft)',
           backgroundColor: 'var(--color-card)',
-          minHeight: 64,
         }}
       >
-        {/* Left: visualizer + status */}
-        <div className="flex items-center gap-3 shrink-0 min-w-0">
+        {/* Left: visualizer (flush, sets header height) + status */}
+        <div className="flex items-center gap-3 shrink-0 min-w-0 pr-3">
           <BotVisualizer client={client} />
           <StatusBadge state={voiceState} />
         </div>
 
         {/* Center: profile + voice profile */}
-        <div className="flex items-center gap-2 flex-1 justify-center min-w-0">
+        <div className="flex items-center gap-2 flex-1 justify-center min-w-0 px-3">
           <LLMProfileSelect />
           <VoiceProfileSelect />
           {showTransportSelector ? (
@@ -216,7 +215,7 @@ export const App = ({
         </div>
 
         {/* Right: audio + connect + export */}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 pr-4 pl-3">
           <TranscriptExport />
           <UserAudioControl size="lg" />
           <ConnectButton
