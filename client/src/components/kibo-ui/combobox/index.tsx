@@ -113,17 +113,23 @@ export const Combobox = ({
   );
 };
 
-export type ComboboxTriggerProps = ComponentProps<typeof Button>;
+export type ComboboxTriggerProps = ComponentProps<typeof PopoverTrigger> & {
+  /** When false, renders an inner shadcn outline Button (kibo's default).
+   *  When `asChild` is set (recommended), the caller provides the trigger
+   *  button and we just pipe through Radix's PopoverTrigger — no shadcn
+   *  Button paint, no hover-bg-accent surprise. */
+  children?: ReactNode;
+};
 
 export const ComboboxTrigger = ({
   children,
+  asChild,
   ...props
 }: ComboboxTriggerProps) => {
   const { value, data, type, setWidth } = useContext(ComboboxContext);
   const ref = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    // Create a ResizeObserver to detect width changes
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const newWidth = (entry.target as HTMLElement).offsetWidth;
@@ -136,16 +142,22 @@ export const ComboboxTrigger = ({
     if (ref.current) {
       resizeObserver.observe(ref.current);
     }
-
-    // Clean up the observer when component unmounts
     return () => {
       resizeObserver.disconnect();
     };
   }, [setWidth]);
 
+  if (asChild) {
+    return (
+      <PopoverTrigger asChild {...props}>
+        {children}
+      </PopoverTrigger>
+    );
+  }
+
   return (
     <PopoverTrigger asChild>
-      <Button variant="outline" {...props} ref={ref}>
+      <Button variant="outline" ref={ref}>
         {children ?? (
           <span className="flex w-full items-center justify-between gap-2">
             {value
