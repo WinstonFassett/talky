@@ -9,10 +9,11 @@ import type { TransportType } from '../config';
 import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
-import { SteerModeToggle } from './SteerModeToggle';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { TranscriptExport } from './TranscriptExport';
 import { PermissionBanner } from './PermissionBanner';
+import { StatusBadge } from './StatusBadge';
+import { useVoiceState } from './useVoiceState';
 
 interface TransportWithDataChannel {
   dc?: RTCDataChannel;
@@ -181,15 +182,29 @@ export const App = ({
   }, [autoconnect, client, handleConnect, devicesReady]);
 
   const showTransportSelector = availableTransports.length > 1;
+  const transportConnected = transportState === 'connected' || transportState === 'ready';
+  const voiceState = useVoiceState(client, transportConnected);
 
   return (
-    <div className="flex flex-col w-full h-full">
+    <div className="flex flex-col w-full h-full bg-background text-foreground">
       <PermissionBanner />
-      <div className="flex items-center justify-between gap-4 p-4">
-        <div className="flex items-center gap-4">
+      <header
+        className="flex items-center gap-3 px-4 py-2.5 shrink-0 border-b"
+        style={{
+          borderColor: 'var(--color-border-soft)',
+          backgroundColor: 'var(--color-card)',
+          minHeight: 64,
+        }}
+      >
+        {/* Left: visualizer + status */}
+        <div className="flex items-center gap-3 shrink-0 min-w-0">
           <BotVisualizer client={client} />
+          <StatusBadge state={voiceState} />
+        </div>
+
+        {/* Center: profile + voice profile */}
+        <div className="flex items-center gap-2 flex-1 justify-center min-w-0">
           <LLMProfileSelect />
-          <SteerModeToggle activeProfile={activeProfile} />
           <VoiceProfileSelect />
           {showTransportSelector ? (
             <TransportSelect
@@ -199,7 +214,9 @@ export const App = ({
             />
           ) : null}
         </div>
-        <div className="flex items-center gap-4">
+
+        {/* Right: audio + connect + export */}
+        <div className="flex items-center gap-2 shrink-0">
           <TranscriptExport />
           <UserAudioControl size="lg" />
           <ConnectButton
@@ -208,12 +225,13 @@ export const App = ({
             onDisconnect={wrappedDisconnect}
           />
         </div>
-      </div>
-      <div className="flex-1 overflow-hidden px-4">
-        <div className="h-full overflow-hidden">
-          <ConversationPanelWithReasoning />
+      </header>
+
+      <main className="flex-1 overflow-hidden">
+        <div className="h-full mx-auto" style={{ maxWidth: 600 }}>
+          <ConversationPanelWithReasoning activeProfile={activeProfile} />
         </div>
-      </div>
+      </main>
     </div>
   );
 };

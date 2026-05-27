@@ -49,11 +49,11 @@ export const BotVisualizer = ({ client }: BotVisualizerProps) => {
 
   return (
     <CircularWaveform
-      size={60}
+      size={72}
       audioTrack={audioTrack}
       isThinking={thinking}
-      color1="#615fff"
-      color2="#EC4899"
+      color1="var(--color-accent)"
+      color2="var(--color-accent)"
       backgroundColor="transparent"
       rotationEnabled={!speaking}
       numBars={32}
