@@ -11,9 +11,7 @@ export const EmptyState = ({ profileLabel, onConnect }: Props) => {
       <span
         className="text-3xl select-none"
         style={{
-          fontFamily: 'Newsreader, Georgia, serif',
-          fontStyle: 'italic',
-          fontWeight: 400,
+          fontWeight: 500,
           letterSpacing: '-0.02em',
           color: 'var(--color-foreground)',
         }}
