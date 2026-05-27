@@ -9,30 +9,95 @@
 @source "../node_modules/@streamdown/math/dist/*.js";
 @source "../node_modules/@streamdown/mermaid/dist/*.js";
 
+/* ───────────────────────────────────────────────────────────────
+   Talky theme — overrides voice-ui-kit's defaults with the v5
+   palette (Claude Design "Talky Prototype v5"). Light + dark.
+   Tokens use the names voice-ui-kit / shadcn expect so its
+   components pick them up automatically.
+   ─────────────────────────────────────────────────────────────── */
+
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --radius: 0.625rem;
+  /* Light theme (v5). Warm off-white background, deeper accent so it
+     doesn't wash out. */
+  --color-background: #f6f5f1;
+  --color-foreground: #15130f;
+
+  --color-card: #ffffff;
+  --color-card-foreground: #15130f;
+
+  --color-popover: #ffffff;
+  --color-popover-foreground: #15130f;
+
+  --color-primary: #15130f;
+  --color-primary-foreground: #f6f5f1;
+
+  --color-secondary: #ecebe4;
+  --color-secondary-foreground: #15130f;
+
+  --color-muted: #faf9f6;
+  --color-muted-foreground: #5a564d;
+
+  --color-accent: #4a7ba8;
+  --color-accent-foreground: #ffffff;
+
+  --color-destructive: #b94545;
+  --color-destructive-foreground: #ffffff;
+
+  --color-border: #e3e0d8;
+  --color-input: #e3e0d8;
+  --color-ring: #4a7ba8;
+
+  /* Talky-specific extras used by v5 components */
+  --color-panel: #ffffff;
+  --color-panel-2: #faf9f6;
+  --color-panel-3: #ecebe4;
+  --color-border-soft: #ecebe4;
+  --color-text-dim: #5a564d;
+  --color-text-mute: #8d877c;
+  --color-success: #2f8a5b;
+  --color-warning: #a37b1f;
+
+  /* Radius — v5 uses 8px; vuk derives xs/sm/md/lg/xl from --radius-base */
+  --radius-base: 8px;
+  --radius: 8px;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --border: oklch(0.269 0 0);
-  --input: oklch(0.269 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --radius: 0.625rem;
+  /* Dark theme (v5) — primary surface. */
+  --color-background: #0e0e0f;
+  --color-foreground: #ececec;
+
+  --color-card: #141416;
+  --color-card-foreground: #ececec;
+
+  --color-popover: #1a1a1c;
+  --color-popover-foreground: #ececec;
+
+  --color-primary: #ececec;
+  --color-primary-foreground: #0e0e0f;
+
+  --color-secondary: #212124;
+  --color-secondary-foreground: #ececec;
+
+  --color-muted: #1a1a1c;
+  --color-muted-foreground: #8a8a90;
+
+  --color-accent: #8ab4d8;
+  --color-accent-foreground: #0e0e0f;
+
+  --color-destructive: #e05252;
+  --color-destructive-foreground: #ffffff;
+
+  --color-border: #262628;
+  --color-input: #262628;
+  --color-ring: #8ab4d8;
+
+  --color-panel: #141416;
+  --color-panel-2: #1a1a1c;
+  --color-panel-3: #212124;
+  --color-border-soft: #1e1e20;
+  --color-text-dim: #8a8a90;
+  --color-text-mute: #56565c;
+  --color-success: #4caf7c;
+  --color-warning: #d4a843;
 }
