@@ -19,7 +19,7 @@ export const AudioControl = ({ size = 'md' }: AudioControlProps) => {
   const client = usePipecatClient();
   if (!client) return null;
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex flex-col gap-1.5 w-full">
       <MicPicker client={client} size={size} />
       <SpeakerPicker client={client} size={size} />
     </div>
