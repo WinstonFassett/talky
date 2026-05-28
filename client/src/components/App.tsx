@@ -194,14 +194,16 @@ export const App = ({
 
   useEffect(() => {
     if (!client) return;
-    setDevicesReady(true);
     // Populate availableMics / selectedMic so the audio control is live pre-connect.
     // initDevices() does getUserMedia + enumerateDevices and moves transport state to
-    // "initialized", which also clears voice-ui-kit's spinner gate. connect() skips
-    // its own initDevices when state is already past "disconnected".
-    client.initDevices().catch((err) => {
-      console.warn('initDevices failed (mic permission denied?):', err);
-    });
+    // "initialized". Wait for it before unblocking autoconnect, otherwise connect()
+    // races with our in-flight initDevices and may hang in "initializing".
+    client
+      .initDevices()
+      .catch((err) => {
+        console.warn('initDevices failed (mic permission denied?):', err);
+      })
+      .finally(() => setDevicesReady(true));
   }, [client]);
 
   useEffect(() => {
