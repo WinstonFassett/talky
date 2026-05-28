@@ -26,7 +26,7 @@ interface ProfilesResponse {
   live: boolean;
 }
 
-export const LLMProfileSelect = ({ compact = false }: { compact?: boolean } = {}) => {
+export const LLMProfileSelect = () => {
   const [profiles, setProfiles] = useState<LLMProfile[]>([]);
   const [activeProfile, setActiveProfile] = useState<string>('');
   const [switching, setSwitching] = useState(false);
@@ -138,9 +138,7 @@ export const LLMProfileSelect = ({ compact = false }: { compact?: boolean } = {}
           title={`Switch profile · current: ${current.label}`}
         >
           <StatusDot healthy={current.healthy} />
-          {!compact && (
-            <span className="max-w-[140px] truncate">{current.label}</span>
-          )}
+          <span className="truncate">{current.label}</span>
           <ChevronDownIcon
             size={11}
             style={{ color: 'var(--color-text-mute)' }}

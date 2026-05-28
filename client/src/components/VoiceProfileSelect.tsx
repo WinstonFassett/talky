@@ -12,7 +12,7 @@ import {
   ComboboxTrigger,
 } from './kibo-ui/combobox';
 import { PickerTrigger } from './PickerTrigger';
-import { inferProvider, useVoiceProfiles } from './useVoiceProfiles';
+import { useVoiceProfiles } from './useVoiceProfiles';
 
 export const VoiceProfileSelect = ({ compact = false }: { compact?: boolean } = {}) => {
   const { voices, activeVoice, switching, error, switchVoice } = useVoiceProfiles();
@@ -24,7 +24,6 @@ export const VoiceProfileSelect = ({ compact = false }: { compact?: boolean } = 
   if (voices.length === 0) return null;
 
   const current = voices.find((v) => v.name === activeVoice) ?? voices[0];
-  const currentProvider = inferProvider(current);
   const comboData = voices.map((v) => ({ value: v.name, label: v.description || v.name }));
 
   return (
@@ -48,16 +47,9 @@ export const VoiceProfileSelect = ({ compact = false }: { compact?: boolean } = 
             className="shrink-0"
           />
           {!compact && (
-            <>
-              <span className="max-w-[140px] truncate">
-                {current.description || current.name}
-              </span>
-              {currentProvider && (
-                <span className="font-mono text-[10px] uppercase tracking-[0.04em] text-[var(--color-text-mute)]">
-                  {currentProvider}
-                </span>
-              )}
-            </>
+            <span className="truncate">
+              {current.description || current.name}
+            </span>
           )}
           <ChevronDownIcon
             size={11}
@@ -73,44 +65,38 @@ export const VoiceProfileSelect = ({ compact = false }: { compact?: boolean } = 
           <ComboboxGroup heading="Voice profile">
             {voices.map((v) => {
               const selected = v.name === activeVoice;
-              const provider = inferProvider(v);
               return (
                 <ComboboxItem
                   key={v.name}
                   value={v.name}
-                  className="flex items-start gap-2 py-2"
+                  className="flex flex-col items-stretch gap-1"
                 >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm">{v.description || v.name}</span>
-                      {provider && (
-                        <span className="font-mono text-[10px] uppercase tracking-wider opacity-50">
-                          {provider}
-                        </span>
-                      )}
-                      {selected && (
-                        <CheckIcon
-                          size={13}
-                          className="ml-auto"
-                          style={{ color: 'var(--color-accent)' }}
-                        />
-                      )}
-                    </div>
-                    {(v.tts || v.stt) && (
-                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground font-mono">
-                        {v.tts && (
-                          <span>
-                            <span className="opacity-60">TTS</span> {v.tts}
-                          </span>
-                        )}
-                        {v.stt && (
-                          <span>
-                            <span className="opacity-60">STT</span> {v.stt}
-                          </span>
-                        )}
-                      </div>
+                  {/* Row 1: description (fallback to name) · check */}
+                  <div className="flex items-center gap-2 w-full">
+                    <span
+                      className="font-medium truncate flex-1 min-w-0"
+                      style={{ fontSize: 13, color: 'var(--color-foreground)' }}
+                    >
+                      {v.description || v.name}
+                    </span>
+                    {selected && (
+                      <CheckIcon
+                        size={13}
+                        className="shrink-0"
+                        style={{ color: 'var(--color-accent)' }}
+                      />
                     )}
                   </div>
+                  {/* Row 2: TTS · STT, both quiet */}
+                  {(v.tts || v.stt) && (
+                    <div
+                      className="flex flex-wrap gap-x-3"
+                      style={{ fontSize: 11, color: 'var(--color-text-mute)' }}
+                    >
+                      {v.tts && <span className="truncate">TTS: {v.tts}</span>}
+                      {v.stt && <span className="truncate">STT: {v.stt}</span>}
+                    </div>
+                  )}
                 </ComboboxItem>
               );
             })}

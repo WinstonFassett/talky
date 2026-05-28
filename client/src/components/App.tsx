@@ -10,6 +10,7 @@ import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
+import { VoicePickerSheet } from './VoicePickerSheet';
 import { PermissionBanner } from './PermissionBanner';
 import { StatusBadge } from './StatusBadge';
 import { useVoiceState } from './useVoiceState';
@@ -211,24 +212,27 @@ export const App = ({
     <div className="flex flex-col w-full h-full bg-background text-foreground">
       <PermissionBanner />
       <header
-        className="flex items-center shrink-0 border-b"
+        className="flex items-center shrink-0 border-b gap-2 pl-2 pr-2 sm:pr-4 min-h-12 sm:min-h-16"
         style={{
           borderColor: 'var(--color-border-soft)',
           backgroundColor: 'var(--color-card)',
         }}
       >
-        {/* Left: visualizer (flush, sets header height) + status */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0 pr-2 sm:pr-3">
-          <BotVisualizer client={client} />
-          <div className="hidden sm:block">
+        {/* 1. Visualizer — fixed, flush left, sets header height */}
+        <BotVisualizer client={client} />
+
+        {/* 2. Profile name (LLM picker) — flexes to fill, truncates */}
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
+          <div className="hidden sm:block shrink-0">
             <StatusBadge state={voiceState} />
           </div>
-        </div>
-
-        {/* Center: LLM picker always; voice + transport hide on mobile (in MoreMenu instead) */}
-        <div className="flex items-center gap-2 flex-1 justify-center min-w-0 px-2 sm:px-3">
-          <LLMProfileSelect compact={isNarrow} />
-          {!isNarrow && <VoiceProfileSelect />}
+          <div className="min-w-0 flex-1">
+            <LLMProfileSelect />
+          </div>
+          {/* Voice picker: combobox on tablet+, bottom sheet (icon-only) on mobile */}
+          <div className="shrink-0">
+            {isNarrow ? <VoicePickerSheet /> : <VoiceProfileSelect />}
+          </div>
           {showTransportSelector && !isNarrow ? (
             <TransportSelect
               transportType={transportType}
@@ -238,8 +242,8 @@ export const App = ({
           ) : null}
         </div>
 
-        {/* Right: audio + connect + more */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 pr-2 pl-1 sm:pr-4 sm:pl-3">
+        {/* 3-5. Right cluster — audio · connect · more */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <UserAudioControl
             size={isNarrow ? 'sm' : 'md'}
             variant="ghost"

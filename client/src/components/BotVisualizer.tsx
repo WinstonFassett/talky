@@ -78,18 +78,26 @@ export const BotVisualizer = ({ client }: BotVisualizerProps) => {
 
   const isNarrow = useMediaQuery('(max-width: 640px)');
 
+  const px = isNarrow ? 40 : 56;
+
   return (
-    <CircularWaveform
-      size={isNarrow ? 48 : 72}
-      audioTrack={audioTrack}
-      isThinking={thinking}
-      color1={accent}
-      color2={accent}
-      backgroundColor="transparent"
-      rotationEnabled={!speaking}
-      numBars={32}
-      barWidth={1}
-      sensitivity={2}
-    />
+    <div
+      className="shrink-0"
+      style={{ width: px, height: px }}
+      aria-hidden="true"
+    >
+      <CircularWaveform
+        size={px}
+        audioTrack={audioTrack}
+        isThinking={thinking}
+        color1={accent}
+        color2={accent}
+        backgroundColor="transparent"
+        rotationEnabled={!speaking}
+        numBars={32}
+        barWidth={1}
+        sensitivity={2}
+      />
+    </div>
   );
 };
