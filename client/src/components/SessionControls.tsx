@@ -1,30 +1,40 @@
-import { AudioControl } from './AudioControl';
+import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
+import { ConnectedAudioControl } from './ConnectedAudioControl';
+import { IdleAudioControl } from './IdleAudioControl';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 
 // Stacked picker rows: Assistant / Voice / Audio. Used in the mobile
 // SessionSheet drawer body AND in the desktop EmptyState pre-connect.
-export const SessionControls = () => (
-  <div className="flex flex-col gap-4 w-full">
-    <Row label="Assistant">
-      <LLMProfileSelect />
-    </Row>
-    <Row label="Voice">
-      <VoiceProfileSelect />
-    </Row>
-    <Row label="Audio" stretch={false}>
-      <div className="flex w-full [&>div]:w-full">
-        <AudioControl
-          size="md"
-          variant="ghost"
-          noVisualizer={false}
-          classNames={{ button: 'flex-1' }}
-          visualizerProps={{ barCount: 32 }}
-        />
-      </div>
-    </Row>
-  </div>
-);
+export const SessionControls = () => {
+  const transportState = usePipecatClientTransportState();
+  const connected = transportState === 'connected' || transportState === 'ready';
+  return (
+    <div className="flex flex-col gap-4 w-full">
+      <Row label="Assistant">
+        <LLMProfileSelect />
+      </Row>
+      <Row label="Voice">
+        <VoiceProfileSelect />
+      </Row>
+      <Row label="Audio" stretch={false}>
+        <div className="flex w-full [&>div]:w-full">
+          {connected ? (
+            <ConnectedAudioControl
+              size="md"
+              variant="ghost"
+              noVisualizer={false}
+              classNames={{ button: 'flex-1' }}
+              visualizerProps={{ barCount: 32 }}
+            />
+          ) : (
+            <IdleAudioControl size="md" />
+          )}
+        </div>
+      </Row>
+    </div>
+  );
+};
 
 const Row = ({
   label,

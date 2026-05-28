@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
 import { ConnectButton } from '@pipecat-ai/voice-ui-kit';
-import { AudioControl } from './AudioControl';
+import { ConnectedAudioControl } from './ConnectedAudioControl';
+import { IdleAudioControl } from './IdleAudioControl';
 import { ConversationPanelWithReasoning } from './ConversationPanelWithReasoning';
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
@@ -267,11 +268,15 @@ export const App = ({
         {/* 3-5. Right cluster — audio (desktop only) · connect · more */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {!isNarrow && (
-            <AudioControl
-              size="md"
-              variant="ghost"
-              noVisualizer={false}
-            />
+            transportConnected ? (
+              <ConnectedAudioControl
+                size="md"
+                variant="ghost"
+                noVisualizer={false}
+              />
+            ) : (
+              <IdleAudioControl size="md" />
+            )
           )}
           <ConnectButton
             size="md"
