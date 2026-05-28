@@ -61,10 +61,22 @@ export const App = ({
 }: AppProps) => {
   const autoconnectAttempted = useRef(false);
   const userInitiatedDisconnect = useRef(false);
-  const [devicesReady, setDevicesReady] = useState(false);
   const [activeProfile, setActiveProfile] = useState('');
   const hasBeenConnected = useRef(false);
   const transportState = usePipecatClientTransportState();
+
+  // initDevices() opens the mic stream — gated on user intent to connect, so
+  // the mic indicator doesn't stay lit between calls. Pipecat's disconnect()
+  // releases the stream automatically.
+  const wrappedConnect = useCallback(async () => {
+    if (!client || !handleConnect) return;
+    try {
+      await client.initDevices();
+    } catch (err) {
+      console.warn('initDevices failed (mic permission denied?):', err);
+    }
+    handleConnect();
+  }, [client, handleConnect]);
 
   const wrappedDisconnect = useCallback(() => {
     userInitiatedDisconnect.current = true;
@@ -193,25 +205,11 @@ export const App = ({
   const activeProfileLabel = profileLabels[activeProfile] ?? activeProfile;
 
   useEffect(() => {
-    if (!client) return;
-    // Populate availableMics / selectedMic so the audio control is live pre-connect.
-    // initDevices() does getUserMedia + enumerateDevices and moves transport state to
-    // "initialized". Wait for it before unblocking autoconnect, otherwise connect()
-    // races with our in-flight initDevices and may hang in "initializing".
-    client
-      .initDevices()
-      .catch((err) => {
-        console.warn('initDevices failed (mic permission denied?):', err);
-      })
-      .finally(() => setDevicesReady(true));
-  }, [client]);
-
-  useEffect(() => {
-    if (autoconnect && client && handleConnect && !autoconnectAttempted.current && devicesReady) {
+    if (autoconnect && client && !autoconnectAttempted.current) {
       autoconnectAttempted.current = true;
-      handleConnect();
+      wrappedConnect();
     }
-  }, [autoconnect, client, handleConnect, devicesReady]);
+  }, [autoconnect, client, wrappedConnect]);
 
   const showTransportSelector = availableTransports.length > 1;
   const transportConnected = transportState === 'connected' || transportState === 'ready';
@@ -277,7 +275,7 @@ export const App = ({
           )}
           <ConnectButton
             size="md"
-            onConnect={handleConnect}
+            onConnect={wrappedConnect}
             onDisconnect={wrappedDisconnect}
             stateContent={{
               disconnected: {
@@ -315,7 +313,7 @@ export const App = ({
           {showTranscript ? (
             <ConversationPanelWithReasoning activeProfile={activeProfile} />
           ) : (
-            <EmptyState onConnect={handleConnect} />
+            <EmptyState onConnect={wrappedConnect} />
           )}
         </div>
       </main>

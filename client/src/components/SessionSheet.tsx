@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Drawer } from 'vaul';
-import { ChevronDownIcon, SlidersHorizontalIcon } from 'lucide-react';
+import { SlidersHorizontalIcon } from 'lucide-react';
 
 import { SessionControls } from './SessionControls';
 
