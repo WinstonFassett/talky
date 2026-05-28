@@ -6,6 +6,9 @@ defaults:
 
 # Network settings
 network:
-  host: "localhost"  # Change to "0.0.0.0" for external access
-  external_host: ""  # External hostname for browser URLs (configure for your setup)
-  daemon_port: 9090
+  host: "localhost"          # "0.0.0.0" to listen on all interfaces (remote access)
+  port: 9090                 # Daemon HTTP(S) port
+  external_host: ""          # External hostname for browser URLs (e.g. macbook.tailnet.ts.net)
+  # https:                   # Uncomment to serve TLS (run scripts/generate-certs.sh first)
+  #   cert: "~/.talky/ssl/server-cert.pem"
+  #   key:  "~/.talky/ssl/server-key.pem"

@@ -40,7 +40,7 @@ LLM backends in `server/backends/` extend Pipecat's `LLMService`.
 
 **Do not** use `pkill -f "talky daemon"` — it only matches the parent and can orphan children. **Do not** run via `uv run talky daemon` either — the `uv run` wrapper inserts an intermediate process that breaks process-group signal delivery. Run `talky daemon` directly.
 
-If another daemon is already running on 9090, the new one refuses to start with a clear error. To take over: `talky daemon --force` (or `TALKY_MCP_FORCE=1 talky daemon`).
+If another daemon is already running on 9090, the new one refuses to start with a clear error. To take over: `talky daemon --force` (or `TALKY_FORCE=1 talky daemon`).
 
 ### Profile switching
 

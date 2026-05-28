@@ -57,8 +57,8 @@ Close the Pi terminal (`Ctrl+C` or `/quit`) or close the browser tab. The daemon
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TALKY_DAEMON_PORT` | `9090` | Port for the talky daemon (legacy: `TALKY_MCP_PORT`) |
-| `TALKY_DAEMON_HOST` | `localhost` | Host for the talky daemon (legacy: `TALKY_MCP_HOST`) |
+| `TALKY_DAEMON_PORT` | `9090` | Port the CLI uses to reach the daemon (fallback: `TALKY_PORT`) |
+| `TALKY_DAEMON_HOST` | `localhost` | Host the CLI uses to reach the daemon (fallback: `TALKY_HOST`) |
 | `TALKY_AGENT_WS_URL` | `ws://localhost:9090/ws/agent` | Full ws URL the extension dials (overrides host/port) |
 
 ## Extension Details

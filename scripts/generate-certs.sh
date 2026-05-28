@@ -74,28 +74,28 @@ openssl req -x509 -newkey rsa:2048 \
   -nodes \
   -subj "/CN=$HOSTNAME"
 
-# Server certificates  
-echo "🖥️  Generating server certificates..."
-cd ../server
+# Server certificates → ~/.talky/ssl/ (user-specific, not project artifacts)
+SSL_DIR="$HOME/.talky/ssl"
+mkdir -p "$SSL_DIR"
+echo "🖥️  Generating server certificates in $SSL_DIR..."
+cd ..
 openssl req -x509 -newkey rsa:2048 \
-  -keyout server-key.pem \
-  -out server-cert.pem \
+  -keyout "$SSL_DIR/server-key.pem" \
+  -out "$SSL_DIR/server-cert.pem" \
   -days 365 \
   -nodes \
   -subj "/CN=$HOSTNAME"
 
-cd ..
-
 # Validate generated certificates
 validate_cert "client/localhost-cert.pem" "client/localhost-key.pem" "client certificates"
-validate_cert "server/server-cert.pem" "server/server-key.pem" "server certificates"
+validate_cert "$SSL_DIR/server-cert.pem" "$SSL_DIR/server-key.pem" "server certificates"
 
 echo "✅ SSL certificates generated and validated successfully!"
 echo "📝 Files created:"
 echo "   - client/localhost-key.pem"
-echo "   - client/localhost-cert.pem" 
-echo "   - server/server-key.pem"
-echo "   - server/server-cert.pem"
+echo "   - client/localhost-cert.pem"
+echo "   - $SSL_DIR/server-key.pem"
+echo "   - $SSL_DIR/server-cert.pem"
 echo ""
-echo "🚀 You can now use HTTPS for external access:"
-echo "   talky --host 0.0.0.0"
+echo "🚀 Point ~/.talky/settings.yaml network.https at the new paths, then:"
+echo "   talky kill && talky daemon"

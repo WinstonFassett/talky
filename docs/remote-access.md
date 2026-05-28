@@ -11,19 +11,30 @@ One port: **9090**. The daemon serves WebRTC, the browser UI, and MCP tools. To 
    ./scripts/generate-certs.sh macbook-pro.tailc3138.ts.net
    ```
 
-2. **Start daemon with HTTPS and external binding:**
-   ```bash
-   MCP_HOST=0.0.0.0 \
-     MCP_SSL_CERTFILE=./server/server-cert.pem \
-     MCP_SSL_KEYFILE=./server/server-key.pem \
-     talky daemon
-   ```
-   Or with the shortcut flag:
-   ```bash
-   MCP_HOST=0.0.0.0 talky daemon --https
+2. **Configure `~/.talky/settings.yaml`** (one-time):
+   ```yaml
+   network:
+     host: "0.0.0.0"
+     port: 9090
+     https:
+       cert: "~/.talky/ssl/server-cert.pem"
+       key:  "~/.talky/ssl/server-key.pem"
    ```
 
-3. **Open on the remote device:**
+3. **Start the daemon** — it picks up the config automatically:
+   ```bash
+   talky daemon
+   ```
+
+   Or override for a single run with env vars:
+   ```bash
+   TALKY_HOST=0.0.0.0 \
+     TALKY_HTTPS_CERT=~/.talky/ssl/server-cert.pem \
+     TALKY_HTTPS_KEY=~/.talky/ssl/server-key.pem \
+     talky daemon
+   ```
+
+4. **Open on the remote device:**
    ```
    https://macbook-pro.tailc3138.ts.net:9090
    ```
@@ -37,7 +48,7 @@ For hot-reload dev against a remote daemon. The Vite dev server proxies API call
 ```bash
 security add-trusted-cert -d -r trustRoot \
   -k ~/Library/Keychains/login.keychain-db \
-  ./server/server-cert.pem
+  ~/.talky/ssl/server-cert.pem
 ```
 
 **Start dev server pointing at remote daemon:**

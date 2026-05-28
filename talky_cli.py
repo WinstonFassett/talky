@@ -334,8 +334,8 @@ def cmd_profile(args):
     import urllib.error
     import urllib.request
 
-    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
-    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
+    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
+    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
     base_url = f"http://{host}:{port}"
 
     name = getattr(args, "name", None)
@@ -372,7 +372,7 @@ def cmd_profile(args):
     _pipeline_live = False
     if daemon_was_running:
         try:
-            _st_url = f"http://{os.environ.get('TALKY_MCP_HOST', 'localhost')}:{int(os.environ.get('TALKY_MCP_PORT', '9090'))}/status"
+            _st_url = f"http://{os.environ.get('TALKY_HOST', 'localhost')}:{int(os.environ.get('TALKY_PORT', '9090'))}/status"
             import urllib.request as _ur
             with _ur.urlopen(_st_url, timeout=2) as _r:
                 _st = json.loads(_r.read())
@@ -477,8 +477,8 @@ def cmd_voice(args):
     if not ensure_daemon():
         sys.exit(1)
 
-    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
-    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
+    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
+    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
     base_url = f"http://{host}:{port}"
 
     name = getattr(args, "name", None)
@@ -534,8 +534,8 @@ def cmd_talkystatus(args):  # noqa: ARG001
     import urllib.error
     import urllib.request
 
-    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
-    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
+    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
+    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
     base_url = f"http://{host}:{port}"
 
     # Fetch profiles + voices
@@ -1030,8 +1030,8 @@ def cmd_launch(args):
         sys.exit(1)
 
     if launcher.get("autoconnect_browser", False):
-        host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_MCP_HOST", "localhost"))
-        port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_MCP_PORT", "9090")))
+        host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
+        port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
         client_url = f"http://{host}:{port}?autoconnect=true"
         webbrowser.open(client_url)
 

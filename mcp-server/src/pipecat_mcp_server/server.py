@@ -52,20 +52,72 @@ from pipecat_mcp_server.daemon_bridge import say as daemon_say
 logger.remove()
 logger.add(sys.stderr, level="INFO")
 
-# Create MCP server
-# Host is configurable via MCP_HOST environment variable, defaults to localhost for security
-mcp_host = os.getenv("MCP_HOST", "localhost")
+# Network config precedence (highest → lowest):
+#   1. TALKY_HOST / TALKY_PORT / TALKY_HTTPS_CERT / TALKY_HTTPS_KEY env vars
+#   2. Deprecated MCP_HOST / MCP_PORT / MCP_SSL_CERTFILE / MCP_SSL_KEYFILE (warn)
+#   3. ~/.talky/settings.yaml  network: { host, port, https: { cert, key } }
+#   4. Defaults: host="localhost", port=9090, no TLS
+def _env_with_deprecated(new_name: str, old_name: str) -> Optional[str]:
+    v = os.getenv(new_name)
+    if v is not None:
+        return v
+    v_old = os.getenv(old_name)
+    if v_old is not None:
+        logger.warning(f"{old_name} is deprecated, use {new_name} instead")
+        return v_old
+    return None
 
-# Port validation: must be a valid port number (1-65535)
-_mcp_port_raw = os.getenv("MCP_PORT", "9090")
-try:
-    mcp_port = int(_mcp_port_raw)
-    if not (1 <= mcp_port <= 65535):
-        logger.error(f"Invalid MCP_PORT '{_mcp_port_raw}': must be between 1 and 65535")
+
+def _resolve_network_config() -> tuple[str, Optional[str], Optional[str]]:
+    """Resolve (host, ssl_certfile, ssl_keyfile) from env + settings.yaml."""
+    from shared.profile_manager import get_profile_manager
+    try:
+        settings = get_profile_manager().settings or {}
+    except Exception:
+        settings = {}
+    net = (settings.get("network") or {}) if isinstance(settings, dict) else {}
+    https = (net.get("https") or {}) if isinstance(net, dict) else {}
+
+    host = _env_with_deprecated("TALKY_HOST", "MCP_HOST") or net.get("host") or "localhost"
+    cert = _env_with_deprecated("TALKY_HTTPS_CERT", "MCP_SSL_CERTFILE") or https.get("cert")
+    key = _env_with_deprecated("TALKY_HTTPS_KEY", "MCP_SSL_KEYFILE") or https.get("key")
+    # Expand ~ so users can write "~/.talky/ssl/..." in settings.yaml
+    if cert:
+        cert = os.path.expanduser(cert)
+    if key:
+        key = os.path.expanduser(key)
+    return host, cert, key
+
+
+mcp_host, _resolved_cert, _resolved_key = _resolve_network_config()
+
+# Port resolution: TALKY_PORT env → settings.yaml network.port → 9090
+def _resolve_port() -> int:
+    raw = _env_with_deprecated("TALKY_PORT", "MCP_PORT")
+    if raw is None:
+        try:
+            from shared.profile_manager import get_profile_manager
+            settings = get_profile_manager().settings or {}
+            net = (settings.get("network") or {}) if isinstance(settings, dict) else {}
+            p = net.get("port")
+            if p is not None:
+                raw = str(p)
+        except Exception:
+            raw = None
+    if raw is None:
+        raw = "9090"
+    try:
+        port = int(raw)
+        if not (1 <= port <= 65535):
+            logger.error(f"Invalid port '{raw}': must be between 1 and 65535")
+            sys.exit(1)
+        return port
+    except ValueError:
+        logger.error(f"Invalid port '{raw}': not a valid integer")
         sys.exit(1)
-except ValueError:
-    logger.error(f"Invalid MCP_PORT '{_mcp_port_raw}': not a valid integer")
-    sys.exit(1)
+
+
+mcp_port = _resolve_port()
 
 mcp = FastMCP(name="pipecat-mcp-server", host=mcp_host, port=mcp_port)
 
@@ -254,7 +306,7 @@ async def start_convo(auto_open: bool = True) -> dict:
         Connection information including the browser URL.
 
     """
-    scheme = "https" if os.getenv("MCP_SSL_CERTFILE") else "http"
+    scheme = "https" if _resolved_cert else "http"
     client_url = f"{scheme}://{mcp_host}:{mcp_port}?autoconnect=true"
 
     if auto_open:
@@ -419,7 +471,7 @@ def _check_ports_or_exit():
     """
     import time as _t
 
-    force_env = os.getenv("TALKY_DAEMON_FORCE", "").strip() or os.getenv("TALKY_MCP_FORCE", "").strip()
+    force_env = os.getenv("TALKY_DAEMON_FORCE", "").strip() or os.getenv("TALKY_FORCE", "").strip()
     force = force_env not in ("", "0")
 
     # Check ready file — the authoritative "daemon is running" signal.
@@ -1075,8 +1127,8 @@ def main():
 
     app = _build_app()
 
-    ssl_certfile = os.getenv("MCP_SSL_CERTFILE")
-    ssl_keyfile = os.getenv("MCP_SSL_KEYFILE")
+    ssl_certfile = _resolved_cert
+    ssl_keyfile = _resolved_key
 
     uvicorn_kwargs = {
         "host": mcp_host,
