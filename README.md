@@ -2,9 +2,34 @@
 
 Voice interface for AI. Talk to OpenClaw, Moltis, Hermes or Pi. Or use MCP to talk to Claude.
 
-<a href="screenshots/main.png" target="_blank">
-  <img src="screenshots/main.png" alt="Talky Demo" width="450">
+### Desktop
+
+<a href="screenshots/talky%20convo.png" target="_blank">
+  <img src="screenshots/talky%20convo.png" alt="Talky voice conversation" width="600">
 </a>
+
+<p>
+  <a href="screenshots/talky%20profile%20picker.png" target="_blank">
+    <img src="screenshots/talky%20profile%20picker.png" alt="Switch AI profile" width="290">
+  </a>
+  <a href="screenshots/talky%20voice%20picker.png" target="_blank">
+    <img src="screenshots/talky%20voice%20picker.png" alt="Switch voice" width="290">
+  </a>
+</p>
+
+### Mobile
+
+<p>
+  <a href="screenshots/talky%20mobile%20start.png" target="_blank">
+    <img src="screenshots/talky%20mobile%20start.png" alt="Mobile start screen" width="180">
+  </a>
+  <a href="screenshots/talky%20mobile%20convo.png" target="_blank">
+    <img src="screenshots/talky%20mobile%20convo.png" alt="Mobile conversation" width="180">
+  </a>
+  <a href="screenshots/talky%20mobile%20controls.png" target="_blank">
+    <img src="screenshots/talky%20mobile%20controls.png" alt="Mobile controls" width="180">
+  </a>
+</p>
 
 ## Quick Start
 
