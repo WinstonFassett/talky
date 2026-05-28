@@ -18,6 +18,11 @@ const getHost = (): string => {
   return process.env.VITE_HOST || 'localhost';
 };
 
+// Get daemon URL for proxying (supports remote via VITE_DAEMON_URL)
+const getDaemonUrl = (): string => {
+  return process.env.VITE_DAEMON_URL || 'http://localhost:9090';
+};
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -27,11 +32,11 @@ export default defineConfig({
     port: 5173,
     allowedHosts: getAllowedHosts(),
     proxy: {
-      '/api': { target: 'http://localhost:9090', ws: true },
-      '/start': 'http://localhost:9090',
-      '/status': 'http://localhost:9090',
-      '/sessions': { target: 'http://localhost:9090', ws: true },
-      '/ws': { target: 'http://localhost:9090', ws: true },
+      '/api': { target: getDaemonUrl(), ws: true },
+      '/start': getDaemonUrl(),
+      '/status': getDaemonUrl(),
+      '/sessions': { target: getDaemonUrl(), ws: true },
+      '/ws': { target: getDaemonUrl(), ws: true },
     },
   },
 });
