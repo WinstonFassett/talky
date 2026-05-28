@@ -1,5 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import path from 'path';
 
 // Get allowed hosts from environment or use defaults
 const getAllowedHosts = (): string[] => {
@@ -16,9 +18,15 @@ const getHost = (): string => {
   return process.env.VITE_HOST || 'localhost';
 };
 
+// Get daemon URL for proxying (supports remote via VITE_DAEMON_URL)
+const getDaemonUrl = (): string => {
+  return process.env.VITE_DAEMON_URL || 'https://localhost:9090';
+};
+
 // HTTPS config for external access
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: { alias: { '@': path.resolve(__dirname, './src') } },
   server: {
     host: getHost(),
     port: 5173,
@@ -26,6 +34,13 @@ export default defineConfig({
     https: {
       key: './localhost-key.pem',
       cert: './localhost-cert.pem',
+    },
+    proxy: {
+      '/api': { target: getDaemonUrl(), ws: true, changeOrigin: true },
+      '/start': { target: getDaemonUrl(), changeOrigin: true },
+      '/status': { target: getDaemonUrl(), changeOrigin: true },
+      '/sessions': { target: getDaemonUrl(), ws: true, changeOrigin: true },
+      '/ws': { target: getDaemonUrl(), ws: true, changeOrigin: true },
     },
   },
 });

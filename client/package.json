@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:https": "vite --config vite.config.https.ts",
+    "dev:https": "NODE_OPTIONS=--use-system-ca vite --config vite.config.https.ts",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"

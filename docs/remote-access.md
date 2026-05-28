@@ -1,54 +1,69 @@
 # Remote Access
 
-Use Talky from other devices on your network.
+Use Talky from other devices on your network (e.g. phone over Tailscale).
 
-> **Note:** This doc was written for the pre-daemon architecture (Vite on :5173 + pipecat on :7860) and is **stale** after 5098. The current talky daemon is a single process on :9090 that serves WebRTC, the browser UI, and MCP tools all from one port. The remote-access story needs to be re-thought against the daemon — the bits below are kept as rough guidance only.
+One port: **9090**. The daemon serves WebRTC, the browser UI, and MCP tools. To reach it remotely you need (a) the daemon bound to `0.0.0.0`, (b) HTTPS (browsers require it for mic access on non-localhost URLs), and (c) a cert the browser will accept.
 
-## Current reality (post-5098)
+## Production flow (9090 only)
 
-- One port: **9090**. That's the daemon, the WebRTC signaling, the browser UI, and the MCP endpoint.
-- To reach it from another device you need (a) the daemon bound to `0.0.0.0` and (b) HTTPS, because browsers won't grant mic permission to plain HTTP over a non-localhost URL.
-
-## Quick start
-
-1. **Generate SSL certificates** (required for WebRTC mic access over non-localhost):
+1. **Generate SSL certificates** with your external hostname as SAN:
    ```bash
-   ./scripts/generate-certs.sh
+   ./scripts/generate-certs.sh macbook-pro.tailc3138.ts.net
    ```
 
-2. **Bind the daemon externally** (see `mcp-server/src/pipecat_mcp_server/server.py` for the `MCP_HOST` env var):
+2. **Start daemon with HTTPS and external binding:**
    ```bash
-   MCP_HOST=0.0.0.0 talky daemon
+   MCP_HOST=0.0.0.0 \
+     MCP_SSL_CERTFILE=./server/server-cert.pem \
+     MCP_SSL_KEYFILE=./server/server-key.pem \
+     talky daemon
+   ```
+   Or with the shortcut flag:
+   ```bash
+   MCP_HOST=0.0.0.0 talky daemon --https
    ```
 
-3. **Access from another device**:
+3. **Open on the remote device:**
    ```
-   https://YOUR_IP:9090
+   https://macbook-pro.tailc3138.ts.net:9090
    ```
+   Accept the self-signed cert warning, or install the cert on the device.
 
-## Environment variables
+## Dev client flow (5173 → 9090)
 
+For hot-reload dev against a remote daemon. The Vite dev server proxies API calls to the daemon.
+
+**One-time setup** — trust the server cert in macOS login keychain so Node's proxy accepts it:
 ```bash
-export MCP_HOST="0.0.0.0"                # Daemon bind host (default: localhost)
-export MCP_PORT="9090"                   # Daemon port (default: 9090)
+security add-trusted-cert -d -r trustRoot \
+  -k ~/Library/Keychains/login.keychain-db \
+  ./server/server-cert.pem
 ```
+
+**Start dev server pointing at remote daemon:**
+```bash
+cd client
+VITE_HOST=0.0.0.0 \
+  VITE_ALLOWED_HOSTS="macbook-pro.tailc3138.ts.net,localhost" \
+  VITE_DAEMON_URL="https://macbook-pro.tailc3138.ts.net:9090" \
+  npm run dev:https
+```
+
+The `dev:https` script uses `NODE_OPTIONS=--use-system-ca` so Node trusts your login keychain.
 
 ## Troubleshooting
 
 **"Site not reachable"**
 ```bash
-lsof -i :9090   # Should show the daemon bound to *:9090 or 0.0.0.0:9090
+lsof -i :9090   # Should show *:9090 or 0.0.0.0:9090, not 127.0.0.1:9090
 ```
 
-**"HTTPS required"**
-```bash
-./scripts/generate-certs.sh  # Missing certificates
-```
+**"HTTPS required" / mic not working**
+- Must use HTTPS, not HTTP, from non-localhost URLs
 
-**"Microphone not working"**
-- Use HTTPS (not HTTP) when accessing from a non-localhost URL
-- Grant browser microphone permissions
+**Vite proxy error: self-signed certificate**
+- Run the one-time `security add-trusted-cert` step above
+- Cert must be regenerated with the correct hostname SAN (`generate-certs.sh <hostname>`)
 
-## TODO
-
-This doc deserves a proper rewrite once someone actually runs the daemon over the network. File a ticket if you hit rough edges.
+**Browser cert warning**
+- Self-signed certs show a warning — click Advanced → Proceed, or install the cert on the device
