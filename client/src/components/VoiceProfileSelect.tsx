@@ -87,14 +87,19 @@ export const VoiceProfileSelect = ({ compact = false }: { compact?: boolean } = 
                       />
                     )}
                   </div>
-                  {/* Row 2: TTS · STT, both quiet */}
+                  {/* Row 2: providers only, all caps, quiet */}
                   {(v.tts || v.stt) && (
                     <div
-                      className="flex flex-wrap gap-x-3"
-                      style={{ fontSize: 11, color: 'var(--color-text-mute)' }}
+                      className="truncate uppercase"
+                      style={{
+                        fontSize: 11,
+                        letterSpacing: '0.04em',
+                        color: 'var(--color-text-mute)',
+                      }}
                     >
-                      {v.tts && <span className="truncate">TTS: {v.tts}</span>}
-                      {v.stt && <span className="truncate">STT: {v.stt}</span>}
+                      {v.tts && <>{v.tts.split('·')[0].trim()} TTS</>}
+                      {v.tts && v.stt && <> · </>}
+                      {v.stt && <>{v.stt.split('·')[0].trim()} STT</>}
                     </div>
                   )}
                 </ComboboxItem>

@@ -2,10 +2,7 @@ import { useEffect, useState } from 'react';
 import { Drawer } from 'vaul';
 import { ChevronDownIcon, SlidersHorizontalIcon } from 'lucide-react';
 
-import { UserAudioControl } from '@pipecat-ai/voice-ui-kit';
-
-import { LLMProfileSelect } from './LLMProfileSelect';
-import { VoiceProfileSelect } from './VoiceProfileSelect';
+import { SessionControls } from './SessionControls';
 
 // Header trigger + bottom-sheet panel containing the existing LLM and Voice
 // pickers stacked vertically. Mobile only — desktop renders the pickers inline.
@@ -66,26 +63,10 @@ export const SessionSheet = ({ currentLabel }: { currentLabel?: string }) => {
           </Drawer.Description>
 
           <div
-            className="overflow-y-auto overscroll-contain px-5 py-4 flex flex-col gap-4"
+            className="overflow-y-auto overscroll-contain px-5 py-4"
             style={{ paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom))' }}
           >
-            <Row label="Assistant">
-              <LLMProfileSelect />
-            </Row>
-            <Row label="Voice">
-              <VoiceProfileSelect />
-            </Row>
-            <Row label="Audio" stretch={false}>
-              <div className="flex w-full [&>div]:w-full">
-                <UserAudioControl
-                  size="md"
-                  variant="ghost"
-                  noVisualizer={false}
-                  classNames={{ button: 'flex-1' }}
-                  visualizerProps={{ barCount: 32 }}
-                />
-              </div>
-            </Row>
+            <SessionControls />
           </div>
         </Drawer.Content>
       </Drawer.Portal>
@@ -93,35 +74,3 @@ export const SessionSheet = ({ currentLabel }: { currentLabel?: string }) => {
   );
 };
 
-const Row = ({
-  label,
-  children,
-  stretch = true,
-}: {
-  label: string;
-  children: React.ReactNode;
-  stretch?: boolean;
-}) => (
-  <div className="flex flex-col gap-1.5">
-    <div
-      className="font-mono uppercase"
-      style={{
-        fontSize: 10,
-        fontWeight: 600,
-        letterSpacing: '0.08em',
-        color: 'var(--color-text-mute)',
-      }}
-    >
-      {label}
-    </div>
-    <div
-      className={
-        stretch
-          ? 'flex [&>*]:flex-1 [&_button]:w-full [&_button]:justify-between'
-          : 'flex'
-      }
-    >
-      {children}
-    </div>
-  </div>
-);
