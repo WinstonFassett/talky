@@ -146,43 +146,42 @@ const RootView = ({
       className="overflow-y-auto"
       style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
     >
-      <button
-        type="button"
-        onClick={() => {
-          onCopy();
-          // Stay open briefly so user sees the "Copied" state — don't auto-close
-        }}
-        disabled={!hasMessages}
-        className={sheetRowClass}
-      >
-        {copied ? (
-          <CheckIcon size={18} style={{ color: 'var(--color-success)' }} />
-        ) : (
-          <ClipboardIcon size={18} />
-        )}
-        <span className="flex-1 text-[15px]">
-          {copied ? 'Copied transcript' : 'Copy transcript'}
-        </span>
-      </button>
+      {hasMessages && (
+        <>
+          <button
+            type="button"
+            onClick={onCopy}
+            className={sheetRowClass}
+          >
+            {copied ? (
+              <CheckIcon size={18} style={{ color: 'var(--color-success)' }} />
+            ) : (
+              <ClipboardIcon size={18} />
+            )}
+            <span className="flex-1 text-[15px]">
+              {copied ? 'Copied transcript' : 'Copy transcript'}
+            </span>
+          </button>
 
-      <button
-        type="button"
-        onClick={onDrillDownload}
-        disabled={!hasMessages}
-        className={sheetRowClass}
-      >
-        <DownloadIcon size={18} />
-        <span className="flex-1 text-[15px]">Download</span>
-        <ChevronRightIcon
-          size={18}
-          style={{ color: 'var(--color-text-mute)' }}
-        />
-      </button>
+          <button
+            type="button"
+            onClick={onDrillDownload}
+            className={sheetRowClass}
+          >
+            <DownloadIcon size={18} />
+            <span className="flex-1 text-[15px]">Download transcript</span>
+            <ChevronRightIcon
+              size={18}
+              style={{ color: 'var(--color-text-mute)' }}
+            />
+          </button>
 
-      <div
-        className="my-1"
-        style={{ borderTop: '1px solid var(--color-border-soft)' }}
-      />
+          <div
+            className="my-1"
+            style={{ borderTop: '1px solid var(--color-border-soft)' }}
+          />
+        </>
+      )}
 
       <button
         type="button"
@@ -272,59 +271,47 @@ const DesktopMenu = ({ actions }: { actions: Actions }) => {
       align="end"
       className="min-w-[260px] max-h-[80vh] overflow-y-auto"
     >
-      <DropdownMenuItem
-        onClick={onCopy}
-        disabled={!hasMessages}
-        className={itemReset}
-      >
-        {copied ? (
-          <CheckIcon size={14} style={{ color: 'var(--color-success)' }} />
-        ) : (
-          <ClipboardIcon size={14} />
-        )}
-        <span>{copied ? 'Copied transcript' : 'Copy transcript'}</span>
-      </DropdownMenuItem>
+      {hasMessages && (
+        <>
+          <DropdownMenuItem onClick={onCopy} className={itemReset}>
+            {copied ? (
+              <CheckIcon size={14} style={{ color: 'var(--color-success)' }} />
+            ) : (
+              <ClipboardIcon size={14} />
+            )}
+            <span>{copied ? 'Copied transcript' : 'Copy transcript'}</span>
+          </DropdownMenuItem>
 
-      <DropdownMenuLabel
-        className="font-mono uppercase pt-2"
-        style={{
-          fontSize: 10,
-          fontWeight: 600,
-          letterSpacing: '0.08em',
-          color: 'var(--color-text-mute)',
-        }}
-      >
-        Download
-      </DropdownMenuLabel>
-      <DropdownMenuItem
-        onClick={() => onDownload('md')}
-        disabled={!hasMessages}
-        className={itemReset}
-      >
-        <DownloadIcon size={14} />
-        <span className="flex-1">Markdown</span>
-        <span className="font-mono text-[10px] opacity-50">.md</span>
-      </DropdownMenuItem>
-      <DropdownMenuItem
-        onClick={() => onDownload('jsonl')}
-        disabled={!hasMessages}
-        className={itemReset}
-      >
-        <DownloadIcon size={14} />
-        <span className="flex-1">JSON Lines</span>
-        <span className="font-mono text-[10px] opacity-50">.jsonl</span>
-      </DropdownMenuItem>
-      <DropdownMenuItem
-        onClick={() => onDownload('csv')}
-        disabled={!hasMessages}
-        className={itemReset}
-      >
-        <DownloadIcon size={14} />
-        <span className="flex-1">CSV</span>
-        <span className="font-mono text-[10px] opacity-50">.csv</span>
-      </DropdownMenuItem>
+          <DropdownMenuLabel
+            className="font-mono uppercase pt-2"
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: '0.08em',
+              color: 'var(--color-text-mute)',
+            }}
+          >
+            Download
+          </DropdownMenuLabel>
+          <DropdownMenuItem onClick={() => onDownload('md')} className={itemReset}>
+            <DownloadIcon size={14} />
+            <span className="flex-1">Markdown</span>
+            <span className="font-mono text-[10px] opacity-50">.md</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => onDownload('jsonl')} className={itemReset}>
+            <DownloadIcon size={14} />
+            <span className="flex-1">JSON Lines</span>
+            <span className="font-mono text-[10px] opacity-50">.jsonl</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => onDownload('csv')} className={itemReset}>
+            <DownloadIcon size={14} />
+            <span className="flex-1">CSV</span>
+            <span className="font-mono text-[10px] opacity-50">.csv</span>
+          </DropdownMenuItem>
 
-      <DropdownMenuSeparator />
+          <DropdownMenuSeparator />
+        </>
+      )}
 
       <DropdownMenuItem onClick={onToggleTheme} className={itemReset}>
         {isDark ? <SunIcon size={14} /> : <MoonIcon size={14} />}
@@ -336,7 +323,7 @@ const DesktopMenu = ({ actions }: { actions: Actions }) => {
 
 // ---------- Public component ----------
 
-export const MoreMenu = (_props: { showVoiceProfile?: boolean } = {}) => {
+export const MoreMenu = ({ trigger }: { trigger?: React.ReactNode } = {}) => {
   const messages = useTalkyMessages();
   const { resolvedTheme, setTheme } = useTheme();
   const [copied, setCopied] = useState(false);
@@ -369,18 +356,28 @@ export const MoreMenu = (_props: { showVoiceProfile?: boolean } = {}) => {
     onToggleTheme: () => setTheme(isDark ? 'light' : 'dark'),
   };
 
+  const defaultTrigger = (
+    <Button
+      variant="ghost"
+      size="md"
+      title="More options"
+      aria-label="More options"
+    >
+      <MoreVerticalIcon size={16} />
+    </Button>
+  );
+
   if (isNarrow) {
     return (
       <>
-        <Button
-          variant="secondary"
-          size="lg"
-          title="More options"
+        <button
+          type="button"
           aria-label="More options"
           onClick={() => setSheetOpen(true)}
+          className="contents"
         >
-          <MoreVerticalIcon size={16} />
-        </Button>
+          {trigger ?? defaultTrigger}
+        </button>
         <MobileSheet
           open={sheetOpen}
           onOpenChange={setSheetOpen}
@@ -392,16 +389,7 @@ export const MoreMenu = (_props: { showVoiceProfile?: boolean } = {}) => {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="secondary"
-          size="lg"
-          title="More options"
-          aria-label="More options"
-        >
-          <MoreVerticalIcon size={16} />
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild>{trigger ?? defaultTrigger}</DropdownMenuTrigger>
       <DesktopMenu actions={actions} />
     </DropdownMenu>
   );

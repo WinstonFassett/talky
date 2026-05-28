@@ -10,7 +10,7 @@ export const PickerTrigger = forwardRef<HTMLButtonElement, PickerTriggerProps>(
       <button
         ref={ref}
         type="button"
-        className={`flex items-center gap-1.5 px-2.5 h-8 min-w-0 max-w-full text-[13px] font-medium text-foreground bg-transparent transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer rounded-md ${className ?? ''}`}
+        className={`flex items-center gap-1.5 px-2.5 h-9 min-w-0 max-w-full text-[13px] font-medium text-foreground bg-transparent transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer rounded-md ${className ?? ''}`}
         style={{
           border: `1px solid ${open ? 'color-mix(in oklab, var(--color-accent) 33%, transparent)' : 'var(--color-border)'}`,
           ...style,

@@ -10,7 +10,7 @@ import { TransportSelect } from './TransportSelect';
 import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
-import { VoicePickerSheet } from './VoicePickerSheet';
+import { SessionSheet } from './SessionSheet';
 import { PermissionBanner } from './PermissionBanner';
 import { StatusBadge } from './StatusBadge';
 import { useVoiceState } from './useVoiceState';
@@ -218,39 +218,58 @@ export const App = ({
           backgroundColor: 'var(--color-card)',
         }}
       >
-        {/* 1. Visualizer — fixed, flush left, sets header height */}
-        <BotVisualizer client={client} />
+        {/* 1. Visualizer — fixed, flush left. On mobile, doubles as MoreMenu trigger. */}
+        {isNarrow ? (
+          <MoreMenu trigger={<BotVisualizer client={client} />} />
+        ) : (
+          <BotVisualizer client={client} />
+        )}
 
-        {/* 2. Profile name (LLM picker) — flexes to fill, truncates */}
+        {/* 2. Session controls. Mobile: single Session button (sheet). Desktop: inline pickers. */}
         <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
-          <div className="hidden sm:block shrink-0">
-            <StatusBadge state={voiceState} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <LLMProfileSelect />
-          </div>
-          {/* Voice picker: combobox on tablet+, bottom sheet (icon-only) on mobile */}
-          <div className="shrink-0">
-            {isNarrow ? <VoicePickerSheet /> : <VoiceProfileSelect />}
-          </div>
-          {showTransportSelector && !isNarrow ? (
-            <TransportSelect
-              transportType={transportType}
-              onTransportChange={onTransportChange}
-              availableTransports={availableTransports}
-            />
-          ) : null}
+          {isNarrow ? (
+            <div className="min-w-0 flex-1">
+              <SessionSheet
+                currentLabel={
+                  activeProfile
+                    ? activeProfile.charAt(0).toUpperCase() + activeProfile.slice(1)
+                    : undefined
+                }
+              />
+            </div>
+          ) : (
+            <>
+              <div className="hidden sm:block shrink-0">
+                <StatusBadge state={voiceState} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <LLMProfileSelect />
+              </div>
+              <div className="shrink-0">
+                <VoiceProfileSelect />
+              </div>
+              {showTransportSelector ? (
+                <TransportSelect
+                  transportType={transportType}
+                  onTransportChange={onTransportChange}
+                  availableTransports={availableTransports}
+                />
+              ) : null}
+            </>
+          )}
         </div>
 
-        {/* 3-5. Right cluster — audio · connect · more */}
+        {/* 3-5. Right cluster — audio (desktop only) · connect · more */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          <UserAudioControl
-            size={isNarrow ? 'sm' : 'md'}
-            variant="ghost"
-            noVisualizer={isNarrow}
-          />
+          {!isNarrow && (
+            <UserAudioControl
+              size="md"
+              variant="ghost"
+              noVisualizer={false}
+            />
+          )}
           <ConnectButton
-            size={isNarrow ? 'sm' : 'md'}
+            size="md"
             onConnect={handleConnect}
             onDisconnect={wrappedDisconnect}
             stateContent={{
@@ -280,7 +299,7 @@ export const App = ({
               error: { children: 'Error', variant: 'destructive' },
             }}
           />
-          <MoreMenu showVoiceProfile={isNarrow} />
+          {!isNarrow && <MoreMenu />}
         </div>
       </header>
 
