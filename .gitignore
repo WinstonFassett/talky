@@ -258,3 +258,6 @@ scorecard.png
 
 .zig-cache
 zig-out/
+
+# Inspiration: external repos cloned for architectural reference. Not part of the project.
+inspiration/
