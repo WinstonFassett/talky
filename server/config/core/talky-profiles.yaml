@@ -16,10 +16,12 @@ talky_profiles:
     description: "Pi"
     llm_backend: "pi"
 
-  # Claude Code via Agent SDK
-  claude:
-    description: "Claude"
-    llm_backend: "claude-code"
+  # NOTE: bare `claude` is intentionally NOT defined here as a background SDK
+  # profile. The Agent SDK is billed as separate API usage on top of the
+  # Claude Code subscription. The defaults template binds `claude` to the
+  # foreground CLI instead (subscription billing) as an exception to the
+  # `<agent>` = background naming convention. A `claude-bg` SDK entry is
+  # provided commented-out in defaults for users who want to opt in.
 
   # Hermes agent (NousResearch) — background, thread bridge, mid-tool interrupt
   hermes:

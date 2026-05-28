@@ -56,8 +56,8 @@ talky __mcp__                  # shortcut
 
 Switching uses `ManuallySwitchServiceFrame` — the transport stays connected, only the active LLM changes. No new pipeline, no peer disconnect. The soft switch (3769fe4) works even before the pipeline is live — the profile is remembered and applied at pipeline build.
 
-**Do:** All agent shortcuts (`talky claude`, `talky pi`, `talky openclaw`) switch the daemon profile via `cmd_profile` → POST `/api/profile`. They are all the same operation.
-**Don't:** Create agent-specific CLI subcommands that do something different from profile-switching unless there is real unique behavior (e.g. `cmd_pi` execs into pi with the extension). Don't create a subcommand just to hardcode a profile name — remove it and let the shortcut handle it.
+**Do:** Background-mode shortcuts (`talky pi`, `talky openclaw`, `talky hermes`, `talky moltis`) switch the daemon profile via `cmd_profile` → POST `/api/profile`. They are all the same operation. Foreground shortcuts (`talky pi-tui`, `talky claude`) take a different path — `cmd_launch` execs into the agent's CLI with a voice extension loaded. `claude` is foreground despite its bare name; see "Agent integration modalities" below.
+**Don't:** Create agent-specific CLI subcommands that do something different from profile-switching or `cmd_launch`. Don't create a subcommand just to hardcode a profile name — let the shortcut handle it.
 
 Ports: 9090 is the only port. 7860 and 5173 are dead (ripped in 5098).
 
@@ -70,32 +70,32 @@ Ports: 9090 is the only port. 7860 and 5173 are dead (ripped in 5098).
 
 ## Agent integration modalities
 
-Talky supports two ways an agent (Claude, Pi, etc.) can participate in a voice session:
+Talky supports two ways an agent (Claude, Pi, etc.) can participate in a voice session. **Background is the default and the preferred mode** — the daemon owns the agent, the browser is the only UI, and the agent is fully interruptible. Foreground is the exception, used when you specifically want the agent's own terminal UI alongside Talky's.
 
-**Foreground (agent-first, default):** Talky launches the agent. The agent runs in its own window, loads its talky skill, and connects to the talky daemon as a participant. User sees both the agent UI and the talky browser UI. This is the preferred end-state.
+**Background (app-first, default):** Talky owns the agent as an embedded backend in its voice pipeline. No parallel agent UI. The browser drives the conversation. Profile names are bare: `talky pi`, `talky hermes`, `talky openclaw`. No `launcher:` block — just an `llm_backend:` reference. The shortcut hits `cmd_profile` → POST `/api/profile` and the daemon swaps LLMs without rebuilding the pipeline.
 
-**Background (app-first):** Talky owns the agent as an embedded subprocess/backend in its pipeline. No agent UI. Used for lightweight sessions where agent visibility isn't needed.
+**Foreground (agent-first, opt-in):** Talky `exec`s into the agent's own CLI with a voice extension loaded. The agent runs in its own terminal, loads its talky skill, and connects to the daemon as a `/ws/agent` participant. User sees both the agent UI and the talky browser UI. Profile names use the `-tui` suffix: `talky pi-tui`, `talky claude-tui`. The profile has a `launcher:` block describing the command and extension; the shortcut hits `cmd_launch`.
 
-```
-# Foreground
-talky claude              # default
-talky claude --foreground # -f, explicit
+Naming convention:
 
-# Background  
-talky claude --background # -b
-```
+| Profile name        | Mode        | What runs                                              |
+|---------------------|-------------|--------------------------------------------------------|
+| `<agent>`           | background  | Daemon owns the agent backend. Browser UI only.        |
+| `<agent>-tui`       | foreground  | Exec into agent's terminal with voice extension.       |
 
-Per-profile config in `~/.talky/talky-profiles.yaml`: `mode: foreground` or `mode: background`. Flags override config.
+There are no `--foreground` / `--background` flags. Mode is selected by which profile name you invoke.
+
+**Claude is the exception.** Bare `claude` is bound to the foreground Claude Code CLI, not the background Agent SDK. Reason: the SDK is billed as separate API usage on top of the Claude Code subscription, and we don't want surprise charges to be the default. The background SDK variant is defined-but-commented as `claude-bg` in the defaults template; uncomment to opt in.
 
 ### Config layer relationships
 
 ```
 voice-profiles.yaml      → TTS provider + STT provider + voice settings
-talky-profiles.yaml      → llm_backend reference + mode (fg/bg)
+talky-profiles.yaml      → llm_backend reference + optional launcher (fg only)
 llm-backends.yaml        → service_class + extra (pyproject dep) + config
 ```
 
-A talky profile joins one row from each layer. `talky claude` resolves: talky-profile `claude` → llm_backend `claude-code` → `ClaudeCodeLLMService` + `claude-code` extra.
+A talky profile joins one row from each layer. Example: `talky pi` resolves talky-profile `pi` → llm_backend `pi` → `PiRPCLLMService`. `talky claude` resolves talky-profile `claude` → llm_backend `agent-ext` → `AgentExtensionLLMService`, and the launcher block tells `cmd_launch` to exec `claude` with the voice-conversation prompt.
 
 ## Dependencies
 

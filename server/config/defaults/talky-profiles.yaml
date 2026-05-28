@@ -1,10 +1,16 @@
 # Talky Profiles Template - Copied to ~/.talky/ for new users
 # Extends the core profiles in server/config/core/talky-profiles.yaml
 #
-# Profiles with a `launcher:` block are foreground: `talky <profile>` execs
-# into the agent's CLI binary with the voice extension loaded. Profiles
-# without a launcher block are background / remote: `talky <profile>` just
-# switches the daemon's active LLM (the browser drives the conversation).
+# Naming convention:
+#   <agent>       — default: background RPC / thread bridge. Interruptible,
+#                   no terminal UI, browser drives the conversation.
+#   <agent>-tui   — foreground: exec into the agent's terminal UI with the
+#                   voice extension loaded. Browser still hosts audio.
+#
+# Profiles with a `launcher:` block are foreground. Profiles without are
+# background — `talky <profile>` just switches the daemon's active LLM.
+#
+# Browser autoconnect is on by default. To suppress: `autoconnect_browser: false`.
 
 talky_profiles:
 
@@ -15,33 +21,45 @@ talky_profiles:
     description: "Moltis"
     llm_backend: "moltis"
 
-  # Pi — foreground (exec into Pi terminal with voice extension)
+  hermes:
+    description: "Hermes"
+    llm_backend: "hermes"
+
+  # Pi — default: background RPC mode (interruptible, no terminal)
   pi:
     description: "Pi"
+    llm_backend: "pi"
+
+  # Pi — foreground: exec into Pi terminal with voice extension
+  pi-tui:
+    description: "Pi (terminal UI with voice extension)"
     llm_backend: "agent-ext"
     launcher:
       mode: foreground
       command: ["pi"]
       extension_arg: "-e"
       extension: "{project_root}/extensions/pi-voice/extension.ts"
-      autoconnect_browser: true
 
-  # Pi — background RPC mode (no terminal, interruptible)
-  pi-bg:
-    description: "Pi (background)"
-    llm_backend: "pi"
-
-  # Claude — foreground (Claude Code TUI, talky skill auto-installed, voice convo auto-started)
+  # Claude — EXCEPTION to the naming convention.
+  # Normally `<agent>` is background and `<agent>-tui` is foreground, but for
+  # Claude the background path uses the Anthropic Agent SDK, which is billed
+  # as separate API usage on top of the Claude Code subscription. To avoid
+  # surprise charges, bare `talky claude` runs the foreground Claude Code CLI
+  # (subscription billing) and tells it to start a voice conversation.
+  # Talky skill auto-installed.
   claude:
-    description: "Claude"
+    description: "Claude Code — launches the CLI and starts a voice conversation"
     llm_backend: "agent-ext"
     launcher:
       mode: foreground
       command: ["claude"]
       prompt: "I want to have a voice conversation"
-      autoconnect_browser: true
 
-  # Claude — background (daemon-side Agent SDK thread bridge, no terminal)
-  claude-bg:
-    description: "Claude (background)"
-    llm_backend: "claude-code"
+  # Claude — background via Agent SDK (the "usual" default shape).
+  # DISABLED by default: billed as separate API usage on top of the
+  # subscription. Uncomment if you want the background/interruptible variant
+  # and accept the extra charges. If you do, you may want to rename the
+  # foreground entry above to `claude-tui` to restore the standard convention.
+  # claude-bg:
+  #   description: "Claude (background, Agent SDK — extra API charges)"
+  #   llm_backend: "claude-code"

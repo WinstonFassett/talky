@@ -1029,7 +1029,7 @@ def cmd_launch(args):
     if not ensure_daemon():
         sys.exit(1)
 
-    if launcher.get("autoconnect_browser", False):
+    if launcher.get("autoconnect_browser", True):
         host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
         port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
         client_url = f"http://{host}:{port}?autoconnect=true"
