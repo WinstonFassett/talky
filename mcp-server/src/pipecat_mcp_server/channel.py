@@ -217,6 +217,10 @@ class VoiceChannel:
         self._runner: Optional[PipelineRunner] = None
         self._runner_task: Optional[asyncio.Task] = None
         self._voice_switcher: Optional[Any] = None  # VoiceProfileSwitcher
+        # Pre-connect voice selection. When the user picks a voice profile
+        # before a pipeline exists, we remember it here and apply it on the
+        # next build. Mirrors the LLM soft-switch in switch_to_profile().
+        self._pending_voice_profile: Optional[str] = None
 
         # LLM switcher + profile → service map (populated by attach()).
         self._llm_switcher: Optional[Any] = None  # LLMSwitcher
@@ -634,11 +638,10 @@ class VoiceChannel:
 
         try:
             pm = get_profile_manager()
-            current = (
-                self._voice_switcher.get_current_profile()
-                if self._voice_switcher
-                else pm.get_default_voice_profile() or None
-            )
+            if self._voice_switcher:
+                current = self._voice_switcher.current_profile
+            else:
+                current = self._pending_voice_profile or pm.get_default_voice_profile() or None
             out = []
             for name, _desc in pm.list_voice_profiles().items():
                 p = pm.get_voice_profile(name)
@@ -671,12 +674,13 @@ class VoiceChannel:
     async def switch_voice(self, profile_name: str) -> None:
         """Switch the active voice profile.
 
-        Delegates to the VoiceProfileSwitcher. Requires a live pipeline.
-        Raises ``RuntimeError`` if no pipeline, ``ValueError`` if unknown.
-        """
-        if not self.is_live() or self._voice_switcher is None:
-            raise RuntimeError("no live pipeline — connect a browser first")
+        If a pipeline is live, delegates to the VoiceProfileSwitcher.
+        If no pipeline exists yet, stores the choice on the channel and
+        the next pipeline build will boot directly into it. Mirrors the
+        LLM soft-switch in ``switch_to_profile``.
 
+        Raises ``ValueError`` if the profile is unknown.
+        """
         from shared.profile_manager import get_profile_manager
 
         pm = get_profile_manager()
@@ -685,6 +689,16 @@ class VoiceChannel:
             raise ValueError(
                 f"unknown voice profile {profile_name!r}"
             )
+
+        if not self.is_live() or self._voice_switcher is None:
+            self._pending_voice_profile = profile_name
+            logger.info(
+                f"VoiceChannel: voice profile {profile_name!r} stored as desired "
+                "(no live pipeline — will apply on next browser connect)"
+            )
+            from pipecat_mcp_server.event_bus import event_bus
+            await event_bus.emit("voiceChanged", {"profile": profile_name})
+            return
 
         current = pm.get_voice_profile(self._voice_switcher.current_profile)
         if current is None:
@@ -985,21 +999,6 @@ class VoiceChannel:
             # call in its own attach() path and not race with us.
             self._schedule_ttl_if_empty()
 
-    async def _restore_profile_on_startup(self, profile_name: str) -> None:
-        """Switch the active LLM to ``profile_name`` shortly after a
-        pipeline starts, used to restore the room's last active profile
-        across a disconnect/reconnect cycle. Best-effort — logs and
-        swallows errors (no-op if pipeline isn't live by the time the
-        task runs).
-        """
-        # Small delay to let the runner get past initial StartFrame
-        # propagation before we queue a switch frame.
-        await asyncio.sleep(0.1)
-        try:
-            await self.switch_to_profile(profile_name)
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"VoiceChannel: could not restore profile {profile_name!r}: {e}")
-
     async def _teardown_locked(self, preserve_active_profile: bool = False) -> None:
         """Cancel the pipeline task. Caller must hold ``_attach_lock``.
 
@@ -1172,10 +1171,21 @@ class VoiceChannel:
         t0 = time.monotonic()
 
         pm = get_profile_manager()
-        profile_name = pm.get_default_voice_profile()
+        # Honor a pre-connect voice selection if set, else use default.
+        profile_name = self._pending_voice_profile or pm.get_default_voice_profile()
         vp = pm.get_voice_profile(profile_name)
         if vp is None:
-            raise RuntimeError(f"Voice profile '{profile_name}' disappeared")
+            if self._pending_voice_profile:
+                logger.warning(
+                    f"Pending voice profile {profile_name!r} disappeared — falling back to default"
+                )
+                self._pending_voice_profile = None
+                profile_name = pm.get_default_voice_profile()
+                vp = pm.get_voice_profile(profile_name)
+            if vp is None:
+                raise RuntimeError(f"Voice profile '{profile_name}' disappeared")
+        # Consume the pending selection — it's now the active one.
+        self._pending_voice_profile = None
 
         # STT, fresh per pipeline (modules are already loaded).
         stt = create_stt_service_from_config(vp.stt_provider, model=vp.stt_model)
@@ -1353,7 +1363,16 @@ class VoiceChannel:
         _tp = pm.get_talky_profile(desired_profile) if desired_profile else None
         resolved_profile = (_tp.llm_backend if _tp and _tp.llm_backend else None) or desired_profile
         if desired_profile != self.MCP_DRIVER_PROFILE and resolved_profile in profile_map:
-            asyncio.create_task(self._restore_profile_on_startup(desired_profile))
+            # Wait for the pipeline's StartFrame to propagate through every
+            # processor before queuing the profile switch + announcement.
+            # Pipecat's on_pipeline_started fires exactly when the pipeline
+            # is ready to flow frames — no magic sleep needed.
+            @pipeline_task.event_handler("on_pipeline_started")
+            async def _restore_on_started(_task, _frame):  # noqa: ARG001
+                try:
+                    await self.switch_to_profile(desired_profile)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"VoiceChannel: could not restore profile {desired_profile!r}: {e}")
 
         # Add a done callback so a crashed runner flips us back to "not live"
         # cleanly, instead of leaving stale refs.

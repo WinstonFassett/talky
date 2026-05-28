@@ -55,9 +55,15 @@ class VoiceProfileSwitcher:
             self._cleanup_registered = True
     
     def _bootstrap_tts_services(self) -> Dict[str, any]:
-        """Create TTS services for all providers that have profiles AND valid credentials."""
+        """Create TTS services for all providers that have profiles AND valid credentials.
+
+        For the *initial* profile's provider, the service is constructed with
+        the initial profile's voice — so the pipeline boots speaking the right
+        voice. Other providers bootstrap with whatever voice is found first;
+        they only matter once the user switches into them.
+        """
         tts_services = {}
-        
+
         # Get all unique TTS providers from voice profiles
         all_profiles = self.pm.list_voice_profiles()
         unique_providers = set()
@@ -65,18 +71,27 @@ class VoiceProfileSwitcher:
             profile = self.pm.get_voice_profile(profile_name)
             if profile:
                 unique_providers.add(profile.tts_provider)
-        
+
+        initial_profile_obj = self.pm.get_voice_profile(self.current_profile)
+        initial_provider = initial_profile_obj.tts_provider if initial_profile_obj else None
+
         # Try to create TTS services for all providers
         for provider in unique_providers:
             try:
-                # Get a profile for this provider to get default voice
-                provider_profile = None
-                for profile_name in all_profiles:
-                    profile = self.pm.get_voice_profile(profile_name)
-                    if profile and profile.tts_provider == provider:
-                        provider_profile = profile
-                        break
-                
+                # Pick the voice this provider's service starts speaking. For
+                # the initial profile's provider, use the initial profile's
+                # voice; otherwise fall back to the first profile that uses
+                # this provider.
+                if provider == initial_provider and initial_profile_obj:
+                    provider_profile = initial_profile_obj
+                else:
+                    provider_profile = None
+                    for profile_name in all_profiles:
+                        profile = self.pm.get_voice_profile(profile_name)
+                        if profile and profile.tts_provider == provider:
+                            provider_profile = profile
+                            break
+
                 if provider_profile:
                     service = create_tts_service_from_config(
                         provider,
