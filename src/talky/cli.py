@@ -27,8 +27,41 @@ _DAEMON_SSL_CTX: ssl.SSLContext | None = None
 
 def _daemon_host_port() -> tuple[str, int]:
     host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
-    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
+    # Default primary port matches the daemon's default (HTTPS on 19443).
+    # Read settings.yaml network.https_port / network.port if no env override.
+    raw_port = os.environ.get("TALKY_DAEMON_PORT") or os.environ.get("TALKY_PORT")
+    if raw_port is None:
+        try:
+            from talky.shared.profile_manager import get_profile_manager
+            settings = get_profile_manager().settings or {}
+            net = (settings.get("network") or {}) if isinstance(settings, dict) else {}
+            p = net.get("https_port") or net.get("port")
+            if p is not None:
+                raw_port = str(p)
+        except Exception:
+            raw_port = None
+    if raw_port is None:
+        raw_port = "19443"
+    port = int(raw_port)
     return host, port
+
+
+def _daemon_http_port() -> int:
+    """Plain-HTTP loopback port (default 19080)."""
+    raw = os.environ.get("TALKY_HTTP_PORT")
+    if raw is None:
+        try:
+            from talky.shared.profile_manager import get_profile_manager
+            settings = get_profile_manager().settings or {}
+            net = (settings.get("network") or {}) if isinstance(settings, dict) else {}
+            p = net.get("http_port")
+            if p is not None:
+                raw = str(p)
+        except Exception:
+            raw = None
+    if raw is None:
+        raw = "19080"
+    return int(raw)
 
 
 def _unverified_ssl_ctx() -> ssl.SSLContext:
@@ -42,27 +75,31 @@ def _unverified_ssl_ctx() -> ssl.SSLContext:
 
 
 def daemon_base_url() -> str:
-    """Probe the daemon scheme once per process. Returns 'https://h:p' or 'http://h:p'.
+    """Probe the daemon scheme + port once per process.
 
-    The daemon may run with SSL (default since d95d310) or plain HTTP. Probe
-    HTTPS first; fall back to HTTP on TLS/connection error. Caches the result.
+    Tries HTTPS on the primary port first, then plain HTTP on the loopback
+    port (default 19080). Caches the result for the rest of the process.
     """
     global _DAEMON_BASE_URL_CACHE
     if _DAEMON_BASE_URL_CACHE is not None:
         return _DAEMON_BASE_URL_CACHE
-    host, port = _daemon_host_port()
-    for scheme in ("https", "http"):
-        url = f"{scheme}://{host}:{port}/api/profiles"
+    host, primary_port = _daemon_host_port()
+    http_port = _daemon_http_port()
+    candidates = [
+        ("https", host, primary_port),
+        ("http", "localhost", http_port),
+    ]
+    for scheme, h, p in candidates:
+        url = f"{scheme}://{h}:{p}/api/profiles"
         try:
             ctx = _unverified_ssl_ctx() if scheme == "https" else None
             with urllib.request.urlopen(url, timeout=2, context=ctx):
-                _DAEMON_BASE_URL_CACHE = f"{scheme}://{host}:{port}"
+                _DAEMON_BASE_URL_CACHE = f"{scheme}://{h}:{p}"
                 return _DAEMON_BASE_URL_CACHE
         except (urllib.error.URLError, ssl.SSLError, ConnectionError, OSError):
             continue
-    # Daemon unreachable; return https default so callers get a clear error
-    # via their own urlopen attempt.
-    _DAEMON_BASE_URL_CACHE = f"https://{host}:{port}"
+    # Daemon unreachable; return https primary so callers get a clear error.
+    _DAEMON_BASE_URL_CACHE = f"https://{host}:{primary_port}"
     return _DAEMON_BASE_URL_CACHE
 
 
@@ -236,21 +273,36 @@ def cmd_ask(args):
 
 
 def cmd_kill(args):
-    """Handle the 'kill' subcommand — stop the talky daemon on :9090.
+    """Handle the 'kill' subcommand — stop the talky daemon on both listeners.
 
-    The voice daemon (unix socket) is intentionally left alone — its
-    lifecycle is separate. Use `talky say --stop-daemon` to bounce that one.
+    Kills the process listening on the primary (HTTPS) port and the secondary
+    (HTTP loopback) port. The voice daemon (unix socket) is intentionally left
+    alone — its lifecycle is separate. Use `talky say --stop-daemon` to bounce
+    that one.
     """
-    any_killed = _kill_pids_on_port(9090)
+    _, primary_port = _daemon_host_port()
+    http_port = _daemon_http_port()
+    ports = [primary_port, http_port] if http_port != primary_port else [primary_port]
+
+    any_killed = False
+    for port in ports:
+        if _kill_pids_on_port(port):
+            any_killed = True
+        else:
+            print(f"port {port}: clear")
+
     _clear_daemon_files()
-    if not any_killed:
-        print("port 9090: clear")
 
     # Verify nothing snuck back in.
     time.sleep(0.3)
-    result = subprocess.run(["lsof", "-ti", ":9090", "-sTCP:LISTEN"], capture_output=True, text=True)
-    if result.returncode == 0 and result.stdout.strip():
-        print("port 9090: STILL HELD after kill -9", file=sys.stderr)
+    held = []
+    for port in ports:
+        result = subprocess.run(["lsof", "-ti", f":{port}", "-sTCP:LISTEN"], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            held.append(port)
+    if held:
+        for port in held:
+            print(f"port {port}: STILL HELD after kill -9", file=sys.stderr)
         return 1
 
     if not any_killed:
@@ -400,7 +452,8 @@ def cmd_profile(args):
                 marker = "*" if p == data.get("active") else " "
                 print(f"  {marker} {p}")
         else:
-            print("no profiles available — connect a browser to localhost:9090 first")
+            _, _port = _daemon_host_port()
+            print(f"no profiles available — connect a browser to localhost:{_port} first")
         return
 
     resume_id = getattr(args, "resume", None)
@@ -637,7 +690,8 @@ def cmd_daemon(args):
             print(f"⚠️  talky kill failed: {e}", file=sys.stderr)
 
     if talky_daemon_is_running():
-        print("✅ talky daemon already running on :9090")
+        _, _port = _daemon_host_port()
+        print(f"✅ talky daemon already running on :{_port}")
         return
 
     if not ensure_daemon(verbose=True):
@@ -732,7 +786,8 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
         while time.monotonic() < deadline:
             if talky_daemon_is_running():
                 if verbose:
-                    print(f"\n✅ talky daemon up on :9090", file=sys.stderr)
+                    _, _port = _daemon_host_port()
+                    print(f"\n✅ talky daemon up on :{_port}", file=sys.stderr)
                 return True
             # Check if the spawned process died before becoming ready.
             try:
@@ -967,8 +1022,9 @@ def _ensure_claude_mcp_connected() -> None:
         result = _sp.run(["claude", "mcp", "list"], capture_output=True, text=True, timeout=10)
         if "talky" in result.stdout or "pipecat-mcp-server" in result.stdout:
             return
+        http_port = _daemon_http_port()
         _sp.run(
-            ["claude", "mcp", "add", "--transport", "http", "talky", "http://localhost:9090/mcp"],
+            ["claude", "mcp", "add", "--transport", "http", "talky", f"http://localhost:{http_port}/mcp"],
             capture_output=True, timeout=30,
         )
     except Exception as e:

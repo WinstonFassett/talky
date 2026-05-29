@@ -29,13 +29,20 @@ class DaemonManager:
 
     async def ensure_running(self, config: Dict[str, Any]) -> bool:
         """Ensure the talky daemon is running. Returns True if available."""
+        from talky.shared.profile_manager import get_profile_manager
         try:
-            result = subprocess.run(["lsof", "-ti:9090"], capture_output=True, text=True)
+            net = ((get_profile_manager().settings or {}).get("network") or {})
+            port = int(net.get("https_port") or net.get("port") or 19443)
+        except Exception:
+            port = 19443
+        port_arg = f"-ti:{port}"
+        try:
+            result = subprocess.run(["lsof", port_arg], capture_output=True, text=True)
             if result.stdout.strip():
-                logger.info("talky daemon already running on :9090")
+                logger.info(f"talky daemon already running on :{port}")
                 return True
         except (FileNotFoundError, subprocess.SubprocessError) as e:
-            logger.debug(f"Could not check port 9090: {e}")
+            logger.debug(f"Could not check port {port}: {e}")
 
         logger.info("Starting talky daemon in background...")
         daemon_args = ["talky", "daemon"]
@@ -53,7 +60,7 @@ class DaemonManager:
         time.sleep(1)
 
         try:
-            result = subprocess.run(["lsof", "-ti:9090"], capture_output=True, text=True)
+            result = subprocess.run(["lsof", port_arg], capture_output=True, text=True)
             if result.stdout.strip():
                 logger.info("talky daemon started successfully")
                 return True

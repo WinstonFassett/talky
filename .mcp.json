@@ -1,7 +1,8 @@
 {
   "mcpServers": {
     "talky": {
-      "url": "http://localhost:9090/mcp"
+      "type": "http",
+      "url": "http://localhost:19080/mcp"
     }
   }
 }

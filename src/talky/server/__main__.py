@@ -89,9 +89,36 @@ def _resolve_network_config() -> tuple[str, Optional[str], Optional[str]]:
     return host, cert, key
 
 
+def _resolve_http_port() -> int:
+    """Plain-HTTP loopback port for MCP clients that don't speak self-signed HTTPS.
+
+    TALKY_HTTP_PORT env → settings.yaml network.http_port → 19080.
+    """
+    raw = os.getenv("TALKY_HTTP_PORT")
+    if raw is None:
+        try:
+            from talky.shared.profile_manager import get_profile_manager
+            settings = get_profile_manager().settings or {}
+            net = (settings.get("network") or {}) if isinstance(settings, dict) else {}
+            p = net.get("http_port")
+            if p is not None:
+                raw = str(p)
+        except Exception:
+            raw = None
+    if raw is None:
+        raw = "19080"
+    try:
+        return int(raw)
+    except ValueError:
+        logger.error(f"Invalid http_port '{raw}': not a valid integer")
+        sys.exit(1)
+
+
 mcp_host, _resolved_cert, _resolved_key = _resolve_network_config()
 
-# Port resolution: TALKY_PORT env → settings.yaml network.port → 9090
+# Primary (HTTPS-or-HTTP) port resolution.
+# Precedence: TALKY_PORT / MCP_PORT env → settings.yaml network.https_port
+#             → settings.yaml network.port (legacy) → 19443.
 def _resolve_port() -> int:
     raw = _env_with_deprecated("TALKY_PORT", "MCP_PORT")
     if raw is None:
@@ -99,13 +126,15 @@ def _resolve_port() -> int:
             from talky.shared.profile_manager import get_profile_manager
             settings = get_profile_manager().settings or {}
             net = (settings.get("network") or {}) if isinstance(settings, dict) else {}
-            p = net.get("port")
+            p = net.get("https_port")
+            if p is None:
+                p = net.get("port")  # legacy key
             if p is not None:
                 raw = str(p)
         except Exception:
             raw = None
     if raw is None:
-        raw = "9090"
+        raw = "19443"
     try:
         port = int(raw)
         if not (1 <= port <= 65535):
@@ -495,18 +524,23 @@ def _check_ports_or_exit():
         # Stale ready file — clean it up.
         DAEMON_READY_PATH.unlink(missing_ok=True)
 
-    # Fallback: check if something is actually LISTENING on the port.
+    # Fallback: check if something is actually LISTENING on either listener port.
+    ports_to_check = [mcp_port]
+    if _resolved_cert and _resolved_key:
+        ports_to_check.append(_resolve_http_port())
     if holder_pid is None:
-        try:
-            result = subprocess.run(
-                ["lsof", "-ti", f":{mcp_port}", "-sTCP:LISTEN"],
-                capture_output=True, text=True, timeout=2.0,
-            )
-            pids = result.stdout.strip()
-            if pids:
-                holder_pid = int(pids.split("\n")[0].strip())
-        except (FileNotFoundError, subprocess.SubprocessError, ValueError):
-            pass
+        for port in ports_to_check:
+            try:
+                result = subprocess.run(
+                    ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
+                    capture_output=True, text=True, timeout=2.0,
+                )
+                pids = result.stdout.strip()
+                if pids:
+                    holder_pid = int(pids.split("\n")[0].strip())
+                    break
+            except (FileNotFoundError, subprocess.SubprocessError, ValueError):
+                pass
 
     if holder_pid is None:
         return
@@ -1130,22 +1164,54 @@ def main():
 
     ssl_certfile = _resolved_cert
     ssl_keyfile = _resolved_key
+    ssl_enabled = bool(ssl_certfile and ssl_keyfile)
 
-    uvicorn_kwargs = {
+    primary_kwargs = {
         "host": mcp_host,
         "port": mcp_port,
         "log_level": "info",
     }
+    if ssl_enabled:
+        primary_kwargs["ssl_certfile"] = ssl_certfile
+        primary_kwargs["ssl_keyfile"] = ssl_keyfile
+        logger.info(f"SSL enabled on :{mcp_port} (cert={ssl_certfile})")
 
-    if ssl_certfile and ssl_keyfile:
-        uvicorn_kwargs["ssl_certfile"] = ssl_certfile
-        uvicorn_kwargs["ssl_keyfile"] = ssl_keyfile
-        logger.info(f"SSL enabled: cert={ssl_certfile}")
+    scheme = "https" if ssl_enabled else "http"
+    logger.info(f"Primary listener: {scheme}://{mcp_host}:{mcp_port}")
 
-    logger.info(f"Starting unified server on {mcp_host}:{mcp_port} (in-process voice)")
+    # When SSL is on, also bind plain HTTP loopback-only so MCP clients that
+    # don't speak self-signed HTTPS can connect. Default port 19080, override
+    # via TALKY_HTTP_PORT or settings.yaml network.http_port.
+    http_port = _resolve_http_port() if ssl_enabled else None
 
     try:
-        uvicorn.run(app, **uvicorn_kwargs)
+        if http_port is not None:
+            secondary_kwargs = {
+                "host": "127.0.0.1",
+                "port": http_port,
+                "log_level": "info",
+                # Skip lifespan on the secondary — the MCP session manager
+                # refuses to .run() twice on the same FastAPI app instance.
+                # Primary owns the lifespan; the secondary just reuses
+                # the already-mounted routes.
+                "lifespan": "off",
+            }
+            logger.info(f"Secondary listener: http://127.0.0.1:{http_port} (loopback only)")
+            import asyncio as _asyncio
+            servers = [
+                uvicorn.Server(uvicorn.Config(app, **primary_kwargs)),
+                uvicorn.Server(uvicorn.Config(app, **secondary_kwargs)),
+            ]
+            # Disable signal handling on the secondary so the primary handles
+            # SIGTERM/SIGINT for the whole process.
+            servers[1].install_signal_handlers = lambda: None  # type: ignore[method-assign]
+
+            async def _run_both():
+                await _asyncio.gather(*(s.serve() for s in servers))
+
+            _asyncio.run(_run_both())
+        else:
+            uvicorn.run(app, **primary_kwargs)
     except KeyboardInterrupt:
         logger.info("Ctrl-C detected, exiting!")
     # No finally cleanup needed — the lifespan handles it inside uvicorn's
