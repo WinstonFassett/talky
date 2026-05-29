@@ -58,14 +58,10 @@ import sys
 import time
 from typing import Any, Optional
 
-# Add project root to path so we can import server.* / shared.* modules.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from loguru import logger
 
 logger.remove()
 logger.add(sys.stderr, level="INFO")
-
 
 # ─── MCPDriverLLMService ─────────────────────────────────────────────────────
 
@@ -145,7 +141,6 @@ class MCPDriverLLMService(LLMService):
             "timestamp": time.time(),
         })
 
-
 # ─── Spike state ─────────────────────────────────────────────────────────────
 
 _speech_queue: asyncio.Queue = asyncio.Queue()
@@ -156,9 +151,7 @@ _second_mcp_driver: Optional[MCPDriverLLMService] = None
 _current_pipeline_task = None
 _llm_switcher = None
 
-
 # ─── Pipeline builder ────────────────────────────────────────────────────────
-
 
 async def run_bot_with_switcher(connection) -> None:
     """Build and run the pipeline with an LLMSwitcher containing the MCP driver
@@ -185,9 +178,9 @@ async def run_bot_with_switcher(connection) -> None:
     )
     from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
-    from shared.profile_manager import get_profile_manager
-    from shared.service_factory import create_stt_service_from_config
-    from server.features.voice_switcher import VoiceProfileSwitcher
+    from talky.server.voice_switcher import VoiceProfileSwitcher
+    from talky.shared.profile_manager import get_profile_manager
+    from talky.shared.service_factory import create_stt_service_from_config
 
     t0 = time.monotonic()
 
@@ -289,23 +282,20 @@ async def run_bot_with_switcher(connection) -> None:
     await runner.run(task)
     logger.info("spike: runner finished")
 
-
 # ─── HTTP control endpoints ──────────────────────────────────────────────────
 
-
 def build_app():
-    from starlette.applications import Starlette
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse
-    from starlette.routing import Mount, Route
-    from starlette.staticfiles import StaticFiles
-
     from pipecat.transports.smallwebrtc.request_handler import (
         IceCandidate,
         SmallWebRTCPatchRequest,
         SmallWebRTCRequest,
         SmallWebRTCRequestHandler,
     )
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
+    from starlette.staticfiles import StaticFiles
 
     webrtc_handler = SmallWebRTCRequestHandler()
     active_sessions: dict = {}
@@ -435,7 +425,6 @@ def build_app():
             t.cancel()
 
     return Starlette(routes=routes, lifespan=lifespan)
-
 
 if __name__ == "__main__":
     import uvicorn

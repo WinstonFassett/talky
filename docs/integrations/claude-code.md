@@ -247,6 +247,6 @@ talky kill
 ## Related Documentation
 
 - [Talky Architecture](../architecture.md)
-- [MCP Server Documentation](../mcp-server.md)
+- [MCP Server Documentation](../mcp.md)
 - [Pi Integration](./pi.md)
 - [Voice Configuration](../voice-configuration.md)

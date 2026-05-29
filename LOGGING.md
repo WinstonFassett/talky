@@ -103,7 +103,7 @@ talky openclaw                   # Uses setup_essential_logging
 
 #### Current Implementation
 ```python
-# In mcp-server/src/pipecat_mcp_server/server.py
+# In src/talky/server/__main__.py
 logger.remove()
 logger.add(sys.stderr, level="INFO")
 ```
@@ -191,7 +191,7 @@ PIPECAT_LOG_LEVEL=DEBUG talky moltis
 ```bash
 # MCP server has hardcoded INFO level
 # Need to check server logs directly
-pipecat-mcp-server
+talky daemon
 
 # Look for:
 # - Tool registration
@@ -297,7 +297,7 @@ logger.info(f"Operation completed in {time.time() - start:.2f}s")
 # Workaround: Check source code for debug prints
 # Or modify the source temporarily
 
-# In mcp-server/src/pipecat_mcp_server/server.py
+# In src/talky/server/__main__.py
 # Change: logger.add(sys.stderr, level="INFO")
 # To: logger.add(sys.stderr, level="DEBUG")
 ```
@@ -384,7 +384,7 @@ talky --minimal openclaw                  # Same as --log-level ERROR
 TALKY_LOG_LEVEL=DEBUG talky openclaw
 
 # Check MCP server status
-pipecat-mcp-server
+talky daemon
 
 # Filter for specific issues
 TALKY_LOG_LEVEL=DEBUG talky moltis 2>&1 | grep -i error

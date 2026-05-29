@@ -23,16 +23,16 @@ One unified daemon. There is no legacy standalone bot anymore (ripped in 5098).
 Pipeline shape: `Mic → VAD → STT → LLMSwitcher → TTS → Speaker`. The switcher routes frames to whichever LLM is active. `MCPDriverLLMService` consumes `LLMContextFrame` by pushing the latest user message onto the daemon's speech queue (read by `convo_listen`) and passes injected `LLMTextFrame`s through to TTS. Real LLMs (openclaw, moltis, hermes, etc.) run inference against their own remote sessions.
 
 - `server/` — voice daemon (local audio `talky say` / `talky ask`), LLM backends, transcribe, voice client
-- `mcp-server/` — talky daemon entry point, in-process voice channel (`channel.py`), FastMCP tools, embedded WebRTC handler, profile switching
+- `src/talky/server/` — talky daemon entry point, in-process voice channel (`channel.py`), FastMCP tools, embedded WebRTC handler, profile switching
 - `skills/talky/` — agent skill for voice prompt mode + voice conversation
 
 Config: `~/.talky/*.yaml` + `credentials/*.json`. No .env.
 
-LLM backends in `server/backends/` extend Pipecat's `LLMService`.
+LLM backends in `src/talky/backends/` extend Pipecat's `LLMService`.
 
 ### Voice daemon (local audio)
 
-`server/voice_daemon.py` — always-on daemon for local audio TTS+STT. Auto-starts on first `talky say` or `talky ask`. Communicates via unix socket at `/tmp/talky_voice_daemon.sock`. Separate from the talky daemon (two daemons, 9d02 unification deferred).
+`src/talky/local_audio/daemon.py` — always-on daemon for local audio TTS+STT. Auto-starts on first `talky say` or `talky ask`. Communicates via unix socket at `/tmp/talky_voice_daemon.sock`. Separate from the talky daemon (two daemons, 9d02 unification deferred).
 
 ### Talky daemon
 
@@ -101,7 +101,7 @@ A talky profile joins one row from each layer. Example: `talky pi` resolves talk
 
 Users should never have to install deps they don't need. The project handles this automatically:
 
-- **TTS/STT providers** — installed at daemon/CLI startup via `shared/dependency_installer.py`, which reads voice profiles to discover what's in use.
+- **TTS/STT providers** — installed at daemon/CLI startup via `src/talky/shared/dependency_installer.py`, which reads voice profiles to discover what's in use.
 - **LLM backends** — installed on-demand at profile switch time. If a backend needs a third-party SDK, declare `extra: <name>` in `llm-backends.yaml` and add the packages under that extra name in `pyproject.toml`. `switch_to_profile` in `channel.py` calls `install_extra_no_reexec()` automatically. Because the daemon can't re-exec mid-run, installed packages take effect after `talky kill && talky daemon`.
 
 Never add LLM backend deps to top-level `pyproject.toml` `dependencies` — that forces every user to pay for them. Never manually install them with `--with` or `uv pip install` either — that bypasses the on-demand system and will be lost on the next tool reinstall.

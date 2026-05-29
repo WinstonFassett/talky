@@ -59,8 +59,8 @@ MCP uses a tool-based protocol pattern:
 
 ### MCP Server Setup
 ```bash
-cd mcp-server && uv tool install -e .
-pipecat-mcp-server  # runs on localhost:9090
+uv tool install -e .
+talky daemon  # runs on localhost:9090
 ```
 
 ### MCP Client Configuration
@@ -77,7 +77,7 @@ Configuration varies by MCP client. Example for HTTP-based clients:
 }
 ```
 
-Run `pipecat-mcp-server` first, then restart your MCP client application.
+Run `talky daemon` first, then restart your MCP client application.
 
 ### Environment Variables
 - `MCP_SERVER_HOST`: Override server host (default: localhost)
@@ -284,7 +284,7 @@ while True:
 ### Debug Logging
 Enable debug logging for troubleshooting:
 ```bash
-PIPECAT_LOG_LEVEL=DEBUG pipecat-mcp-server
+PIPECAT_LOG_LEVEL=DEBUG talky daemon
 ```
 
 Monitor logs for:

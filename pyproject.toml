@@ -1,7 +1,7 @@
 [project]
-name = "talky-workspace"
+name = "talky"
 version = "0.1.0"
-description = "Talky voice AI workspace"
+description = "Talky voice AI"
 license = "MIT"
 requires-python = ">=3.10,<3.13"
 dependencies = [
@@ -9,16 +9,25 @@ dependencies = [
     "rich>=13.0.0",
     "loguru>=0.7.3",
     "pipecat-ai[runner,silero,webrtc]==0.0.102",
-    "pipecat-ai-mcp-server",
+    "fastmcp>=2.0.0",
+    "fastapi",
+    "uvicorn",
+    "mcp>=1.0.0",
+    "httpx>=0.28.0,<1",
+    "python-dotenv>=1.0.0,<2",
+    "requests>=2.32.5,<3",
     "InquirerPy>=0.3.4",
     "tomli>=2.0.0; python_version < '3.11'",
+    # Default voice stack bundled with the server (kokoro TTS, whisper STT on darwin)
+    "kokoro-onnx>=0.5.0,<1",
+    "pipecat-ai[cartesia,deepgram,google,local-smart-turn-v3,rnnoise,websocket]==0.0.102",
+    "pipecat-ai[mlx-whisper]==0.0.102; sys_platform == 'darwin'",
+    "pipecat-ai[whisper]==0.0.102; sys_platform != 'darwin'",
+    "pyobjc-framework-CoreMedia>=11.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=11.0; sys_platform == 'darwin'",
+    "pyobjc-framework-ScreenCaptureKit>=11.0; sys_platform == 'darwin'",
+    "python-xlib>=0.33; sys_platform == 'linux'",
 ]
-
-[tool.uv.sources]
-pipecat-ai-mcp-server = { workspace = true }
-
-[tool.uv.workspace]
-members = ["server", "mcp-server"]
 
 [dependency-groups]
 dev = [
@@ -30,10 +39,8 @@ dev = [
 ]
 
 [project.optional-dependencies]
-# Audio output for CLI commands
+# Audio output for local audio CLI
 local_audio = ["pyaudio"]
-
-# Audio extras
 audio = ["pyaudio"]
 
 # TTS provider extras
@@ -85,20 +92,24 @@ tts = ["pipecat-ai[openai,elevenlabs,cartesia,fish,gradium,hume,lmnt,neuphonic,n
 stt = ["pipecat-ai[assemblyai,asyncai,deepgram,fish,gladia,google,hume,inworld,nvidia,openai,resembleai,sarvam,soniox,speechmatics,mlx-whisper]"]
 all = ["pyaudio", "pipecat-ai[openai,elevenlabs,cartesia,fish,gradium,hume,lmnt,neuphonic,nvidia,playht,resembleai,rime,sambanova,sarvam,kokoro,assemblyai,asyncai,deepgram,gladia,google,inworld,soniox,speechmatics,mlx-whisper,aws,azure,fal,groq]"]
 
+[project.scripts]
+talky = "talky.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["talky*"]
+
+[tool.setuptools.package-data]
+talky = ["config/**/*.yaml", "config/**/*.yml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.ruff]
 line-length = 100
 
 [tool.ruff.lint]
 select = ["I"]
-
-[project.scripts]
-talky = "talky_cli:main"
-
-[tool.setuptools]
-py-modules = ["talky_cli", "talky_auth", "shared"]
-
-[tool.setuptools.packages.find]
-include = ["talky_cli*", "shared*"]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

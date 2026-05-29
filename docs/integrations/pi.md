@@ -103,7 +103,7 @@ The same `/ws/agent` protocol drives Claude — see `extensions/claude-voice/` f
 ## References
 
 - [Pi Extension Docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
-- [Talky Daemon](../mcp-server/)
-- [agent_ext_llm_service.py](../../mcp-server/src/pipecat_mcp_server/agent_ext_llm_service.py)
+- [Talky Daemon](../src/talky/server/)
+- [agent_ext.py](../../src/talky/server/agent_ext.py)
 - [extensions/pi-voice/extension.ts](../../extensions/pi-voice/extension.ts)
 - [extensions/claude-voice/index.mjs](../../extensions/claude-voice/index.mjs)

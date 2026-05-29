@@ -13,9 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import talky_cli  # noqa: E402
+import talky.cli as talky_cli  # noqa: E402
 
 
 def _run_main(argv: list[str]) -> None:
@@ -99,4 +97,4 @@ def test_known_commands_set_includes_all_registered_subcommands():
     }
     src = Path(talky_cli.__file__).read_text()
     for cmd in expected:
-        assert f'"{cmd}"' in src, f"subcommand {cmd!r} missing from talky_cli source"
+        assert f'"{cmd}"' in src, f"subcommand {cmd!r} missing from talky.cli source"
