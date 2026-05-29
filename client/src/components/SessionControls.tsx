@@ -1,6 +1,6 @@
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
-import { ConnectedAudioControl } from './ConnectedAudioControl';
-import { IdleAudioControl } from './IdleAudioControl';
+import { AudioSetupControls } from './AudioSetupControls';
+import { LiveAudioControls } from './LiveAudioControls';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 
@@ -20,7 +20,7 @@ export const SessionControls = () => {
       <Row label="Audio" stretch={false}>
         <div className="flex w-full [&>div]:w-full">
           {connected ? (
-            <ConnectedAudioControl
+            <LiveAudioControls
               size="md"
               variant="ghost"
               noVisualizer={false}
@@ -28,7 +28,7 @@ export const SessionControls = () => {
               visualizerProps={{ barCount: 32 }}
             />
           ) : (
-            <IdleAudioControl size="md" />
+            <AudioSetupControls size="md" />
           )}
         </div>
       </Row>

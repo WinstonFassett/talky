@@ -4,7 +4,7 @@ import {
 } from '@pipecat-ai/client-react';
 import { UserAudioComponent } from '@pipecat-ai/voice-ui-kit';
 
-interface ConnectedAudioControlProps {
+interface LiveAudioControlsProps {
   size?: 'sm' | 'md' | 'lg';
   variant?: 'ghost' | 'secondary' | 'primary';
   noVisualizer?: boolean;
@@ -12,18 +12,20 @@ interface ConnectedAudioControlProps {
   visualizerProps?: Record<string, unknown>;
 }
 
-// Audio control for the connected state. Pipecat owns the mic stream, so the
-// visualizer is driven by the live capture — it doubles as the mute button.
-// Uses the headless UserAudioComponent directly so the control stays live
-// across transport state transitions (the wrapper UserAudioControl forces a
-// spinner whenever transport is "disconnected" or "initializing").
-export const ConnectedAudioControl = ({
+// Hot audio controls — mute toggle + live visualizer, with mid-call mic and
+// speaker switching. Belongs in the header (always shown when header shows).
+// Pipecat owns the mic stream, so the visualizer is driven by the live
+// capture — it doubles as the mute button. Uses the headless
+// UserAudioComponent directly so the control stays live across transport
+// state transitions (the wrapper UserAudioControl forces a spinner whenever
+// transport is "disconnected" or "initializing").
+export const LiveAudioControls = ({
   size = 'md',
   variant = 'ghost',
   noVisualizer = false,
   classNames,
   visualizerProps,
-}: ConnectedAudioControlProps) => {
+}: LiveAudioControlsProps) => {
   const {
     availableMics,
     selectedMic,
