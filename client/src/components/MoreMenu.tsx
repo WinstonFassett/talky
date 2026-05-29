@@ -269,6 +269,7 @@ const DesktopMenu = ({ actions }: { actions: Actions }) => {
   return (
     <DropdownMenuContent
       align="end"
+      sideOffset={8}
       className="min-w-[260px] max-h-[80vh] overflow-y-auto"
     >
       {hasMessages && (
@@ -387,9 +388,32 @@ export const MoreMenu = ({ trigger }: { trigger?: React.ReactNode } = {}) => {
     );
   }
 
+  // Desktop: when a custom trigger is provided (e.g. BotVisualizer — a plain
+  // div that doesn't forward refs/props), Radix `asChild` silently fails to
+  // attach the click handler. Wrap in a real button — NOT display:contents,
+  // because Radix's outside-pointer-down detection uses the trigger's
+  // bounding box; a contents button has zero box, so pointer-up gets
+  // forwarded to whatever item lies under the cursor (typically Copy).
+  if (trigger) {
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="More options"
+            className="inline-flex shrink-0 cursor-pointer bg-transparent border-0 p-0 m-0"
+          >
+            {trigger}
+          </button>
+        </DropdownMenuTrigger>
+        <DesktopMenu actions={actions} />
+      </DropdownMenu>
+    );
+  }
+
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>{trigger ?? defaultTrigger}</DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild>{defaultTrigger}</DropdownMenuTrigger>
       <DesktopMenu actions={actions} />
     </DropdownMenu>
   );
