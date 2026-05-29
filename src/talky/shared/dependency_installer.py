@@ -18,7 +18,7 @@ from typing import Set
 import yaml
 from loguru import logger
 
-_root = Path(__file__).parent.parent
+_root = Path(__file__).resolve().parents[3]
 
 # Check Python version compatibility
 def _check_python_version() -> bool:
