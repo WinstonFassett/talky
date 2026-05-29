@@ -7,7 +7,8 @@ defaults:
 # Network settings
 network:
   host: "localhost"          # "0.0.0.0" to listen on all interfaces (remote access)
-  port: 9090                 # Daemon HTTP(S) port
+  https_port: 19443          # Primary listener (HTTPS when TLS configured, else HTTP)
+  http_port: 19080           # Secondary plain-HTTP loopback listener (MCP). Only bound when TLS is on.
   external_host: ""          # External hostname for browser URLs (e.g. macbook.tailnet.ts.net)
   # https:                   # Uncomment to serve TLS (run scripts/generate-certs.sh first)
   #   cert: "~/.talky/ssl/server-cert.pem"

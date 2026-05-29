@@ -22,7 +22,7 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
-const WS_URL = process.env.TALKY_AGENT_WS_URL || "ws://localhost:9090/ws/agent";
+const WS_URL = process.env.TALKY_AGENT_WS_URL || "ws://localhost:19080/ws/agent";
 const RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 15000;
 
