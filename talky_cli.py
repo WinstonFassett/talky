@@ -8,10 +8,64 @@ Run from anywhere: talky moltis
 import argparse
 import json
 import os
+import ssl
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+
+_DAEMON_BASE_URL_CACHE: str | None = None
+_DAEMON_SSL_CTX: ssl.SSLContext | None = None
+
+
+def _daemon_host_port() -> tuple[str, int]:
+    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
+    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
+    return host, port
+
+
+def _unverified_ssl_ctx() -> ssl.SSLContext:
+    global _DAEMON_SSL_CTX
+    if _DAEMON_SSL_CTX is None:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        _DAEMON_SSL_CTX = ctx
+    return _DAEMON_SSL_CTX
+
+
+def daemon_base_url() -> str:
+    """Probe the daemon scheme once per process. Returns 'https://h:p' or 'http://h:p'.
+
+    The daemon may run with SSL (default since d95d310) or plain HTTP. Probe
+    HTTPS first; fall back to HTTP on TLS/connection error. Caches the result.
+    """
+    global _DAEMON_BASE_URL_CACHE
+    if _DAEMON_BASE_URL_CACHE is not None:
+        return _DAEMON_BASE_URL_CACHE
+    host, port = _daemon_host_port()
+    for scheme in ("https", "http"):
+        url = f"{scheme}://{host}:{port}/api/profiles"
+        try:
+            ctx = _unverified_ssl_ctx() if scheme == "https" else None
+            with urllib.request.urlopen(url, timeout=2, context=ctx):
+                _DAEMON_BASE_URL_CACHE = f"{scheme}://{host}:{port}"
+                return _DAEMON_BASE_URL_CACHE
+        except (urllib.error.URLError, ssl.SSLError, ConnectionError, OSError):
+            continue
+    # Daemon unreachable; return https default so callers get a clear error
+    # via their own urlopen attempt.
+    _DAEMON_BASE_URL_CACHE = f"https://{host}:{port}"
+    return _DAEMON_BASE_URL_CACHE
+
+
+def daemon_urlopen(url_or_req, timeout: float = 3):
+    """urlopen wrapper that supplies the unverified SSL context when needed."""
+    target = url_or_req if isinstance(url_or_req, str) else url_or_req.full_url
+    ctx = _unverified_ssl_ctx() if target.startswith("https://") else None
+    return urllib.request.urlopen(url_or_req, timeout=timeout, context=ctx)
 
 # Determine project root from this script's location
 _script_path = Path(__file__).resolve()
@@ -331,12 +385,7 @@ def cmd_list_profiles(args):
 
 def cmd_profile(args):
     """Show or switch the active LLM profile in the running talky server."""
-    import urllib.error
-    import urllib.request
-
-    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
-    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
-    base_url = f"http://{host}:{port}"
+    base_url = daemon_base_url()
 
     name = getattr(args, "name", None)
 
@@ -344,7 +393,7 @@ def cmd_profile(args):
         # GET mode: list available + show active
         url = f"{base_url}/api/profile"
         try:
-            with urllib.request.urlopen(url, timeout=3) as resp:
+            with daemon_urlopen(url, timeout=3) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.URLError as e:
             print(f"❌ could not reach talky daemon at {base_url}: {e}")
@@ -372,9 +421,8 @@ def cmd_profile(args):
     _pipeline_live = False
     if daemon_was_running:
         try:
-            _st_url = f"http://{os.environ.get('TALKY_HOST', 'localhost')}:{int(os.environ.get('TALKY_PORT', '9090'))}/status"
-            import urllib.request as _ur
-            with _ur.urlopen(_st_url, timeout=2) as _r:
+            _st_url = f"{base_url}/status"
+            with daemon_urlopen(_st_url, timeout=2) as _r:
                 _st = json.loads(_r.read())
             _pipeline_live = _st.get("channel", {}).get("live", False)
         except Exception:
@@ -415,7 +463,7 @@ def cmd_profile(args):
             headers={"content-type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(resume_req, timeout=3) as resp:
+            with daemon_urlopen(resume_req, timeout=3) as resp:
                 json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             try:
@@ -436,7 +484,7 @@ def cmd_profile(args):
         headers={"content-type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with daemon_urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         try:
@@ -456,7 +504,7 @@ def cmd_profile(args):
     # — the next pipeline build will auto-apply it.
     status_url = f"{base_url}/status"
     try:
-        with urllib.request.urlopen(status_url, timeout=2) as resp:
+        with daemon_urlopen(status_url, timeout=2) as resp:
             st = json.loads(resp.read().decode("utf-8"))
         live = st.get("channel", {}).get("live", False)
     except Exception:  # noqa: BLE001
@@ -471,15 +519,10 @@ def cmd_profile(args):
 
 def cmd_voice(args):
     """Show or switch the active voice profile in the running talky server."""
-    import urllib.error
-    import urllib.request
-
     if not ensure_daemon():
         sys.exit(1)
 
-    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
-    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
-    base_url = f"http://{host}:{port}"
+    base_url = daemon_base_url()
 
     name = getattr(args, "name", None)
 
@@ -487,7 +530,7 @@ def cmd_voice(args):
         # GET mode: list available + show active
         url = f"{base_url}/api/voices"
         try:
-            with urllib.request.urlopen(url, timeout=3) as resp:
+            with daemon_urlopen(url, timeout=3) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.URLError as e:
             print(f"❌ could not reach talky daemon at {base_url}: {e}")
@@ -513,7 +556,7 @@ def cmd_voice(args):
         headers={"content-type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with daemon_urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         try:
@@ -531,18 +574,13 @@ def cmd_voice(args):
 
 def cmd_talkystatus(args):  # noqa: ARG001
     """Show daemon status — active profile, voice, health."""
-    import urllib.error
-    import urllib.request
-
-    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
-    port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
-    base_url = f"http://{host}:{port}"
+    base_url = daemon_base_url()
 
     # Fetch profiles + voices
     try:
-        with urllib.request.urlopen(f"{base_url}/api/profiles", timeout=3) as resp:
+        with daemon_urlopen(f"{base_url}/api/profiles", timeout=3) as resp:
             profiles_data = json.loads(resp.read().decode("utf-8"))
-        with urllib.request.urlopen(f"{base_url}/api/voices", timeout=3) as resp:
+        with daemon_urlopen(f"{base_url}/api/voices", timeout=3) as resp:
             voices_data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as e:
         print(f"❌ daemon not reachable at {base_url}: {e}")
@@ -1030,9 +1068,7 @@ def cmd_launch(args):
         sys.exit(1)
 
     if launcher.get("autoconnect_browser", True):
-        host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
-        port = int(os.environ.get("TALKY_DAEMON_PORT", os.environ.get("TALKY_PORT", "9090")))
-        client_url = f"http://{host}:{port}?autoconnect=true"
+        client_url = f"{daemon_base_url()}?autoconnect=true"
         webbrowser.open(client_url)
 
     prompt = launcher.get("prompt")
