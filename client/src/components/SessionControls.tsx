@@ -1,14 +1,11 @@
-import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
-import { AudioSetupControls } from './AudioSetupControls';
-import { LiveAudioControls } from './LiveAudioControls';
+import { MicSelector } from './audio/MicSelector';
+import { SpeakerSelector } from './audio/SpeakerSelector';
 import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 
 // Stacked picker rows: Assistant / Voice / Audio. Used in the mobile
 // SessionSheet drawer body AND in the desktop EmptyState pre-connect.
 export const SessionControls = () => {
-  const transportState = usePipecatClientTransportState();
-  const connected = transportState === 'connected' || transportState === 'ready';
   return (
     <div className="flex flex-col gap-4 w-full">
       <Row label="Assistant">
@@ -18,18 +15,9 @@ export const SessionControls = () => {
         <VoiceProfileSelect />
       </Row>
       <Row label="Audio" stretch={false}>
-        <div className="flex w-full [&>div]:w-full">
-          {connected ? (
-            <LiveAudioControls
-              size="md"
-              variant="ghost"
-              noVisualizer={false}
-              classNames={{ button: 'flex-1' }}
-              visualizerProps={{ barCount: 32 }}
-            />
-          ) : (
-            <AudioSetupControls size="md" />
-          )}
+        <div className="flex flex-col gap-1.5 w-full">
+          <MicSelector />
+          <SpeakerSelector />
         </div>
       </Row>
     </div>
