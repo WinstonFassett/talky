@@ -18,9 +18,10 @@ const getHost = (): string => {
   return process.env.VITE_HOST || 'localhost';
 };
 
-// Get daemon URL for proxying (supports remote via VITE_DAEMON_URL)
+// Get daemon URL for proxying (supports remote via VITE_DAEMON_URL).
+// Default points at the daemon's HTTPS listener (19443).
 const getDaemonUrl = (): string => {
-  return process.env.VITE_DAEMON_URL || 'https://localhost:9090';
+  return process.env.VITE_DAEMON_URL || 'https://localhost:19443';
 };
 
 // HTTPS config for external access
@@ -36,11 +37,12 @@ export default defineConfig({
       cert: './localhost-cert.pem',
     },
     proxy: {
-      '/api': { target: getDaemonUrl(), ws: true, changeOrigin: true },
-      '/start': { target: getDaemonUrl(), changeOrigin: true },
-      '/status': { target: getDaemonUrl(), changeOrigin: true },
-      '/sessions': { target: getDaemonUrl(), ws: true, changeOrigin: true },
-      '/ws': { target: getDaemonUrl(), ws: true, changeOrigin: true },
+      // secure:false accepts the daemon's self-signed cert
+      '/api': { target: getDaemonUrl(), ws: true, changeOrigin: true, secure: false },
+      '/start': { target: getDaemonUrl(), changeOrigin: true, secure: false },
+      '/status': { target: getDaemonUrl(), changeOrigin: true, secure: false },
+      '/sessions': { target: getDaemonUrl(), ws: true, changeOrigin: true, secure: false },
+      '/ws': { target: getDaemonUrl(), ws: true, changeOrigin: true, secure: false },
     },
   },
 });

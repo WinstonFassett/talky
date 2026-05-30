@@ -18,9 +18,10 @@ const getHost = (): string => {
   return process.env.VITE_HOST || 'localhost';
 };
 
-// Get daemon URL for proxying (supports remote via VITE_DAEMON_URL)
+// Get daemon URL for proxying (supports remote via VITE_DAEMON_URL).
+// Default points at the daemon's plain-HTTP loopback listener (19080).
 const getDaemonUrl = (): string => {
-  return process.env.VITE_DAEMON_URL || 'http://localhost:9090';
+  return process.env.VITE_DAEMON_URL || 'http://localhost:19080';
 };
 
 // https://vite.dev/config/
