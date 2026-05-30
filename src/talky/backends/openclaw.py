@@ -10,8 +10,12 @@ import json
 import os
 import ssl
 import time
+from typing import TYPE_CHECKING
 
 import websockets
+
+if TYPE_CHECKING:
+    from talky.backends import BackendStatus
 from loguru import logger
 from pipecat.frames.frames import (
     Frame,
@@ -243,6 +247,30 @@ class OpenClawLLMService(LLMService):
     ROLE = "operator"
     SCOPES = ["operator.admin", "operator.approvals", "operator.pairing"]
     SESSION_KEY = "agent:main:main"
+
+    @staticmethod
+    def status() -> tuple["BackendStatus", str]:
+        """Backend Status — see UBIQUITOUS_LANGUAGE.md.
+
+        Cheap pre-construction check: device identity + paired-devices
+        files present? Doesn't connect to the gateway — that happens lazily
+        on first turn. Just confirms the local pairing artifacts exist,
+        which is what every connection attempt would otherwise need to
+        succeed. Missing pairing is user-fixable via the openclaw CLI —
+        Misconfigured, not Installable (no Python extra to install).
+        """
+        from talky.backends import BackendStatus
+        openclaw_dir = os.path.expanduser("~/.openclaw")
+        identity_path = os.path.join(openclaw_dir, "identity/device.json")
+        paired_path = os.path.join(openclaw_dir, "devices/paired.json")
+        openclaw_config_path = os.path.join(openclaw_dir, "openclaw.json")
+        if not os.path.exists(openclaw_config_path):
+            return BackendStatus.MISCONFIGURED, f"openclaw not initialized (missing {openclaw_config_path})"
+        if not os.path.exists(identity_path):
+            return BackendStatus.MISCONFIGURED, f"openclaw device identity missing ({identity_path})"
+        if not os.path.exists(paired_path):
+            return BackendStatus.MISCONFIGURED, f"openclaw device not paired ({paired_path})"
+        return BackendStatus.READY, ""
 
     def __init__(self, *, gateway_url: str = None, agent_id: str = "main", session_key: str = None, **kwargs):
         super().__init__(**kwargs)

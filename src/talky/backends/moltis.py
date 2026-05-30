@@ -8,8 +8,12 @@ import json
 import os
 import ssl
 import time
+from typing import TYPE_CHECKING
 
 import websockets
+
+if TYPE_CHECKING:
+    from talky.backends import BackendStatus
 from loguru import logger
 from pipecat.frames.frames import (
     Frame,
@@ -26,6 +30,19 @@ from talky.server.turn import UserTurnTextFrame
 
 class MoltisLLMService(LLMService):
     """Moltis LLM service - simple WebSocket-based implementation"""
+
+    @staticmethod
+    def status() -> tuple["BackendStatus", str]:
+        """Backend Status — see UBIQUITOUS_LANGUAGE.md.
+
+        Cheap pre-construction check: is ``MOLTIS_API_KEY`` set? No
+        network, no gateway probe. Connection happens lazily on first
+        turn. Missing key is user-fixable — Misconfigured.
+        """
+        from talky.backends import BackendStatus
+        if not os.getenv("MOLTIS_API_KEY"):
+            return BackendStatus.MISCONFIGURED, "MOLTIS_API_KEY not set"
+        return BackendStatus.READY, ""
 
     def __init__(
         self,

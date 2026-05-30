@@ -104,6 +104,21 @@ from talky.server.mcp_driver import MCPDriverLLMService
 from talky.server.turn import TalkyUserTurnDetector
 
 
+def _resolve_backend_adapter_class(pm: Any, backend_name: str) -> Any:
+    """Resolve the Backend Adapter class for a Backend without instantiating.
+
+    See UBIQUITOUS_LANGUAGE.md. Used by the build loop to call ``status()``
+    before deciding whether to construct a Live Adapter.
+    """
+    backend = pm.get_llm_backend(backend_name)
+    if backend is None:
+        raise ValueError(f"backend {backend_name!r} not configured")
+    module_path = ".".join(backend.service_class.split(".")[:-1])
+    class_name = backend.service_class.split(".")[-1]
+    llm_module = importlib.import_module(module_path)
+    return getattr(llm_module, class_name)
+
+
 def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
     """Build a fresh LLM service instance for the named backend."""
     import json as _json
@@ -231,6 +246,12 @@ class VoiceChannel:
         self._health: dict[str, bool] = {}
         self._health_task: Optional[asyncio.Task] = None
 
+        # Backend Status per backend — populated by _build_and_start_pipeline
+        # via each Backend Adapter's static `status()`. Orthogonal to _health.
+        # See UBIQUITOUS_LANGUAGE.md.
+        # Shape: {backend_name: {"status": BackendStatus, "reason": str}}.
+        self._backend_status: dict[str, dict] = {}
+
     # ── warmup ──────────────────────────────────────────────────────────────
 
     def warmup(self) -> None:
@@ -298,6 +319,15 @@ class VoiceChannel:
             "idle_ttl_pending": ttl_pending,
             "is_empty": self._is_empty(),
         }
+
+    def backend_status(self) -> dict[str, dict]:
+        """Return Backend Status per backend — see UBIQUITOUS_LANGUAGE.md.
+
+        Populated by ``_build_and_start_pipeline`` from each Backend
+        Adapter's static ``status()``. Empty before the first pipeline
+        build. Shape: ``{backend_name: {"status": str, "reason": str}}``.
+        """
+        return dict(self._backend_status)
 
     # ── room occupancy & TTL ────────────────────────────────────────────────
 
@@ -1174,22 +1204,71 @@ class VoiceChannel:
         # STT, fresh per pipeline (modules are already loaded).
         stt = create_stt_service_from_config(vp.stt_provider, model=vp.stt_model)
 
-        # LLMSwitcher slot: MCPDriver first (default active) then every
-        # configured backend. See ticket ea77 / c3a1.
+        # LLMSwitcher slot (= Backend Switcher in our vocabulary, see
+        # UBIQUITOUS_LANGUAGE.md): MCPDriver first (default active) then
+        # every Backend whose Backend Status is Ready. Non-Ready backends
+        # are skipped here and their reason is recorded in
+        # self._backend_status for the picker to surface. See ticket 8fbe.
+        from talky.backends import BackendStatus
+
         mcp_driver = MCPDriverLLMService(user_speech_queue=self._user_speech_queue)
         llm_services: list = [mcp_driver]
         profile_map: dict[str, Any] = {
             self.MCP_DRIVER_PROFILE: mcp_driver,
         }
+        backend_status: dict[str, dict] = {
+            self.MCP_DRIVER_PROFILE: {"status": BackendStatus.READY.value, "reason": ""},
+        }
 
         for backend_name in pm.list_llm_backends().keys():
+            # Resolve the Backend Adapter class without instantiating, so
+            # we can ask its static status() before deciding to construct.
+            try:
+                cls = _resolve_backend_adapter_class(pm, backend_name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"VoiceChannel: cannot resolve {backend_name!r}: {e}")
+                backend_status[backend_name] = {
+                    "status": BackendStatus.BLOCKED.value,
+                    "reason": f"could not resolve adapter class: {e}",
+                }
+                continue
+
+            # Backend Status gate — only Ready backends get a Live Adapter.
+            status_fn = getattr(cls, "status", None)
+            if status_fn is None:
+                # Adapter predates the status() contract — treat as Ready
+                # and let construction surface any real problem. Track in
+                # the rename ticket so every adapter implements status().
+                bs, reason = BackendStatus.READY, ""
+            else:
+                try:
+                    bs, reason = status_fn()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"VoiceChannel: {backend_name!r} status() raised: {e}")
+                    bs, reason = BackendStatus.BLOCKED, f"status() raised: {e}"
+
+            backend_status[backend_name] = {"status": bs.value, "reason": reason}
+
+            if bs is not BackendStatus.READY:
+                logger.info(
+                    f"VoiceChannel: skipping backend {backend_name!r} "
+                    f"({bs.value}): {reason}"
+                )
+                continue
+
             try:
                 svc = _instantiate_llm_backend(pm, backend_name)
             except Exception as e:  # noqa: BLE001
-                logger.warning(f"VoiceChannel: skipping LLM profile {backend_name!r}: {e}")
+                logger.warning(f"VoiceChannel: skipping backend {backend_name!r}: {e}")
+                backend_status[backend_name] = {
+                    "status": BackendStatus.BLOCKED.value,
+                    "reason": f"construction failed: {e}",
+                }
                 continue
             llm_services.append(svc)
             profile_map[backend_name] = svc
+
+        self._backend_status = backend_status
 
         llm_switcher = LLMSwitcher(llms=llm_services, strategy_type=ServiceSwitcherStrategyManual)
         logger.info(

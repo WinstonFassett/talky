@@ -22,7 +22,10 @@ import os
 import queue
 import sys
 import threading
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
+
+if TYPE_CHECKING:
+    from talky.backends import BackendStatus
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -126,6 +129,23 @@ class HermesLLMService(LLMService):
       yolo:     skip dangerous command prompts (default False)
     """
 
+    @staticmethod
+    def status() -> tuple["BackendStatus", str]:
+        """Backend Status — see UBIQUITOUS_LANGUAGE.md.
+
+        Cheap pre-construction check: is hermes-agent importable? _HERMES_AVAILABLE
+        is set at module import based on whether the agent dir is on sys.path.
+        No Python extra declared (hermes-agent ships outside PyPI), so this is
+        Misconfigured rather than Installable.
+        """
+        from talky.backends import BackendStatus
+        if not _HERMES_AVAILABLE:
+            return BackendStatus.MISCONFIGURED, (
+                f"hermes-agent not found at {_HERMES_DIR}. "
+                "Install via: hermes update  or  pip install hermes-agent"
+            )
+        return BackendStatus.READY, ""
+
     def __init__(
         self,
         *,
@@ -137,11 +157,6 @@ class HermesLLMService(LLMService):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        if not _HERMES_AVAILABLE:
-            raise RuntimeError(
-                f"hermes-agent not found at {_HERMES_DIR}. "
-                "Install via: hermes update  or  pip install hermes-agent"
-            )
         self._model = model
         self._provider = provider
         self._cwd = cwd

@@ -42,7 +42,10 @@ import os
 import socket
 import subprocess
 import time
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from talky.backends import BackendStatus
 
 import httpx
 from loguru import logger
@@ -74,8 +77,6 @@ def _port_open(host: str, port: int, timeout: float = 0.3) -> bool:
 class OpencodeLLMService(LLMService):
     """Opencode HTTP backend.
 
-    Profile name: opencode.
-
     Config keys (from llm-backends.yaml):
       base_url:     where opencode serve is listening
       auto_spawn:   if true, spawn `opencode serve` when nothing answers
@@ -85,6 +86,22 @@ class OpencodeLLMService(LLMService):
       permissions:  list of {permission, pattern, action} ruleset entries (per session)
       resume:       existing session id to reuse instead of creating a new one
     """
+
+    @staticmethod
+    def status() -> tuple["BackendStatus", str]:
+        """Backend Status — see UBIQUITOUS_LANGUAGE.md.
+
+        Cheap pre-construction check: is the `opencode` binary on PATH?
+        No subprocess, no network. The Python `extra: opencode` installs
+        the HTTP client deps but not the CLI itself, so a missing binary
+        is Misconfigured (user-installable externally), not Installable.
+        """
+        import shutil
+
+        from talky.backends import BackendStatus
+        if shutil.which("opencode") is None:
+            return BackendStatus.MISCONFIGURED, "opencode command not found in PATH"
+        return BackendStatus.READY, ""
 
     def __init__(
         self,

@@ -3,7 +3,10 @@
 import asyncio
 import json
 import shutil
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from talky.backends import BackendStatus
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -57,6 +60,21 @@ def _format_tool_end(data: dict) -> str:
 class PiRPCLLMService(LLMService):
     """Pi coding agent via --mode rpc. Interruptible: sends {"type":"abort"} on InterruptionFrame."""
 
+    @staticmethod
+    def status() -> tuple["BackendStatus", str]:
+        """Backend Status — see UBIQUITOUS_LANGUAGE.md.
+
+        Cheap pre-construction check: is the `pi` binary on PATH? Called
+        by channel.py's build loop so non-Ready backends are skipped from
+        the Backend Switcher entirely. Must do no heavyweight work — no
+        subprocess, no network, no model load. No Python extra for pi —
+        Misconfigured, not Installable.
+        """
+        from talky.backends import BackendStatus
+        if shutil.which("pi") is None:
+            return BackendStatus.MISCONFIGURED, "pi command not found in PATH"
+        return BackendStatus.READY, ""
+
     def __init__(
         self,
         *,
@@ -85,9 +103,8 @@ class PiRPCLLMService(LLMService):
 
     async def start(self, frame: StartFrame):
         await super().start(frame)
-        pi_bin = shutil.which("pi")
-        if not pi_bin:
-            raise RuntimeError("pi command not found in PATH")
+        # Availability gate is now upstream in channel.py's build loop —
+        # if we're here, the binary was on PATH at that time.
         cmd = self._build_cmd()
         logger.info(f"Starting Pi RPC: {' '.join(cmd)}")
         self._proc = await asyncio.create_subprocess_exec(

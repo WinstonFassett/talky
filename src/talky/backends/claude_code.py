@@ -29,7 +29,10 @@ Timeout: 120s → auto-deny.
 import asyncio
 import queue
 import threading
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from talky.backends import BackendStatus
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -245,15 +248,25 @@ class _ClaudeSDKThread:
 class ClaudeCodeLLMService(LLMService):
     """Claude Code backend via Agent SDK thread bridge.
 
-    Profile name: claude-code
-    Switch via: talky claude-code
-
     permission_mode options:
       "acceptEdits"       — auto-accept all (default, no UI prompt)
       "default"           — surface each tool use to chat UI; user grants/denies
       "bypassPermissions" — skip all permission checks entirely (dangerous)
       "plan"              — read-only planning mode
     """
+
+    @staticmethod
+    def status() -> tuple["BackendStatus", str]:
+        """Backend Status — see UBIQUITOUS_LANGUAGE.md.
+
+        Cheap pre-construction check: is claude-code-sdk importable? If not,
+        the backend declares ``extra: claude-code`` so the picker can offer
+        an install affordance — hence Installable rather than Misconfigured.
+        """
+        from talky.backends import BackendStatus
+        if not _SDK_AVAILABLE:
+            return BackendStatus.INSTALLABLE, "claude-code-sdk not installed (extra: claude-code)"
+        return BackendStatus.READY, ""
 
     def __init__(
         self,
@@ -266,11 +279,6 @@ class ClaudeCodeLLMService(LLMService):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        if not _SDK_AVAILABLE:
-            logger.warning(
-                "claude-code-sdk not installed — ClaudeCodeLLMService will not function. "
-                "Install with: uv add claude-code-sdk"
-            )
         self._cwd = cwd
         self._model = model
         self._permission_mode = permission_mode

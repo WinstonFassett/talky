@@ -914,6 +914,10 @@ def _build_webrtc_routes():
                         "steerMode": hermes_steer_mode,
                         "ready": _readiness.is_ready(),
                         "readinessTasks": _readiness.open_tasks(),
+                        # Backend Status per backend — see UBIQUITOUS_LANGUAGE.md.
+                        # Empty before the first pipeline build; the picker
+                        # uses this to gray out / annotate non-Ready backends.
+                        "backendStatus": voice_channel.backend_status(),
                     },
                 )
                 yield init.sse()
