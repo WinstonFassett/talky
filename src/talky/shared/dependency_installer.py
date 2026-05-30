@@ -18,7 +18,15 @@ from typing import Set
 import yaml
 from loguru import logger
 
+# Repo root — only valid in editable installs; used as a fallback for
+# `uv tool install --editable .` in install_extra_no_reexec(). Wheel installs
+# don't have a repo root and shouldn't need one (extras are read from
+# installed package metadata, not pyproject.toml source).
 _root = Path(__file__).resolve().parents[3]
+
+# Package directory — always valid (editable + wheel). Holds bundled
+# defaults shipped with the package.
+_PKG_DIR = Path(__file__).resolve().parent.parent
 
 # Check Python version compatibility
 def _check_python_version() -> bool:
@@ -96,24 +104,44 @@ def _is_tool_env() -> bool:
 
 
 def _read_project_extras() -> dict[str, list[str]]:
-    """Read optional dependencies from pyproject.toml."""
+    """Return {extra_name: [package_spec, ...]} for the installed talky package.
+
+    Uses importlib.metadata so it works in BOTH editable installs (uv tool
+    install --editable .) and wheel installs (uv tool install talky-X.whl /
+    pip install talky). Reading pyproject.toml directly would only work for
+    editable installs from source.
+
+    Extra names are returned as declared in pyproject.toml (underscores
+    preserved) — importlib.metadata normalizes to PEP 685 form (hyphens),
+    so we map back to the canonical form callers use ("local_audio" not
+    "local-audio").
+    """
+    from importlib.metadata import PackageNotFoundError, requires
+
     try:
-        import tomllib
-    except ImportError:
-        # Python < 3.11 fallback
-        try:
-            import tomli as tomllib
-        except ImportError:
-            logger.error("Neither tomllib nor tomli available for reading pyproject.toml")
-            return {}
-    
-    try:
-        with open(_root / "pyproject.toml", "rb") as f:
-            data = tomllib.load(f)
-        return data.get("project", {}).get("optional-dependencies", {})
-    except Exception as e:
-        logger.error(f"Failed to read pyproject.toml: {e}")
+        reqs = requires("talky") or []
+    except PackageNotFoundError:
+        logger.error("talky package metadata not found — is it installed?")
         return {}
+
+    # Map normalized (hyphen) extra names back to the canonical form used in
+    # the codebase. Source of truth is pyproject's [project.optional-dependencies]
+    # keys; we read them once from there for the rename, then never again.
+    _CANONICAL: dict[str, str] = {
+        "local-audio": "local_audio",
+        # All other extras already use hyphens consistently in both places.
+    }
+
+    extras: dict[str, list[str]] = {}
+    for req in reqs:
+        # Format: "package-spec ; extra == \"name\"" — split on the marker.
+        if "; extra ==" not in req:
+            continue
+        spec, marker = req.split("; extra ==", 1)
+        extra_name = marker.strip().strip('"').strip("'")
+        canonical = _CANONICAL.get(extra_name, extra_name)
+        extras.setdefault(canonical, []).append(spec.strip())
+    return extras
 
 
 def _check_extra_installed(extra: str) -> bool:
@@ -158,7 +186,7 @@ def get_configured_providers() -> Set[str]:
     config_dir = Path.home() / ".talky"
     providers: Set[str] = set()
 
-    bundled_defaults = _root / "server" / "config" / "defaults"
+    bundled_defaults = _PKG_DIR / "config" / "defaults"
     voice_profiles_file = config_dir / "voice-profiles.yaml"
     if not voice_profiles_file.exists():
         voice_profiles_file = bundled_defaults / "voice-profiles.yaml"
@@ -214,7 +242,7 @@ def _missing_extras(providers: Set[str]) -> list[str]:
 
 def get_llm_backend_extra(backend_name: str) -> str | None:
     """Return the pyproject.toml extra name declared for an LLM backend, or None."""
-    backends_file = _root / "server" / "config" / "core" / "llm-backends.yaml"
+    backends_file = _PKG_DIR / "config" / "core" / "llm-backends.yaml"
     # Also check user overrides
     user_file = Path.home() / ".talky" / "llm-backends.yaml"
     for path in (user_file, backends_file):
@@ -267,8 +295,17 @@ def install_extra_no_reexec(extra: str) -> bool:
             if e != extra and _check_extra_installed(e):
                 all_packages.extend(pkgs)
         python = sys.executable
+
+        # Detect editable vs wheel install. Editable installs have a
+        # pyproject.toml at the repo root; wheel installs don't.
+        is_editable = (_root / "pyproject.toml").exists()
+        if is_editable:
+            install_target = ["--editable", str(_root)]
+        else:
+            install_target = ["talky"]
+
         result = subprocess.run(
-            [uv, "tool", "install", "--editable", str(_root), "--python", python]
+            [uv, "tool", "install", *install_target, "--python", python]
             + [f"--with={pkg}" for pkg in all_packages],
             capture_output=True, text=True,
         )
