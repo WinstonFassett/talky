@@ -186,14 +186,31 @@ def _ensure_local_audio_extra() -> bool:
     except ImportError:
         pass
 
-    from talky.shared.dependency_installer import install_extra_no_reexec
+    from talky.shared.dependency_installer import (
+        _check_native_deps_for_extra,
+        install_extra_no_reexec,
+    )
+
+    # Check the native dep (portaudio) before announcing the Python
+    # install — gives a useful platform-specific hint instead of letting
+    # pip dump a C compiler error. Ticket 4fbd.
+    native_ok, native_reason = _check_native_deps_for_extra("local_audio")
+    if not native_ok:
+        print(f"❌ {native_reason}", file=sys.stderr)
+        sys.exit(1)
+
     print("⚙️  local audio requires pyaudio — installing the `local_audio` extra...", file=sys.stderr)
     ok = install_extra_no_reexec("local_audio")
     if ok:
         print("✅ installed. retry your command.", file=sys.stderr)
         sys.exit(0)
     else:
-        print("❌ install failed. Manually: `uv tool install talky --with pyaudio --force`", file=sys.stderr)
+        print(
+            "❌ install failed. See log for details. "
+            "If the failure was a C compile error, the portaudio system "
+            "library may be missing or in an unusual location.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 

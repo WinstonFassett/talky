@@ -103,6 +103,93 @@ def _is_tool_env() -> bool:
     return ".local/share/uv/tools/" in sys.executable
 
 
+# Extras whose Python packages compile against native libs that must be
+# present on the system before pip/uv can build them. Ticket 4fbd —
+# detect missing native deps before triggering a from-source build that
+# would otherwise dump a C compiler error on the user.
+_NATIVE_DEPS_BY_EXTRA = {
+    "local_audio": ("portaudio", "pyaudio"),
+    "audio": ("portaudio", "pyaudio"),
+}
+
+
+def _check_portaudio_present() -> tuple[bool, str]:
+    """Detect libportaudio on this system. Returns (present, install_hint).
+
+    No subprocess on the happy path — checks well-known library locations
+    via Path.exists() first. Falls back to pkg-config only if those miss.
+    """
+    import platform
+    from pathlib import Path
+
+    system = platform.system()
+    if system == "Darwin":
+        # Homebrew (Apple Silicon + Intel) and macports.
+        candidates = [
+            "/opt/homebrew/lib/libportaudio.dylib",
+            "/usr/local/lib/libportaudio.dylib",
+            "/opt/local/lib/libportaudio.dylib",
+        ]
+        for c in candidates:
+            if Path(c).exists():
+                return True, ""
+        return False, "Install with: brew install portaudio"
+
+    if system == "Linux":
+        candidates = [
+            "/usr/lib/x86_64-linux-gnu/libportaudio.so.2",
+            "/usr/lib/aarch64-linux-gnu/libportaudio.so.2",
+            "/usr/lib64/libportaudio.so.2",
+            "/usr/lib/libportaudio.so.2",
+        ]
+        for c in candidates:
+            if Path(c).exists():
+                return True, ""
+
+        # Fall back to pkg-config — handles unusual install paths.
+        try:
+            result = subprocess.run(
+                ["pkg-config", "--exists", "portaudio-2.0"],
+                capture_output=True,
+            )
+            if result.returncode == 0:
+                return True, ""
+        except FileNotFoundError:
+            pass
+
+        # Distro-specific hint based on which package manager is present.
+        if Path("/usr/bin/apt-get").exists() or Path("/usr/bin/apt").exists():
+            hint = "Install with: sudo apt install portaudio19-dev"
+        elif Path("/usr/bin/dnf").exists():
+            hint = "Install with: sudo dnf install portaudio-devel"
+        elif Path("/usr/bin/pacman").exists():
+            hint = "Install with: sudo pacman -S portaudio"
+        else:
+            hint = "Install portaudio via your system package manager (look for portaudio19-dev / portaudio-devel)"
+        return False, hint
+
+    # Windows / other — pyaudio wheels exist there, native check N/A.
+    return True, ""
+
+
+def _check_native_deps_for_extra(extra: str) -> tuple[bool, str]:
+    """Check native system libraries required by an extra's Python packages.
+
+    Returns (ok, reason). ok=True means the extra is safe to install via
+    the normal uv path. ok=False means a system lib is missing and the
+    user must install it before retrying.
+    """
+    native = _NATIVE_DEPS_BY_EXTRA.get(extra)
+    if not native:
+        return True, ""
+    native_lib, _python_pkg = native
+    if native_lib == "portaudio":
+        ok, hint = _check_portaudio_present()
+        if not ok:
+            return False, f"portaudio system library is missing. {hint}"
+    return True, ""
+
+
 def _read_project_extras() -> dict[str, list[str]]:
     """Return {extra_name: [package_spec, ...]} for the installed talky package.
 
@@ -271,6 +358,14 @@ def install_extra_no_reexec(extra: str) -> bool:
     """
     if _check_extra_installed(extra):
         return True
+
+    # Native-dep gate (ticket 4fbd) — refuse to attempt the install if a
+    # required system library is missing. Otherwise pip would try to
+    # build from source and dump a C compiler error.
+    native_ok, native_reason = _check_native_deps_for_extra(extra)
+    if not native_ok:
+        logger.error(f"Cannot install extra {extra!r}: {native_reason}")
+        return False
 
     extras = _read_project_extras()
     packages = extras.get(extra, [])
