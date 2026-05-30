@@ -143,12 +143,43 @@ def _kill_pids_on_port(port: int) -> bool:
     return False
 
 
+def _ensure_local_audio_extra() -> bool:
+    """Ensure the `local_audio` extra (pyaudio) is installed.
+
+    Local audio (talky say/ask) requires pyaudio. It's an opt-in extra so
+    users who only use the browser/MCP path don't pay the portaudio system
+    dep. If missing, install it via the same on-demand path the LLM
+    backends use, then tell the user to retry — the running CLI process
+    can't see the new package without restart.
+
+    Returns True if pyaudio is already importable. Returns False (and
+    triggers install + exits 0) if it was missing.
+    """
+    try:
+        import pyaudio  # noqa: F401
+        return True
+    except ImportError:
+        pass
+
+    from talky.shared.dependency_installer import install_extra_no_reexec
+    print("⚙️  local audio requires pyaudio — installing the `local_audio` extra...", file=sys.stderr)
+    ok = install_extra_no_reexec("local_audio")
+    if ok:
+        print("✅ installed. retry your command.", file=sys.stderr)
+        sys.exit(0)
+    else:
+        print("❌ install failed. Manually: `uv tool install talky --with pyaudio --force`", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_say(args):
     """Handle the 'say' subcommand."""
     # Set log level environment variable if specified
     if getattr(args, "log_level", None):
         os.environ["TALKY_LOG_LEVEL"] = args.log_level
-    
+
+    _ensure_local_audio_extra()
+
     from talky.shared.daemon_protocol import voice_daemon_is_running
 
     # Daemon management sub-actions
@@ -230,6 +261,8 @@ def cmd_ask(args):
     """Handle the 'ask' subcommand — speak text then listen for response."""
     if getattr(args, "log_level", None):
         os.environ["TALKY_LOG_LEVEL"] = args.log_level
+
+    _ensure_local_audio_extra()
 
     from talky.shared.daemon_protocol import voice_daemon_is_running
 
@@ -321,15 +354,7 @@ def cmd_transcribe(args):
     log_level = getattr(args, "log_level", None)
     setup_logging(log_level)
     
-    try:
-        import pyaudio  # noqa: F401
-    except ImportError:
-        print("pyaudio is required for transcription. Install with:")
-        if ".local/share/uv/tools/" in sys.executable:
-            print("  uv tool install --editable . --with pyaudio")
-        else:
-            print("  uv pip install pyaudio")
-        sys.exit(1)
+    _ensure_local_audio_extra()
 
     import asyncio
 
