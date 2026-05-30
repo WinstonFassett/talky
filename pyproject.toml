@@ -107,6 +107,7 @@ talky = [
     # ../../client/dist; wheel build materializes the actual files.
     "_client_dist/**/*",
     "_skill/**/*",
+    "_extensions_pi_voice/**/*",
 ]
 
 [tool.pytest.ini_options]

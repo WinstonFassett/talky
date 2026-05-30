@@ -98,7 +98,9 @@ Extension → daemon:
 
 ## See also
 
-The same `/ws/agent` protocol drives Claude — see `extensions/claude-voice/` for the Node-side Claude Agent SDK bridge (foreground `talky claude`).
+`talky claude` uses a different path — the Claude Code CLI has no plugin
+loader, so it drives the daemon via MCP tools (see `talky` skill +
+`/api/mcp` server) rather than a `/ws/agent` extension.
 
 ## References
 
@@ -106,4 +108,3 @@ The same `/ws/agent` protocol drives Claude — see `extensions/claude-voice/` f
 - [Talky Daemon](../src/talky/server/)
 - [agent_ext.py](../../src/talky/server/agent_ext.py)
 - [extensions/pi-voice/extension.ts](../../extensions/pi-voice/extension.ts)
-- [extensions/claude-voice/index.mjs](../../extensions/claude-voice/index.mjs)

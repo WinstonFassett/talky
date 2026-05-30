@@ -992,9 +992,16 @@ def main():
 
 
 def _render_launcher_token(token: str, *, extension: str, cwd: str) -> str:
-    """Expand ``{project_root}``, ``{cwd}``, and ``{extension}`` in a token."""
+    """Expand ``{project_root}``, ``{pkg_dir}``, ``{cwd}``, and ``{extension}`` in a token.
+
+    ``{project_root}`` — repo root; only valid in editable installs.
+    ``{pkg_dir}``      — the installed talky package dir; valid in both editable
+                         and wheel installs. Use this for files bundled with
+                         the package (e.g. extensions/pi-voice).
+    """
     return token.format(
         project_root=str(_root),
+        pkg_dir=str(_PKG_DIR),
         cwd=cwd,
         extension=extension,
     )

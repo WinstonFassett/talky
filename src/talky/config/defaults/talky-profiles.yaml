@@ -38,7 +38,7 @@ talky_profiles:
       mode: foreground
       command: ["pi"]
       extension_arg: "-e"
-      extension: "{project_root}/extensions/pi-voice/extension.ts"
+      extension: "{pkg_dir}/_extensions_pi_voice/extension.ts"
 
   # Claude — EXCEPTION to the naming convention.
   # Normally `<agent>` is background and `<agent>-tui` is foreground, but for
