@@ -260,13 +260,12 @@ def cmd_say(args):
         # TTS init takes 3-5s. Without the wait the tts client races and
         # gets "Daemon not running" before the socket exists.
         from talky.shared.daemon_protocol import wait_for_voice_daemon
-        subprocess.Popen(
-            [sys.executable, "-m", "talky.local_audio.daemon", "--start"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        _spawn_voice_daemon()
         if not wait_for_voice_daemon(timeout=30.0):
-            print("❌ voice daemon failed to start within 30s", file=sys.stderr)
+            print(
+                f"❌ voice daemon failed to start within 30s — see {_VOICE_DAEMON_LOG_PATH}",
+                file=sys.stderr,
+            )
             sys.exit(1)
         cmd = [sys.executable, "-m", "talky.local_audio.tts", args.text]
 
@@ -307,13 +306,12 @@ def cmd_ask(args):
     # without an explicit wait the client races and fails.
     if not voice_daemon_is_running():
         from talky.shared.daemon_protocol import wait_for_voice_daemon
-        subprocess.Popen(
-            [sys.executable, "-m", "talky.local_audio.daemon", "--start"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        _spawn_voice_daemon()
         if not wait_for_voice_daemon(timeout=30.0):
-            print("❌ voice daemon failed to start within 30s", file=sys.stderr)
+            print(
+                f"❌ voice daemon failed to start within 30s — see {_VOICE_DAEMON_LOG_PATH}",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     # Build voice_client command
@@ -763,6 +761,26 @@ _DAEMON_READY_PATH = _DAEMON_RUN_DIR / "talky-daemon.ready"
 _DAEMON_PID_PATH = _DAEMON_RUN_DIR / "talky-daemon.pid"
 _DAEMON_LOCK_PATH = _DAEMON_RUN_DIR / "talky-daemon.lock"
 _DAEMON_ARGS_PATH = _DAEMON_RUN_DIR / "talky-args.json"
+_VOICE_DAEMON_LOG_PATH = _DAEMON_RUN_DIR / "voice-daemon.log"
+
+
+def _spawn_voice_daemon() -> None:
+    """Spawn the local-audio (voice) daemon with stdout+stderr captured.
+
+    Without redirection, stderr is detached and any failure before loguru
+    initializes (import errors, native library errors, segfaults) goes to
+    /dev/null. Ticket f619 — always send stderr somewhere readable.
+    """
+    _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    log_fh = open(_VOICE_DAEMON_LOG_PATH, "a")
+    subprocess.Popen(
+        [sys.executable, "-m", "talky.local_audio.daemon", "--start"],
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
 
 
 def talky_daemon_is_running() -> bool:
@@ -858,7 +876,10 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
             )
             _DAEMON_PID_PATH.write_text(str(proc.pid))
         except (FileNotFoundError, subprocess.SubprocessError) as e:
-            print(f"\n❌ could not spawn `talky daemon`: {e}", file=sys.stderr)
+            print(
+                f"\n❌ could not spawn `talky daemon`: {e} — see {log_path}",
+                file=sys.stderr,
+            )
             lock_fh.close()
             return False
     else:
