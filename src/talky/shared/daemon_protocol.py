@@ -67,6 +67,22 @@ def voice_daemon_is_running() -> bool:
     return _check_daemon(VOICE_PID_FILE, VOICE_SOCKET_PATH)
 
 
+def wait_for_voice_daemon(timeout: float = 30.0, poll_interval: float = 0.1) -> bool:
+    """Block until the voice daemon is accepting connections or timeout elapses.
+
+    Used right after spawning the daemon via `python -m talky.local_audio.daemon
+    --start`, which detaches before the daemon finishes initializing TTS
+    services. Returns True if the socket is up before timeout, False otherwise.
+    """
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if voice_daemon_is_running():
+            return True
+        _time.sleep(poll_interval)
+    return False
+
+
 def cleanup_legacy_daemon() -> None:
     """Clean up stale legacy daemon socket/pid files."""
     LEGACY_SOCKET_PATH.unlink(missing_ok=True)

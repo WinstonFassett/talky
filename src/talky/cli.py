@@ -230,13 +230,20 @@ def cmd_say(args):
     if voice_daemon_is_running():
         cmd = [sys.executable, "-m", "talky.local_audio.tts", args.text]
     else:
-        # Auto-start daemon, use client with wait
+        # Auto-start daemon, then block here until it's actually accepting
+        # connections. The Popen call returns immediately (daemon detaches);
+        # TTS init takes 3-5s. Without the wait the tts client races and
+        # gets "Daemon not running" before the socket exists.
+        from talky.shared.daemon_protocol import wait_for_voice_daemon
         subprocess.Popen(
             [sys.executable, "-m", "talky.local_audio.daemon", "--start"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        cmd = [sys.executable, "-m", "talky.local_audio.tts", "--wait", "15", args.text]
+        if not wait_for_voice_daemon(timeout=30.0):
+            print("❌ voice daemon failed to start within 30s", file=sys.stderr)
+            sys.exit(1)
+        cmd = [sys.executable, "-m", "talky.local_audio.tts", args.text]
 
     if args.voice_profile:
         cmd.extend(["-p", args.voice_profile])
@@ -270,27 +277,27 @@ def cmd_ask(args):
         print("Usage: talky ask <text>", file=sys.stderr)
         sys.exit(1)
 
-    # Ensure daemon is running (auto-start if needed)
-    need_wait = False
+    # Ensure daemon is running (auto-start if needed). Block until the
+    # socket is up — Popen detaches before TTS init completes (3-5s), so
+    # without an explicit wait the client races and fails.
     if not voice_daemon_is_running():
+        from talky.shared.daemon_protocol import wait_for_voice_daemon
         subprocess.Popen(
             [sys.executable, "-m", "talky.local_audio.daemon", "--start"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        need_wait = True
+        if not wait_for_voice_daemon(timeout=30.0):
+            print("❌ voice daemon failed to start within 30s", file=sys.stderr)
+            sys.exit(1)
 
     # Build voice_client command
     cmd = [
         sys.executable,
         "-m", "talky.local_audio.client",
         "--cmd", "ask",
+        args.text,
     ]
-
-    if need_wait:
-        cmd.extend(["--wait", "30"])
-
-    cmd.append(args.text)
 
     if args.voice_profile:
         cmd.extend(["-p", args.voice_profile])
