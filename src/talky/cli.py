@@ -46,6 +46,30 @@ def _daemon_host_port() -> tuple[str, int]:
     return host, port
 
 
+def _daemon_tls_configured() -> bool:
+    """Mirror the daemon's TLS-detection logic so the client probes the right scheme.
+
+    Daemon serves HTTPS iff both cert and key resolve (env or settings.network.https.{cert,key}).
+    """
+    cert = os.environ.get("TALKY_HTTPS_CERT") or os.environ.get("MCP_SSL_CERTFILE")
+    key = os.environ.get("TALKY_HTTPS_KEY") or os.environ.get("MCP_SSL_KEYFILE")
+    if not (cert and key):
+        try:
+            from talky.shared.profile_manager import get_profile_manager
+            settings = get_profile_manager().settings or {}
+            net = (settings.get("network") or {}) if isinstance(settings, dict) else {}
+            https = (net.get("https") or {}) if isinstance(net, dict) else {}
+            cert = cert or https.get("cert")
+            key = key or https.get("key")
+        except Exception:
+            return False
+    if not (cert and key):
+        return False
+    cert = os.path.expanduser(cert)
+    key = os.path.expanduser(key)
+    return os.path.exists(cert) and os.path.exists(key)
+
+
 def _daemon_http_port() -> int:
     """Plain-HTTP loopback port (default 19080)."""
     raw = os.environ.get("TALKY_HTTP_PORT")
@@ -77,18 +101,19 @@ def _unverified_ssl_ctx() -> ssl.SSLContext:
 def daemon_base_url() -> str:
     """Probe the daemon scheme + port once per process.
 
-    Tries HTTPS on the primary port first, then plain HTTP on the loopback
-    port (default 19080). Caches the result for the rest of the process.
+    Primary-port scheme follows TLS config (HTTPS iff cert+key resolve, else HTTP).
+    Falls back to the plain-HTTP loopback port when TLS is on but primary HTTPS misses.
     """
     global _DAEMON_BASE_URL_CACHE
     if _DAEMON_BASE_URL_CACHE is not None:
         return _DAEMON_BASE_URL_CACHE
     host, primary_port = _daemon_host_port()
     http_port = _daemon_http_port()
-    candidates = [
-        ("https", host, primary_port),
-        ("http", "localhost", http_port),
-    ]
+    tls = _daemon_tls_configured()
+    if tls:
+        candidates = [("https", host, primary_port), ("http", "localhost", http_port)]
+    else:
+        candidates = [("http", host, primary_port)]
     for scheme, h, p in candidates:
         url = f"{scheme}://{h}:{p}/api/profiles"
         try:
@@ -98,8 +123,8 @@ def daemon_base_url() -> str:
                 return _DAEMON_BASE_URL_CACHE
         except (urllib.error.URLError, ssl.SSLError, ConnectionError, OSError):
             continue
-    # Daemon unreachable; return https primary so callers get a clear error.
-    _DAEMON_BASE_URL_CACHE = f"https://{host}:{primary_port}"
+    fallback_scheme = "https" if tls else "http"
+    _DAEMON_BASE_URL_CACHE = f"{fallback_scheme}://{host}:{primary_port}"
     return _DAEMON_BASE_URL_CACHE
 
 
