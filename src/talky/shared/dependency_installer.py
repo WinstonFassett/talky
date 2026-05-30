@@ -103,6 +103,28 @@ def _is_tool_env() -> bool:
     return ".local/share/uv/tools/" in sys.executable
 
 
+def _is_venv() -> bool:
+    """True if running inside a venv / virtualenv (uv tool envs included)."""
+    return sys.prefix != sys.base_prefix
+
+
+def _install_context() -> str:
+    """Classify how talky was installed. Drives the on-demand installer.
+
+    Returns one of:
+      - "uv-tool"    — `uv tool install talky` (the documented happy path)
+      - "venv"       — a project venv (`uv venv`/`python -m venv`/etc.)
+      - "system-pip" — installed into base Python's site-packages; no venv
+                       wraps us. On-demand `uv pip install` will fail
+                       because uv refuses to mutate system Python.
+    """
+    if _is_tool_env():
+        return "uv-tool"
+    if _is_venv():
+        return "venv"
+    return "system-pip"
+
+
 # Extras whose Python packages compile against native libs that must be
 # present on the system before pip/uv can build them. Ticket 4fbd —
 # detect missing native deps before triggering a from-source build that
@@ -358,6 +380,18 @@ def install_extra_no_reexec(extra: str) -> bool:
     """
     if _check_extra_installed(extra):
         return True
+
+    # Install-context gate (ticket 0fee) — refuse if we're in a system
+    # Python with no surrounding venv. `uv pip install` won't write to
+    # system Python, and writing there would be the wrong thing anyway.
+    context = _install_context()
+    if context == "system-pip":
+        logger.error(
+            "talky was installed into system Python (no venv). On-demand "
+            "extras require a uv tool install. To fix: `pip uninstall talky` "
+            "and then `uv tool install talky`. See README for install docs."
+        )
+        return False
 
     # Native-dep gate (ticket 4fbd) — refuse to attempt the install if a
     # required system library is missing. Otherwise pip would try to

@@ -37,13 +37,18 @@ Voice interface for AI. Talk to OpenClaw, Moltis, Hermes or Pi. Or use MCP to ta
 
 ```bash
 brew install portaudio                # required for local audio (talky say)
-uv tool install --editable .
+uv tool install talky                 # from PyPI, or: uv tool install --editable . (from source)
 talky openclaw                    # Talk to OpenClaw
 talky moltis                      # Talk to Moltis  
 talky hermes                      # Talk to Hermes (NousResearch)
 talky pi                          # Talk to Pi
 talky say "Hello world"           # Test voice output
 ```
+
+> **Install via `uv tool`, not `pip`.** Talky installs heavy LLM / TTS / STT
+> dependencies on-demand via `uv tool install --with`. Plain `pip install talky`
+> into system Python leaves the on-demand installer with nowhere to write, and
+> it will refuse with an error.
 
 ## Usage
 
