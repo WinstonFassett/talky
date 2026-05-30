@@ -49,17 +49,47 @@ def recv_message(sock: socket.socket, timeout: float = 30.0) -> dict:
 
 
 def _check_daemon(pid_file: Path, socket_path: Path) -> bool:
-    """Check if a daemon is running by PID file + socket existence."""
+    """Check if a daemon is alive AND actually accepting connections.
+
+    Three failure modes to detect:
+      1. PID file missing -> not running.
+      2. PID file points at dead process -> stale, clean up.
+      3. PID alive + socket file present but not accepting connections
+         (daemon hung mid-init, zombied, etc.) -> treat as not running
+         and clean up so the next --start can take over.
+    """
     if not pid_file.exists():
         return False
     try:
         pid = int(pid_file.read_text().strip())
-        os.kill(pid, 0)
-        return socket_path.exists()
+        os.kill(pid, 0)  # raises ProcessLookupError if dead
     except (ProcessLookupError, ValueError):
         pid_file.unlink(missing_ok=True)
         socket_path.unlink(missing_ok=True)
         return False
+
+    # Process is alive — but is it actually serving? Try the socket.
+    if not socket_path.exists():
+        return False
+    import socket as _socket
+    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    sock.settimeout(0.5)
+    try:
+        sock.connect(str(socket_path))
+        return True
+    except (ConnectionRefusedError, FileNotFoundError, _socket.timeout, OSError):
+        # Socket file exists but no one's listening (or it's hung).
+        # Clean up so the next caller can spawn a fresh daemon.
+        import signal as _signal
+        try:
+            os.kill(pid, _signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        pid_file.unlink(missing_ok=True)
+        socket_path.unlink(missing_ok=True)
+        return False
+    finally:
+        sock.close()
 
 
 def voice_daemon_is_running() -> bool:
