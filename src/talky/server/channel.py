@@ -282,11 +282,48 @@ class VoiceChannel:
         except ImportError:
             self._warm_voice_prompt = None
 
+        # Backend Status — populate here so the picker has it before any
+        # browser peer connects (SSE init carries `backendStatus`). Cheap:
+        # each adapter's `status()` is a pure config/install check, no
+        # network. See UBIQUITOUS_LANGUAGE.md.
+        self._refresh_backend_status(pm)
+
         self._warm = True
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(
             f"VoiceChannel warm (profile={self._warm_profile_name}, {elapsed_ms:.0f}ms)"
         )
+
+    def _refresh_backend_status(self, pm: Any) -> None:
+        """Recompute Backend Status for every Backend. Idempotent, cheap."""
+        from talky.backends import BackendStatus
+
+        statuses: dict[str, dict] = {
+            self.MCP_DRIVER_PROFILE: {"status": BackendStatus.READY.value, "reason": ""},
+        }
+        for backend_name in pm.list_llm_backends().keys():
+            try:
+                cls = _resolve_backend_adapter_class(pm, backend_name)
+            except Exception as e:  # noqa: BLE001
+                statuses[backend_name] = {
+                    "status": BackendStatus.BLOCKED.value,
+                    "reason": f"could not resolve adapter class: {e}",
+                }
+                continue
+            status_fn = getattr(cls, "status", None)
+            if status_fn is None:
+                statuses[backend_name] = {"status": BackendStatus.READY.value, "reason": ""}
+                continue
+            try:
+                bs, reason = status_fn()
+            except Exception as e:  # noqa: BLE001
+                statuses[backend_name] = {
+                    "status": BackendStatus.BLOCKED.value,
+                    "reason": f"status() raised: {e}",
+                }
+                continue
+            statuses[backend_name] = {"status": bs.value, "reason": reason}
+        self._backend_status = statuses
 
     # ── status ──────────────────────────────────────────────────────────────
 
@@ -1207,52 +1244,26 @@ class VoiceChannel:
         # LLMSwitcher slot (= Backend Switcher in our vocabulary, see
         # UBIQUITOUS_LANGUAGE.md): MCPDriver first (default active) then
         # every Backend whose Backend Status is Ready. Non-Ready backends
-        # are skipped here and their reason is recorded in
-        # self._backend_status for the picker to surface. See ticket 8fbe.
+        # are skipped here. Backend Status was populated in warmup() so the
+        # picker had it before this pipeline build; we refresh now in case
+        # state changed since warmup. See ticket 8fbe.
         from talky.backends import BackendStatus
+
+        self._refresh_backend_status(pm)
 
         mcp_driver = MCPDriverLLMService(user_speech_queue=self._user_speech_queue)
         llm_services: list = [mcp_driver]
         profile_map: dict[str, Any] = {
             self.MCP_DRIVER_PROFILE: mcp_driver,
         }
-        backend_status: dict[str, dict] = {
-            self.MCP_DRIVER_PROFILE: {"status": BackendStatus.READY.value, "reason": ""},
-        }
 
         for backend_name in pm.list_llm_backends().keys():
-            # Resolve the Backend Adapter class without instantiating, so
-            # we can ask its static status() before deciding to construct.
-            try:
-                cls = _resolve_backend_adapter_class(pm, backend_name)
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"VoiceChannel: cannot resolve {backend_name!r}: {e}")
-                backend_status[backend_name] = {
-                    "status": BackendStatus.BLOCKED.value,
-                    "reason": f"could not resolve adapter class: {e}",
-                }
-                continue
-
-            # Backend Status gate — only Ready backends get a Live Adapter.
-            status_fn = getattr(cls, "status", None)
-            if status_fn is None:
-                # Adapter predates the status() contract — treat as Ready
-                # and let construction surface any real problem. Track in
-                # the rename ticket so every adapter implements status().
-                bs, reason = BackendStatus.READY, ""
-            else:
-                try:
-                    bs, reason = status_fn()
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(f"VoiceChannel: {backend_name!r} status() raised: {e}")
-                    bs, reason = BackendStatus.BLOCKED, f"status() raised: {e}"
-
-            backend_status[backend_name] = {"status": bs.value, "reason": reason}
-
-            if bs is not BackendStatus.READY:
+            entry = self._backend_status.get(backend_name)
+            status_str = entry.get("status") if entry else None
+            if status_str != BackendStatus.READY.value:
                 logger.info(
                     f"VoiceChannel: skipping backend {backend_name!r} "
-                    f"({bs.value}): {reason}"
+                    f"({status_str}): {entry.get('reason') if entry else 'no status'}"
                 )
                 continue
 
@@ -1260,15 +1271,13 @@ class VoiceChannel:
                 svc = _instantiate_llm_backend(pm, backend_name)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"VoiceChannel: skipping backend {backend_name!r}: {e}")
-                backend_status[backend_name] = {
+                self._backend_status[backend_name] = {
                     "status": BackendStatus.BLOCKED.value,
                     "reason": f"construction failed: {e}",
                 }
                 continue
             llm_services.append(svc)
             profile_map[backend_name] = svc
-
-        self._backend_status = backend_status
 
         llm_switcher = LLMSwitcher(llms=llm_services, strategy_type=ServiceSwitcherStrategyManual)
         logger.info(
