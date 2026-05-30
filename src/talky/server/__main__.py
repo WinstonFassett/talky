@@ -1129,10 +1129,18 @@ def _build_app():
     for route in reversed(webrtc_routes):
         mcp_starlette.router.routes.insert(0, route)
 
-    # Static frontend at the catch-all.
-    client_dist = Path(__file__).parent.parent.parent.parent / "client" / "dist"
+    # Static frontend at the catch-all. Bundled into the wheel at
+    # talky/_client_dist/ (in editable installs, it's a symlink to
+    # client/dist/ at the repo root, so `npm run build` updates it live).
+    client_dist = Path(__file__).parent.parent / "_client_dist"
+    if not client_dist.is_dir():
+        # Editable-install legacy path — for repos that haven't symlinked yet.
+        legacy = Path(__file__).parent.parent.parent.parent / "client" / "dist"
+        if legacy.is_dir():
+            client_dist = legacy
+
     dev_mode = os.getenv("TALKY_DEV", "").strip() not in ("", "0")
-    if not dev_mode and client_dist.is_dir():
+    if not dev_mode and client_dist.is_dir() and (client_dist / "index.html").exists():
         logger.info(f"Serving frontend from {client_dist}")
         mcp_starlette.router.routes.append(
             Mount("/", app=StaticFiles(directory=str(client_dist), html=True)),

@@ -100,7 +100,13 @@ where = ["src"]
 include = ["talky*"]
 
 [tool.setuptools.package-data]
-talky = ["config/**/*.yaml", "config/**/*.yml"]
+talky = [
+    "config/**/*.yaml",
+    "config/**/*.yml",
+    # Pre-built SPA bundle. In editable installs this is a symlink to
+    # ../../client/dist; wheel build materializes the actual files.
+    "_client_dist/**/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
