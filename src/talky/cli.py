@@ -784,11 +784,41 @@ def _clear_daemon_files() -> None:
             pass
 
 
+def _probe_daemon_http() -> bool:
+    """Return True if /api/ready answers — meaning uvicorn has bound but the
+    daemon may still be running pre-warm. Used by ensure_daemon to detect
+    listening-but-not-ready state and surface readiness progress.
+    """
+    try:
+        url = daemon_base_url() + "/api/ready"
+        ctx = _unverified_ssl_ctx() if url.startswith("https:") else None
+        with urllib.request.urlopen(url, context=ctx, timeout=1.0) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _fetch_readiness() -> dict | None:
+    try:
+        url = daemon_base_url() + "/api/ready"
+        ctx = _unverified_ssl_ctx() if url.startswith("https:") else None
+        with urllib.request.urlopen(url, context=ctx, timeout=1.0) as resp:
+            if resp.status != 200:
+                return None
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
 def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
     """Ensure the talky daemon is running on :9090. Spawn it (detached) if not.
 
     Uses a lock file to serialize spawning. Waits for the daemon's ready
-    file (written after uvicorn binds) rather than sniffing ports.
+    file (written after uvicorn binds + pre-warm completes). While
+    pre-warm is in flight, polls /api/ready and surfaces task progress so
+    the user sees what's happening (e.g. HF model downloads, dep installs)
+    instead of silent dots. Default wait grows automatically when active
+    readiness work is observed.
     Returns True on success, False on timeout.
     """
     import fcntl
@@ -835,15 +865,24 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
         if verbose:
             print("⏳ talky daemon is starting...", file=sys.stderr, end="", flush=True)
 
-    # Poll for the ready file, showing progress dots.
+    # Poll for the ready file. While the daemon is listening but not yet
+    # ready, surface readiness tasks (e.g. HF model download progress,
+    # extra installs) instead of silent dots. Wait extends automatically
+    # while active readiness work is observed — first-run downloads can
+    # legitimately take 10+ minutes.
     deadline = time.monotonic() + wait_secs
     dot_interval = 2.0
     next_dot = time.monotonic() + dot_interval
+    last_status_line = ""
+    saw_listening = False
     try:
         while time.monotonic() < deadline:
             if talky_daemon_is_running():
                 if verbose:
                     _, _port = _daemon_host_port()
+                    # Clear any in-progress status line.
+                    if last_status_line:
+                        print("\r" + " " * len(last_status_line) + "\r", file=sys.stderr, end="", flush=True)
                     print(f"\n✅ talky daemon up on :{_port}", file=sys.stderr)
                 return True
             # Check if the spawned process died before becoming ready.
@@ -856,11 +895,43 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
                 return False
             except PermissionError:
                 pass  # alive but owned by another user — keep waiting
+
+            # Try to fetch readiness — only meaningful once uvicorn binds.
+            r = _fetch_readiness()
             now = time.monotonic()
-            if verbose and now >= next_dot:
-                print(".", file=sys.stderr, end="", flush=True)
-                next_dot = now + dot_interval
-            time.sleep(0.3)
+            if r is not None:
+                if not saw_listening:
+                    saw_listening = True
+                    if verbose:
+                        print("\n   listening, finishing setup...", file=sys.stderr, flush=True)
+                tasks = r.get("tasks") or []
+                if tasks:
+                    # Active work — extend the deadline so first-run downloads
+                    # don't hit a 30s timeout.
+                    deadline = max(deadline, now + 120.0)
+                    if verbose:
+                        first = tasks[0]
+                        name = first.get("name", "")
+                        pct = first.get("pct")
+                        line = f"   {name}"
+                        if pct is not None:
+                            line += f" ({pct:.0f}%)"
+                        extra = len(tasks) - 1
+                        if extra > 0:
+                            line += f" (+{extra} more)"
+                        # Carriage-return overwrite.
+                        pad = max(0, len(last_status_line) - len(line))
+                        print("\r" + line + (" " * pad), file=sys.stderr, end="", flush=True)
+                        last_status_line = line
+                else:
+                    # Listening, no open tasks — usually a transient race
+                    # between ready_file write and our next probe.
+                    pass
+            else:
+                if verbose and now >= next_dot:
+                    print(".", file=sys.stderr, end="", flush=True)
+                    next_dot = now + dot_interval
+            time.sleep(0.5)
 
         print(
             f"\n❌ talky daemon failed to come up within {wait_secs:.0f}s. "

@@ -284,42 +284,56 @@ def install_extra_no_reexec(extra: str) -> bool:
         return False
 
     logger.info(f"Installing extra {extra!r}: {packages}")
+    # Surface install to readiness tracker so CLI/SPA can show progress.
+    # Lazy import: dependency_installer is also used by the CLI at module
+    # import time, before the server package is on sys.path in some flows.
+    try:
+        from talky.server.readiness import readiness
+        track_cm = readiness.track(f"Installing {extra}")
+    except Exception:
+        from contextlib import nullcontext
+        track_cm = nullcontext(None)
 
-    if _is_tool_env():
-        # Use uv tool install --with so the package is persisted in the tool
-        # env's --with list and survives future `uv tool install --force`.
-        # Must pass ALL currently installed extras (not just the new one)
-        # because --with replaces the full list.
-        all_packages = list(packages)
-        for e, pkgs in extras.items():
-            if e != extra and _check_extra_installed(e):
-                all_packages.extend(pkgs)
-        python = sys.executable
+    with track_cm as _t:
+        if _is_tool_env():
+            # Use uv tool install --with so the package is persisted in the tool
+            # env's --with list and survives future `uv tool install --force`.
+            # Must pass ALL currently installed extras (not just the new one)
+            # because --with replaces the full list.
+            all_packages = list(packages)
+            for e, pkgs in extras.items():
+                if e != extra and _check_extra_installed(e):
+                    all_packages.extend(pkgs)
+            python = sys.executable
 
-        # Detect editable vs wheel install. Editable installs have a
-        # pyproject.toml at the repo root; wheel installs don't.
-        is_editable = (_root / "pyproject.toml").exists()
-        if is_editable:
-            install_target = ["--editable", str(_root)]
+            # Detect editable vs wheel install. Editable installs have a
+            # pyproject.toml at the repo root; wheel installs don't.
+            is_editable = (_root / "pyproject.toml").exists()
+            if is_editable:
+                install_target = ["--editable", str(_root)]
+            else:
+                install_target = ["talky"]
+
+            if _t is not None:
+                _t.progress(msg=f"uv tool install --with {extra}")
+            result = subprocess.run(
+                [uv, "tool", "install", *install_target, "--python", python]
+                + [f"--with={pkg}" for pkg in all_packages],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                logger.error(f"Install failed: {result.stderr}")
+                return False
         else:
-            install_target = ["talky"]
-
-        result = subprocess.run(
-            [uv, "tool", "install", *install_target, "--python", python]
-            + [f"--with={pkg}" for pkg in all_packages],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            logger.error(f"Install failed: {result.stderr}")
-            return False
-    else:
-        result = subprocess.run(
-            [uv, "pip", "install"] + packages,
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            logger.error(f"Install failed: {result.stderr}")
-            return False
+            if _t is not None:
+                _t.progress(msg=f"uv pip install {extra}")
+            result = subprocess.run(
+                [uv, "pip", "install"] + packages,
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                logger.error(f"Install failed: {result.stderr}")
+                return False
 
     logger.info(f"Extra {extra!r} installed — restart the daemon: talky kill && talky daemon")
     return True

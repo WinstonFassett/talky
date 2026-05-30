@@ -871,6 +871,17 @@ def _build_webrtc_routes():
             return JSONResponse({"error": "no pending permission request"}, status_code=409)
         return JSONResponse({"status": "ok", "allow": allow})
 
+    async def handle_ready(request: Request):  # noqa: ARG001
+        """GET /api/ready — current readiness state of the daemon.
+
+        Returns ``{"ready": bool, "tasks": [...]}``. Clients that don't
+        want to hold an SSE stream open can poll this.
+        """
+        from talky.server.readiness import readiness as _readiness
+        return JSONResponse(
+            {"ready": _readiness.is_ready(), "tasks": _readiness.open_tasks()}
+        )
+
     async def handle_events(request: Request):
         """GET /api/events — SSE stream of daemon state changes.
 
@@ -893,6 +904,7 @@ def _build_webrtc_routes():
                         hermes_steer_mode = _svc.get_steer_mode()
                         break
 
+                from talky.server.readiness import readiness as _readiness
                 init = Event(
                     type="init",
                     data={
@@ -900,6 +912,8 @@ def _build_webrtc_routes():
                         "voices": voice_channel.voices_info(),
                         "live": voice_channel.is_live(),
                         "steerMode": hermes_steer_mode,
+                        "ready": _readiness.is_ready(),
+                        "readinessTasks": _readiness.open_tasks(),
                     },
                 )
                 yield init.sse()
@@ -1056,6 +1070,7 @@ def _build_webrtc_routes():
         Route("/api/steer-mode", handle_set_steer_mode, methods=["POST"]),
         Route("/api/permission/grant", handle_permission_grant, methods=["POST"]),
         Route("/api/events", handle_events, methods=["GET"]),
+        Route("/api/ready", handle_ready, methods=["GET"]),
         # Legacy compat — old CLI may still hit /api/profile.
         Route("/api/profile", handle_get_profile, methods=["GET"]),
         Route("/api/profile", handle_set_profile, methods=["POST"]),
@@ -1103,7 +1118,21 @@ def _build_app():
         # Start background health polling (ticket 73b9).
         voice_channel.start_health_polling(interval=30.0)
 
+        # Generic pre-warm: fetch any HF-backed assets the active voice
+        # profile needs, reporting progress through the readiness tracker.
+        # Off-thread so the event loop stays responsive and SSE / /api/ready
+        # subscribers can observe progress.
+        try:
+            from talky.server.prewarm import prewarm_hf_assets
+            await asyncio.to_thread(prewarm_hf_assets)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Pre-warm failed: {e}")
+
         # Signal to the CLI that the daemon is ready to accept requests.
+        # Gated on the readiness tracker so the ready-file only appears
+        # once all registered startup work is actually done.
+        from talky.server.readiness import readiness as _readiness
+        await _readiness.wait_ready()
         DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
         DAEMON_READY_PATH.write_text(str(os.getpid()))
         logger.info(f"Daemon ready (pid={os.getpid()}, ready_file={DAEMON_READY_PATH})")
