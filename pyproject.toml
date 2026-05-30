@@ -106,6 +106,7 @@ talky = [
     # Pre-built SPA bundle. In editable installs this is a symlink to
     # ../../client/dist; wheel build materializes the actual files.
     "_client_dist/**/*",
+    "_skill/**/*",
 ]
 
 [tool.pytest.ini_options]
