@@ -18,7 +18,17 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 /// Failure mode: a fallback splash page surfaces the error to the user.
 const DAEMON_POLL_TIMEOUT: Duration = Duration::from_secs(120);
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const BOOTSTRAP_URL: &str = "https://raw.githubusercontent.com/winstonfassett/talky/main/scripts/bootstrap/install-talky.sh";
+
+/// Bootstrap installer URL. Build-time override via `TALKY_BOOTSTRAP_URL` env
+/// var (consumed by build.rs / option_env!). Defaults to `main` for shipped
+/// builds; spike branches can rebuild with the var set to test end-to-end:
+///
+///   TALKY_BOOTSTRAP_URL='https://raw.githubusercontent.com/winstonfassett/talky/spike/distribution-parity/scripts/bootstrap/install-talky.sh' \
+///       cargo tauri build --bundles app
+const BOOTSTRAP_URL: &str = match option_env!("TALKY_BOOTSTRAP_URL") {
+    Some(url) => url,
+    None => "https://raw.githubusercontent.com/WinstonFassett/talky/main/scripts/bootstrap/install-talky.sh",
+};
 
 fn talky_run_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -79,20 +89,34 @@ fn spawn_daemon(talky_bin: &PathBuf) -> std::io::Result<()> {
     Ok(())
 }
 
-fn launch_bootstrap_in_terminal() -> std::io::Result<()> {
-    // Open Terminal.app with the bootstrap curl|bash. Lets the user see install
-    // progress in a familiar surface. Replace with a native progress UI later.
+/// Try to launch the bootstrap installer in Terminal.app. Returns `Ok(())`
+/// only when osascript exits 0 AND a Terminal window was actually told to
+/// run the script. Any failure (Terminal busy, AppleEvent timeout, sandboxed
+/// environment) returns an `Err` so the splash can surface a manual fallback.
+fn launch_bootstrap_in_terminal() -> Result<(), String> {
     let script = format!(
         "echo 'Installing Talky...'; curl -LsSf {} | bash; echo; echo 'Press return to close.'; read",
         BOOTSTRAP_URL
     );
-    Command::new("osascript")
+    // `activate` first so Terminal is foregrounded and ready to accept events.
+    // Without it, a launched-but-not-running Terminal can return -1712.
+    let applescript = format!(
+        "tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell",
+        script.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    let output = Command::new("osascript")
         .arg("-e")
-        .arg(format!(
-            "tell application \"Terminal\" to do script \"{}\"",
-            script.replace('"', "\\\"")
-        ))
-        .spawn()?;
+        .arg(&applescript)
+        .output()
+        .map_err(|e| format!("osascript not available: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("osascript exited with status {}", output.status)
+        } else {
+            stderr
+        });
+    }
     Ok(())
 }
 
@@ -155,13 +179,28 @@ pub fn run() {
                         }
                     }
                     StartupOutcome::BootstrapNeeded => {
-                        let _ = launch_bootstrap_in_terminal();
+                        let terminal_result = launch_bootstrap_in_terminal();
                         if let Some(win) = handle.get_webview_window("main") {
-                            let _ = win.eval(
-                                "document.body.innerHTML = '<h1>Installing Talky…</h1>\
+                            let html = match terminal_result {
+                                Ok(()) => format!(
+                                    "<h1>Installing Talky…</h1>\
 <p>Follow the prompts in the Terminal window that just opened.\
-After install completes, relaunch this app.</p>';",
-                            );
+After install completes, relaunch this app.</p>\
+<p style=\"opacity:.6;font-size:.85em\">Installer URL: <code>{}</code></p>",
+                                    BOOTSTRAP_URL
+                                ),
+                                Err(msg) => format!(
+                                    "<h1>Talky needs to be installed</h1>\
+<p>We couldn't open Terminal automatically. Open Terminal yourself and run:</p>\
+<pre style=\"background:#f4f4f4;padding:8px;border-radius:4px\">curl -LsSf {} | bash</pre>\
+<p>Then relaunch this app.</p>\
+<details><summary>Details</summary><pre>{}</pre></details>",
+                                    BOOTSTRAP_URL,
+                                    msg.replace('<', "&lt;")
+                                ),
+                            };
+                            let escaped = html.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n");
+                            let _ = win.eval(&format!("document.body.innerHTML = '{escaped}';"));
                         }
                     }
                     StartupOutcome::Failed(msg) => {
