@@ -64,7 +64,7 @@ echo "  python 3.12 ready"
 # target machine. Lets us dogfood end-to-end without publishing to PyPI
 # yet. The wheel embeds the built SPA in `_client_dist/`. Revert this
 # block to `uv tool install ... talky` (PyPI) before merging/releasing.
-TALKY_WHEEL="${TALKY_WHEEL:-/tmp/talky-local.whl}"
+TALKY_WHEEL="${TALKY_WHEEL:-/tmp/talky-0.1.2.dev0-py3-none-any.whl}"
 stage talky "Installing Talky from $TALKY_WHEEL"
 
 if [ ! -f "$TALKY_WHEEL" ]; then
