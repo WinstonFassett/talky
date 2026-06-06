@@ -266,3 +266,7 @@ desktop/zero-native/zig-out/
 
 # Inspiration: external repos cloned for architectural reference. Not part of the project.
 inspiration/
+
+# Local working copies of external sources (e.g. voice-ui-kit checkouts).
+# Not tracked in git — was previously an orphaned gitlink; cleared in this branch.
+sources.local/

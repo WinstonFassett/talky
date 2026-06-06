@@ -1,4 +1,0 @@
-[submodule "desktop/zero-native/vendor/zero-native"]
-	path = desktop/zero-native/vendor/zero-native
-	url = /Users/winston/dev/repos/zero-native
-	branch = talky-integration
