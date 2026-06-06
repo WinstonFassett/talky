@@ -31,6 +31,26 @@ fn read_port_runfile() -> Option<u16> {
         .and_then(|s| s.trim().parse::<u16>().ok())
 }
 
+/// Loopback HTTP port — only present when the daemon's primary listener
+/// is HTTPS. When present, prefer it so we can speak plain HTTP from the
+/// webview without self-signed-cert friction.
+fn read_loopback_port_runfile() -> Option<u16> {
+    fs::read_to_string(talky_run_dir().join("talky-daemon.loopback-port"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok())
+}
+
+/// Webview URL: prefer the loopback HTTP port when TLS is on so we don't
+/// hit self-signed-cert warnings inside WKWebView. When no loopback port
+/// is published, the primary port is plain HTTP and we use it directly.
+fn webview_url_for(port: u16) -> String {
+    if let Some(loopback) = read_loopback_port_runfile() {
+        format!("http://localhost:{loopback}")
+    } else {
+        format!("http://localhost:{port}")
+    }
+}
+
 fn daemon_is_ready() -> bool {
     let ready_path = talky_run_dir().join("talky-daemon.ready");
     let Ok(content) = fs::read_to_string(&ready_path) else { return false };
@@ -129,7 +149,7 @@ pub fn run() {
             thread::spawn(move || {
                 match ensure_daemon_running() {
                     StartupOutcome::DaemonReady(port) => {
-                        let url = format!("http://localhost:{port}");
+                        let url = webview_url_for(port);
                         if let Some(win) = handle.get_webview_window("main") {
                             let _ = win.eval(&format!("window.location.replace('{url}');"));
                         }
