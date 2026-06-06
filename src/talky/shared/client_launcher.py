@@ -15,7 +15,7 @@ from loguru import logger
 
 
 class DaemonManager:
-    """Ensures the talky daemon (:9090) is running.
+    """Ensures the talky daemon is running.
 
     The talky daemon is the unified server hosting the voice pipeline,
     WebRTC transport, client UI, HTTP control plane, and FastMCP SSE
@@ -29,20 +29,19 @@ class DaemonManager:
 
     async def ensure_running(self, config: Dict[str, Any]) -> bool:
         """Ensure the talky daemon is running. Returns True if available."""
-        from talky.shared.profile_manager import get_profile_manager
+        from pathlib import Path
+        # The daemon's ready file is the authoritative liveness signal.
+        # Port may be random (when not pinned in settings.yaml), so check the
+        # ready file instead of sniffing a specific port.
+        ready_path = Path.home() / ".talky" / "run" / "talky-daemon.ready"
         try:
-            net = ((get_profile_manager().settings or {}).get("network") or {})
-            port = int(net.get("https_port") or net.get("port") or 19443)
-        except Exception:
-            port = 19443
-        port_arg = f"-ti:{port}"
-        try:
-            result = subprocess.run(["lsof", port_arg], capture_output=True, text=True)
-            if result.stdout.strip():
-                logger.info(f"talky daemon already running on :{port}")
-                return True
-        except (FileNotFoundError, subprocess.SubprocessError) as e:
-            logger.debug(f"Could not check port {port}: {e}")
+            pid = int(ready_path.read_text().strip())
+            import os
+            os.kill(pid, 0)
+            logger.info(f"talky daemon already running (pid={pid})")
+            return True
+        except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+            pass
 
         logger.info("Starting talky daemon in background...")
         daemon_args = ["talky", "daemon"]
@@ -57,19 +56,19 @@ class DaemonManager:
         # detached server itself and exits. We just wait for the port.
         subprocess.run(daemon_args, capture_output=True)
 
-        time.sleep(1)
-
-        try:
-            result = subprocess.run(["lsof", port_arg], capture_output=True, text=True)
-            if result.stdout.strip():
+        # Poll ready file for up to 30s.
+        import os
+        for _ in range(60):
+            time.sleep(0.5)
+            try:
+                pid = int(ready_path.read_text().strip())
+                os.kill(pid, 0)
                 logger.info("talky daemon started successfully")
                 return True
-            else:
-                logger.error("talky daemon failed to start")
-                return False
-        except (FileNotFoundError, subprocess.SubprocessError):
-            logger.error("Could not verify talky daemon startup")
-            return False
+            except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+                continue
+        logger.error("talky daemon failed to start (ready file never appeared)")
+        return False
 
     async def stop(self):
         """The talky daemon is left running as a background service."""

@@ -7,9 +7,19 @@ defaults:
 # Network settings
 network:
   host: "localhost"          # "0.0.0.0" to listen on all interfaces (remote access)
-  https_port: 19443          # Primary listener (HTTPS when TLS configured, else HTTP)
-  http_port: 19080           # Secondary plain-HTTP loopback listener (MCP). Only bound when TLS is on.
   external_host: ""          # External hostname for browser URLs (e.g. macbook.tailnet.ts.net)
-  # https:                   # Uncomment to serve TLS (run scripts/generate-certs.sh first)
+
+  # Port. Omit (or leave commented) to pick a random free port at startup.
+  # The chosen port is written to ~/.talky/run/talky-daemon.port so desktop
+  # shells and openers can discover it. Pin a value here when you want a
+  # stable port for LAN/mobile access.
+  # port: 8765
+
+  # Loopback plain-HTTP port. Only bound when TLS is on (its job is giving
+  # MCP clients a non-HTTPS path while the primary serves HTTPS over LAN).
+  # Random by default; pin a value when you want a stable port.
+  # loopback_port: 8764
+
+  # https:                   # Uncomment to serve TLS (run `talky certs` first)
   #   cert: "~/.talky/ssl/server-cert.pem"
   #   key:  "~/.talky/ssl/server-key.pem"

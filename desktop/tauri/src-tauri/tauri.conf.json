@@ -23,7 +23,9 @@
     ],
     "macOS": {
       "entitlements": "entitlements.plist",
-      "infoPlist": "Info.plist"
+      "infoPlist": "Info.plist",
+      "signingIdentity": "-",
+      "providerShortName": null
     }
   }
 }

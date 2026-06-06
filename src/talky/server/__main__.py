@@ -53,100 +53,120 @@ logger.remove()
 logger.add(sys.stderr, level="INFO")
 
 # Network config precedence (highest → lowest):
-#   1. TALKY_HOST / TALKY_PORT / TALKY_HTTPS_CERT / TALKY_HTTPS_KEY env vars
-#   2. Deprecated MCP_HOST / MCP_PORT / MCP_SSL_CERTFILE / MCP_SSL_KEYFILE (warn)
-#   3. ~/.talky/settings.yaml  network: { host, port, https: { cert, key } }
-#   4. Defaults: host="localhost", port=9090, no TLS
-def _env_with_deprecated(new_name: str, old_name: str) -> Optional[str]:
-    v = os.getenv(new_name)
-    if v is not None:
-        return v
-    v_old = os.getenv(old_name)
-    if v_old is not None:
-        logger.warning(f"{old_name} is deprecated, use {new_name} instead")
-        return v_old
-    return None
+#   1. TALKY_HOST / TALKY_PORT / TALKY_LOOPBACK_PORT / TALKY_HTTPS_CERT / TALKY_HTTPS_KEY env vars
+#   2. ~/.talky/settings.yaml  network: { host, port, loopback_port, https: { cert, key } }
+#   3. Defaults: host="localhost", port=random-free, loopback_port=random-free (only bound when TLS is on), no TLS
+#
+# Random-by-default: when no port is configured, the daemon picks a free
+# ephemeral port and writes it to ~/.talky/run/talky-daemon.port so
+# desktop shells / openers can discover where to connect. Set
+# network.port (or TALKY_PORT) to pin a stable port when LAN/mobile
+# access matters.
+#
+# DEPRECATED keys (hard break — daemon refuses to start):
+#   network.https_port → use network.port
+#   network.http_port  → use network.loopback_port
+#   MCP_HOST / MCP_PORT / MCP_SSL_* env vars → drop the MCP_ prefix
 
 
-def _resolve_network_config() -> tuple[str, Optional[str], Optional[str]]:
-    """Resolve (host, ssl_certfile, ssl_keyfile) from env + settings.yaml."""
+def _reject_deprecated_keys(net: dict) -> None:
+    """Hard-break on old key names. Tell the user exactly how to migrate."""
+    if not isinstance(net, dict):
+        return
+    bad = []
+    if "https_port" in net:
+        bad.append(("https_port", "port"))
+    if "http_port" in net:
+        bad.append(("http_port", "loopback_port"))
+    if bad:
+        lines = [f"  network.{old}  →  network.{new}" for old, new in bad]
+        logger.error(
+            "Deprecated network keys in ~/.talky/settings.yaml — rename:\n"
+            + "\n".join(lines)
+        )
+        sys.exit(2)
+
+
+def _reject_deprecated_env() -> None:
+    """Hard-break on MCP_* env vars."""
+    deprecated = {
+        "MCP_HOST": "TALKY_HOST",
+        "MCP_PORT": "TALKY_PORT",
+        "MCP_SSL_CERTFILE": "TALKY_HTTPS_CERT",
+        "MCP_SSL_KEYFILE": "TALKY_HTTPS_KEY",
+        "TALKY_HTTP_PORT": "TALKY_LOOPBACK_PORT",
+    }
+    bad = [(old, new) for old, new in deprecated.items() if os.getenv(old)]
+    if bad:
+        lines = [f"  {old}  →  {new}" for old, new in bad]
+        logger.error(
+            "Deprecated env vars set — rename:\n" + "\n".join(lines)
+        )
+        sys.exit(2)
+
+
+def _free_port() -> int:
+    """Pick a free ephemeral port from the OS."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _resolve_network_config() -> tuple[str, Optional[str], Optional[str], dict]:
+    """Resolve (host, ssl_certfile, ssl_keyfile, raw_network_dict) from env + settings.yaml."""
     from talky.shared.profile_manager import get_profile_manager
     try:
         settings = get_profile_manager().settings or {}
     except Exception:
         settings = {}
     net = (settings.get("network") or {}) if isinstance(settings, dict) else {}
+    _reject_deprecated_keys(net)
+    _reject_deprecated_env()
     https = (net.get("https") or {}) if isinstance(net, dict) else {}
 
-    host = _env_with_deprecated("TALKY_HOST", "MCP_HOST") or net.get("host") or "localhost"
-    cert = _env_with_deprecated("TALKY_HTTPS_CERT", "MCP_SSL_CERTFILE") or https.get("cert")
-    key = _env_with_deprecated("TALKY_HTTPS_KEY", "MCP_SSL_KEYFILE") or https.get("key")
+    host = os.getenv("TALKY_HOST") or net.get("host") or "localhost"
+    cert = os.getenv("TALKY_HTTPS_CERT") or https.get("cert")
+    key = os.getenv("TALKY_HTTPS_KEY") or https.get("key")
     # Expand ~ so users can write "~/.talky/ssl/..." in settings.yaml
     if cert:
         cert = os.path.expanduser(cert)
     if key:
         key = os.path.expanduser(key)
-    return host, cert, key
+    return host, cert, key, net
 
 
-def _resolve_http_port() -> int:
-    """Plain-HTTP loopback port for MCP clients that don't speak self-signed HTTPS.
+def _resolve_port_from(env_name: str, settings_key: str, net: dict) -> int:
+    """Resolve a port: env → settings.yaml → random free port.
 
-    TALKY_HTTP_PORT env → settings.yaml network.http_port → 19080.
+    Returns a concrete integer port. When no override is set, picks a
+    free ephemeral port so the daemon can run without colliding.
     """
-    raw = os.getenv("TALKY_HTTP_PORT")
+    raw = os.getenv(env_name)
     if raw is None:
-        try:
-            from talky.shared.profile_manager import get_profile_manager
-            settings = get_profile_manager().settings or {}
-            net = (settings.get("network") or {}) if isinstance(settings, dict) else {}
-            p = net.get("http_port")
-            if p is not None:
-                raw = str(p)
-        except Exception:
-            raw = None
+        p = net.get(settings_key)
+        if p is not None:
+            raw = str(p)
     if raw is None:
-        raw = "19080"
-    try:
-        return int(raw)
-    except ValueError:
-        logger.error(f"Invalid http_port '{raw}': not a valid integer")
-        sys.exit(1)
-
-
-mcp_host, _resolved_cert, _resolved_key = _resolve_network_config()
-
-# Primary (HTTPS-or-HTTP) port resolution.
-# Precedence: TALKY_PORT / MCP_PORT env → settings.yaml network.https_port
-#             → settings.yaml network.port (legacy) → 19443.
-def _resolve_port() -> int:
-    raw = _env_with_deprecated("TALKY_PORT", "MCP_PORT")
-    if raw is None:
-        try:
-            from talky.shared.profile_manager import get_profile_manager
-            settings = get_profile_manager().settings or {}
-            net = (settings.get("network") or {}) if isinstance(settings, dict) else {}
-            p = net.get("https_port")
-            if p is None:
-                p = net.get("port")  # legacy key
-            if p is not None:
-                raw = str(p)
-        except Exception:
-            raw = None
-    if raw is None:
-        raw = "19443"
+        return _free_port()
     try:
         port = int(raw)
         if not (1 <= port <= 65535):
-            logger.error(f"Invalid port '{raw}': must be between 1 and 65535")
+            logger.error(f"Invalid {settings_key} '{raw}': must be between 1 and 65535")
             sys.exit(1)
         return port
     except ValueError:
-        logger.error(f"Invalid port '{raw}': not a valid integer")
+        logger.error(f"Invalid {settings_key} '{raw}': not a valid integer")
         sys.exit(1)
 
 
-mcp_port = _resolve_port()
+mcp_host, _resolved_cert, _resolved_key, _net_dict = _resolve_network_config()
+mcp_port = _resolve_port_from("TALKY_PORT", "port", _net_dict)
+
+
+def _resolve_loopback_port() -> int:
+    """Plain-HTTP loopback port (only bound when TLS is on)."""
+    return _resolve_port_from("TALKY_LOOPBACK_PORT", "loopback_port", _net_dict)
 
 mcp = FastMCP(name="pipecat-mcp-server", host=mcp_host, port=mcp_port)
 
@@ -154,6 +174,10 @@ mcp = FastMCP(name="pipecat-mcp-server", host=mcp_host, port=mcp_port)
 # checks this instead of sniffing ports with lsof.
 DAEMON_RUN_DIR = Path.home() / ".talky" / "run"
 DAEMON_READY_PATH = DAEMON_RUN_DIR / "talky-daemon.ready"
+# Port discovery file: shells / openers read this to learn the daemon's
+# (random) port. Written after uvicorn binds; cleaned up on shutdown.
+DAEMON_PORT_PATH = DAEMON_RUN_DIR / "talky-daemon.port"
+DAEMON_LOOPBACK_PORT_PATH = DAEMON_RUN_DIR / "talky-daemon.loopback-port"
 
 def _read_idle_ttl_seconds() -> Optional[float]:
     """Load the idle-room TTL (ticket 0c5d).
@@ -527,7 +551,7 @@ def _check_ports_or_exit():
     # Fallback: check if something is actually LISTENING on either listener port.
     ports_to_check = [mcp_port]
     if _resolved_cert and _resolved_key:
-        ports_to_check.append(_resolve_http_port())
+        ports_to_check.append(_resolve_loopback_port())
     if holder_pid is None:
         for port in ports_to_check:
             try:
@@ -1148,6 +1172,8 @@ def _build_app():
                 logger.info("Lifespan shutdown: tearing down voice channel")
                 try:
                     DAEMON_READY_PATH.unlink(missing_ok=True)
+                    DAEMON_PORT_PATH.unlink(missing_ok=True)
+                    DAEMON_LOOPBACK_PORT_PATH.unlink(missing_ok=True)
                 except Exception:
                     pass
                 try:
@@ -1221,9 +1247,24 @@ def main():
     logger.info(f"Primary listener: {scheme}://{mcp_host}:{mcp_port}")
 
     # When SSL is on, also bind plain HTTP loopback-only so MCP clients that
-    # don't speak self-signed HTTPS can connect. Default port 19080, override
-    # via TALKY_HTTP_PORT or settings.yaml network.http_port.
-    http_port = _resolve_http_port() if ssl_enabled else None
+    # don't speak self-signed HTTPS can connect. Set via
+    # TALKY_LOOPBACK_PORT or settings.yaml network.loopback_port (default: random).
+    http_port = _resolve_loopback_port() if ssl_enabled else None
+
+    # Write port discovery files so shells / openers can find us.
+    DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        DAEMON_PORT_PATH.write_text(str(mcp_port))
+    except OSError as e:
+        logger.warning(f"Could not write port discovery file {DAEMON_PORT_PATH}: {e}")
+    if http_port is not None:
+        try:
+            DAEMON_LOOPBACK_PORT_PATH.write_text(str(http_port))
+        except OSError as e:
+            logger.warning(
+                f"Could not write loopback-port discovery file "
+                f"{DAEMON_LOOPBACK_PORT_PATH}: {e}"
+            )
 
     try:
         if http_port is not None:

@@ -2,10 +2,12 @@
  * Pi Voice Extension
  *
  * Bridges a running Pi terminal session to the talky daemon's voice pipeline.
- * When loaded, connects to ws://localhost:9090/ws/pi and:
- *   - Receives STT text from the daemon → injects as user messages into Pi
- *   - Streams Pi's response tokens → daemon TTS
- *   - Responds to abort signals from the daemon → ctx.abort()
+ * Connects to the daemon's plain-HTTP loopback WebSocket endpoint.
+ *
+ * Port discovery (in order):
+ *   1. TALKY_AGENT_WS_URL — full ws:// URL override
+ *   2. ~/.talky/run/talky-daemon.loopback-port — written by the daemon when TLS is on
+ *   3. ~/.talky/run/talky-daemon.port — primary port when TLS is off
  *
  * Usage (user-initiated): load this extension in any Pi session
  *   pi -e ~/.pi/agent/extensions/pi-voice.ts
@@ -14,12 +16,35 @@
  * Usage (talky-initiated): talky starts Pi with this extension and an opener
  *   pi -e <path>/extension.ts --prompt "..."
  *
- * Requires: talky daemon running on localhost:9090, Node 18+ (global WebSocket).
+ * Requires: talky daemon running, Node 18+ (global WebSocket).
  */
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-const DAEMON_WS_URL = process.env.TALKY_AGENT_WS_URL || "ws://localhost:19080/ws/agent";
+function resolveDaemonWsUrl(): string {
+	if (process.env.TALKY_AGENT_WS_URL) return process.env.TALKY_AGENT_WS_URL;
+	const runDir = path.join(os.homedir(), ".talky", "run");
+	const tryPort = (name: string): number | null => {
+		try {
+			return parseInt(fs.readFileSync(path.join(runDir, name), "utf8").trim(), 10);
+		} catch {
+			return null;
+		}
+	};
+	const port = tryPort("talky-daemon.loopback-port") ?? tryPort("talky-daemon.port");
+	if (!port) {
+		throw new Error(
+			"talky daemon not running (no port runfile at ~/.talky/run/). Start it with `talky daemon`.",
+		);
+	}
+	return `ws://localhost:${port}/ws/agent`;
+}
+
+const DAEMON_WS_URL = resolveDaemonWsUrl();
 const RECONNECT_DELAY_MS = 2000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 
