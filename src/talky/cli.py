@@ -701,30 +701,100 @@ def cmd_voice(args):
     print(f"✅ voice: {data.get('active', name)}")
 
 
-def cmd_talkystatus(args):  # noqa: ARG001
-    """Show daemon status — active profile, voice, health."""
-    base_url = daemon_base_url()
-
-    # Fetch profiles + voices
+def _read_runfile_int(path: Path) -> Optional[int]:
     try:
+        return int(path.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _gather_daemon_status() -> dict:
+    """Single source of truth for daemon state — runfiles + /api/ready.
+
+    Returns a dict with: ready, pid, port, loopback_port, profile, voice,
+    tls, reachable, readiness_tasks. Missing fields are None.
+    """
+    run_dir = Path.home() / ".talky" / "run"
+    pid = _read_runfile_int(run_dir / "talky-daemon.ready") or _read_runfile_int(run_dir / "talky-daemon.pid")
+    port = _read_runfile_int(run_dir / "talky-daemon.port")
+    loopback_port = _read_runfile_int(run_dir / "talky-daemon.loopback-port")
+
+    # Liveness: pid alive + ready file exists.
+    ready = False
+    if pid is not None:
+        try:
+            os.kill(pid, 0)
+            ready = (run_dir / "talky-daemon.ready").exists()
+        except (ProcessLookupError, PermissionError):
+            ready = False
+
+    out: dict = {
+        "ready": ready,
+        "pid": pid,
+        "port": port,
+        "loopback_port": loopback_port,
+        "tls": loopback_port is not None,  # secondary listener implies TLS on primary
+        "profile": None,
+        "voice": None,
+        "reachable": False,
+        "readiness_tasks": [],
+    }
+
+    if not ready:
+        return out
+
+    # Talk to the daemon for profile/voice/readiness.
+    try:
+        base_url = daemon_base_url()
         with daemon_urlopen(f"{base_url}/api/profiles", timeout=3) as resp:
             profiles_data = json.loads(resp.read().decode("utf-8"))
         with daemon_urlopen(f"{base_url}/api/voices", timeout=3) as resp:
             voices_data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.URLError as e:
-        print(f"❌ daemon not reachable at {base_url}: {e}")
+        with daemon_urlopen(f"{base_url}/api/ready", timeout=3) as resp:
+            ready_data = json.loads(resp.read().decode("utf-8"))
+        out["reachable"] = True
+        out["profile"] = next((p["name"] for p in profiles_data.get("profiles", []) if p.get("active")), None)
+        out["voice"] = next((v["name"] for v in voices_data.get("voices", []) if v.get("active")), None)
+        out["readiness_tasks"] = ready_data.get("tasks") or []
+        out["_profiles"] = profiles_data.get("profiles", [])
+        out["_voices_count"] = len(voices_data.get("voices", []))
+        out["_live"] = profiles_data.get("live", False)
+    except urllib.error.URLError:
+        pass
+
+    return out
+
+
+def cmd_talkystatus(args):
+    """Show daemon status — active profile, voice, health.
+
+    --json: emit structured status (ready/pid/port/loopback_port/profile/voice/tls)
+    suitable for shells and other tools.
+    """
+    status = _gather_daemon_status()
+
+    if getattr(args, "json", False):
+        # Strip private/internal fields used only by the human-readable view.
+        public = {k: v for k, v in status.items() if not k.startswith("_")}
+        print(json.dumps(public, indent=2))
+        return
+
+    if not status["ready"]:
+        print(f"❌ daemon not running (no live pid at ~/.talky/run/talky-daemon.ready)")
         sys.exit(1)
 
-    live = profiles_data.get("live", False)
-    profiles = profiles_data.get("profiles", [])
-    voices = voices_data.get("voices", [])
+    if not status["reachable"]:
+        port = status["port"]
+        print(f"⚠️  daemon pid {status['pid']} alive but HTTP not reachable on :{port}")
+        sys.exit(1)
 
-    active_profile = next((p["name"] for p in profiles if p.get("active")), None)
-    active_voice = next((v["name"] for v in voices if v.get("active")), None)
-
-    print(f"pipeline: {'live' if live else 'not live'}")
-    print(f"active profile: {active_profile or '(none)'}")
-    print(f"active voice: {active_voice or '(none)'}")
+    profiles = status.get("_profiles", [])
+    print(f"pipeline: {'live' if status.get('_live') else 'not live'}")
+    print(f"pid: {status['pid']}  port: {status['port']}"
+          + (f"  loopback: {status['loopback_port']}" if status['loopback_port'] else "")
+          + (f"  tls: on" if status['tls'] else ""))
+    print(f"active profile: {status['profile'] or '(none)'}")
+    print(f"active voice: {status['voice'] or '(none)'}")
     print()
     print("profiles:")
     for p in profiles:
@@ -732,7 +802,7 @@ def cmd_talkystatus(args):  # noqa: ARG001
         health = "●" if p.get("healthy") else ("○" if p.get("healthy") is False else "?")
         print(f"  {marker} {health} {p['name']}  — {p.get('description', '')}")
     print()
-    print(f"voices: {len(voices)} available")
+    print(f"voices: {status.get('_voices_count', 0)} available")
 
 
 def cmd_daemon(args):
@@ -1109,6 +1179,11 @@ def main():
     status_parser = subparsers.add_parser(
         "status",
         help="Show daemon status — profile, voice, health",
+    )
+    status_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit structured JSON (ready, pid, port, loopback_port, profile, voice, tls)",
     )
     status_parser.set_defaults(func=cmd_talkystatus)
 
