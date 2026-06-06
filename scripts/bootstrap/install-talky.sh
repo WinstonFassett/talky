@@ -60,15 +60,19 @@ uv python install 3.12 >/dev/null
 echo "  python 3.12 ready"
 
 # --- 4. talky ---------------------------------------------------------------
-# TEMP (spike/distribution-parity): pull from the spike branch so the
-# CLI's PATH-independent self-invocation fix is exercised end-to-end
-# before publishing to PyPI. Revert to `uv tool install ... talky`
-# before merging or releasing.
-stage talky "Installing Talky from spike/distribution-parity"
+# TEMP (spike/distribution-parity): install from a wheel scp'd to the
+# target machine. Lets us dogfood end-to-end without publishing to PyPI
+# yet. The wheel embeds the built SPA in `_client_dist/`. Revert this
+# block to `uv tool install ... talky` (PyPI) before merging/releasing.
+TALKY_WHEEL="${TALKY_WHEEL:-/tmp/talky-local.whl}"
+stage talky "Installing Talky from $TALKY_WHEEL"
+
+if [ ! -f "$TALKY_WHEEL" ]; then
+  emit_err "wheel not found at $TALKY_WHEEL (set TALKY_WHEEL=/path/to/talky-X.X.X-py3-none-any.whl)"
+fi
 
 # `uv tool install --force` upgrades in place if already installed.
-uv tool install --python 3.12 --force \
-    "git+https://github.com/WinstonFassett/talky.git@spike/distribution-parity"
+uv tool install --python 3.12 --force "$TALKY_WHEEL"
 echo "  talky: $(uv tool dir 2>/dev/null || echo '?')/talky/bin/talky"
 
 # --- 5. portaudio (optional, for local audio) --------------------------------
