@@ -946,6 +946,10 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
 
     _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
     log_path = _DAEMON_RUN_DIR / "talky-daemon.log"
+    # DX gap 2: startup-stderr is truncated on every spawn so a fresh
+    # import-time failure isn't drowned in stale log history. The main
+    # talky-daemon.log keeps appending for normal operation.
+    startup_stderr_path = _DAEMON_RUN_DIR / "talky-daemon.startup-stderr.log"
 
     # Acquire an exclusive lock so only one CLI spawns the daemon.
     lock_fh = open(_DAEMON_LOCK_PATH, "w")
@@ -966,10 +970,11 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
 
         try:
             log_fh = open(log_path, "a")
+            startup_err_fh = open(startup_stderr_path, "w")  # truncate
             proc = subprocess.Popen(
                 ["talky", "daemon", "--foreground"],
                 stdout=log_fh,
-                stderr=log_fh,
+                stderr=startup_err_fh,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
                 close_fds=True,

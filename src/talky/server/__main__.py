@@ -36,11 +36,33 @@ import os
 import signal
 import subprocess
 import sys
+import traceback as _tb
 import uuid
 import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+
+# Fail-safe log: written *before* any heavy imports so import-time errors
+# (missing native deps, version mismatches, syntax errors in installed
+# extras) are visible. Truncates on each start. The CLI's foreground
+# spawner also redirects child stderr to talky-daemon.startup-stderr.log
+# for symmetric coverage. See DX gap 2 in docs/distribution-parity-spike.md.
+_STARTUP_LOG = Path.home() / ".talky" / "run" / "talky-daemon.startup.log"
+try:
+    _STARTUP_LOG.parent.mkdir(parents=True, exist_ok=True)
+    _STARTUP_LOG.write_text(f"starting pid={os.getpid()}\n")
+    def _failsafe_excepthook(exc_type, exc, tb):
+        try:
+            with open(_STARTUP_LOG, "a") as fh:
+                fh.write("\n--- uncaught exception ---\n")
+                _tb.print_exception(exc_type, exc, tb, file=fh)
+        except OSError:
+            pass
+        sys.__excepthook__(exc_type, exc, tb)
+    sys.excepthook = _failsafe_excepthook
+except OSError:
+    pass  # don't block startup on disk errors
 
 from loguru import logger
 from mcp.server.fastmcp import FastMCP
@@ -1216,6 +1238,13 @@ def _build_app():
 
 def main():
     """Run the MCP server."""
+    # Fail-safe startup logging was installed at module import time so it
+    # captures import errors too — see top of file.
+    try:
+        with open(_STARTUP_LOG, "a") as fh:
+            fh.write(f"main() reached pid={os.getpid()}\n")
+    except OSError:
+        pass
     import uvicorn
 
     # 727e defense #4: refuse to start if 9090 is already held. Honors
