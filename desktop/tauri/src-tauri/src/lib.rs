@@ -1,10 +1,11 @@
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// Bootstrap & launch flow for the Talky shell.
 ///
@@ -19,16 +20,11 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 const DAEMON_POLL_TIMEOUT: Duration = Duration::from_secs(120);
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Bootstrap installer URL. Build-time override via `TALKY_BOOTSTRAP_URL` env
-/// var (consumed by build.rs / option_env!). Defaults to `main` for shipped
-/// builds; spike branches can rebuild with the var set to test end-to-end:
-///
-///   TALKY_BOOTSTRAP_URL='https://raw.githubusercontent.com/winstonfassett/talky/spike/distribution-parity/scripts/bootstrap/install-talky.sh' \
-///       cargo tauri build --bundles app
-const BOOTSTRAP_URL: &str = match option_env!("TALKY_BOOTSTRAP_URL") {
-    Some(url) => url,
-    None => "https://raw.githubusercontent.com/WinstonFassett/talky/main/scripts/bootstrap/install-talky.sh",
-};
+/// Bootstrap installer URL. Resolved at build time by `build.rs` to a
+/// commit-hash-pinned `raw.githubusercontent.com` URL derived from
+/// `git rev-parse HEAD`. Override with `TALKY_BOOTSTRAP_URL_OVERRIDE` env
+/// var at build time if you need a custom URL.
+const BOOTSTRAP_URL: &str = env!("TALKY_BOOTSTRAP_URL");
 
 fn talky_run_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -89,35 +85,136 @@ fn spawn_daemon(talky_bin: &PathBuf) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Try to launch the bootstrap installer in Terminal.app. Returns `Ok(())`
-/// only when osascript exits 0 AND a Terminal window was actually told to
-/// run the script. Any failure (Terminal busy, AppleEvent timeout, sandboxed
-/// environment) returns an `Err` so the splash can surface a manual fallback.
-fn launch_bootstrap_in_terminal() -> Result<(), String> {
-    let script = format!(
-        "echo 'Installing Talky...'; curl -LsSf {} | bash; echo; echo 'Press return to close.'; read",
-        BOOTSTRAP_URL
-    );
-    // `activate` first so Terminal is foregrounded and ready to accept events.
-    // Without it, a launched-but-not-running Terminal can return -1712.
-    let applescript = format!(
-        "tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell",
-        script.replace('\\', "\\\\").replace('"', "\\\"")
-    );
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&applescript)
-        .output()
-        .map_err(|e| format!("osascript not available: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("osascript exited with status {}", output.status)
-        } else {
-            stderr
-        });
+fn bootstrap_log_path() -> PathBuf {
+    talky_run_dir().join("bootstrap.log")
+}
+
+/// Run the bootstrap installer in-process, piping stdout/stderr.
+/// Invokes `on_stage(key, msg)` for each `::stage::<key>::<msg>` line.
+/// Tees all output to `~/.talky/run/bootstrap.log`.
+/// Returns Ok on exit 0, Err with a short reason otherwise.
+fn run_bootstrap<F: FnMut(&str, &str)>(mut on_stage: F) -> Result<(), String> {
+    let _ = fs::create_dir_all(talky_run_dir());
+    let log_path = bootstrap_log_path();
+    let mut log = fs::File::create(&log_path)
+        .map_err(|e| format!("Cannot open bootstrap log {}: {e}", log_path.display()))?;
+    let _ = writeln!(log, "# Bootstrap URL: {BOOTSTRAP_URL}");
+
+    let cmd = format!("set -o pipefail; curl -LsSf {BOOTSTRAP_URL} | bash");
+    let mut child = Command::new("bash")
+        .arg("-c")
+        .arg(&cmd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn bash: {e}"))?;
+
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let stderr = child.stderr.take().ok_or("no stderr")?;
+
+    // Drain stderr in a side thread, appended to the same log.
+    let log_path_for_err = log_path.clone();
+    let stderr_handle = thread::spawn(move || {
+        if let Ok(mut log_err) = fs::OpenOptions::new().append(true).open(&log_path_for_err) {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                let _ = writeln!(log_err, "[stderr] {line}");
+            }
+        }
+    });
+
+    let reader = BufReader::new(stdout);
+    for line in reader.lines().map_while(Result::ok) {
+        let _ = writeln!(log, "{line}");
+        if let Some(rest) = line.strip_prefix("::stage::") {
+            let mut parts = rest.splitn(2, "::");
+            let key = parts.next().unwrap_or("").trim();
+            let msg = parts.next().unwrap_or("").trim();
+            on_stage(key, msg);
+        }
     }
-    Ok(())
+    let _ = stderr_handle.join();
+
+    let status = child.wait().map_err(|e| format!("wait: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Installer exited with status {}. See log at {}",
+            status,
+            log_path.display()
+        ))
+    }
+}
+
+fn js_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', "\\n")
+        .replace('\r', "")
+}
+
+fn render_bootstrap_splash(win: &WebviewWindow) {
+    let log = js_escape(&bootstrap_log_path().display().to_string());
+    let url = js_escape(BOOTSTRAP_URL);
+    let html = format!(
+        "<style>body{{font-family:-apple-system,system-ui,sans-serif;padding:32px;max-width:560px;margin:auto;color:#222}} \
+.spinner{{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:#333;border-radius:50%;animation:s 1s linear infinite;margin-right:10px;vertical-align:-2px}} \
+@keyframes s{{to{{transform:rotate(360deg)}}}} \
+#stage{{font-size:1.1em;margin:18px 0}} #url{{opacity:.5;font-size:.8em;word-break:break-all}} \
+button{{padding:8px 14px;font-size:.95em;cursor:pointer}}</style> \
+<h2>Installing Talky…</h2> \
+<div id=\"stage\"><span class=\"spinner\"></span><span id=\"stage-msg\">Starting…</span></div> \
+<p id=\"url\">From: {url}</p> \
+<p id=\"log-link\" style=\"display:none\"><a href=\"#\" onclick=\"window.__openLog()\">Open install log</a></p>"
+    );
+    let _ = win.eval(&format!(
+        "document.body.innerHTML = '{}'; window.__logPath = '{}'; \
+         window.__openLog = function(){{ try {{ \
+           (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) \
+             ? window.__TAURI_INTERNALS__.invoke('open_bootstrap_log') \
+             : (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke('open_bootstrap_log')); \
+         }} catch(e) {{}} return false; }};",
+        js_escape(&html),
+        log
+    ));
+}
+
+fn update_bootstrap_stage(win: &WebviewWindow, key: &str, msg: &str) {
+    let text = if msg.is_empty() {
+        key.to_string()
+    } else {
+        msg.to_string()
+    };
+    let _ = win.eval(&format!(
+        "var el=document.getElementById('stage-msg');if(el)el.textContent='{}';",
+        js_escape(&text)
+    ));
+}
+
+fn render_bootstrap_failure(win: &WebviewWindow, err: &str) {
+    let log = bootstrap_log_path().display().to_string();
+    let html = format!(
+        "<style>body{{font-family:-apple-system,system-ui,sans-serif;padding:32px;max-width:560px;margin:auto;color:#222}} \
+pre{{background:#f4f4f4;padding:10px;border-radius:4px;white-space:pre-wrap;font-size:.85em}} \
+button{{padding:8px 14px;font-size:.95em;cursor:pointer;margin-right:8px}}</style> \
+<h2>Talky install failed</h2> \
+<pre>{}</pre> \
+<p><button onclick=\"window.location.reload()\">Retry</button> \
+<button onclick=\"window.__openLog()\">Open log</button></p> \
+<p style=\"opacity:.6;font-size:.8em\">Log: <code>{}</code></p>",
+        err.replace('<', "&lt;"),
+        log.replace('<', "&lt;")
+    );
+    let _ = win.eval(&format!(
+        "document.body.innerHTML = '{}'; \
+         window.__openLog = function(){{ try {{ \
+           (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) \
+             ? window.__TAURI_INTERNALS__.invoke('open_bootstrap_log') \
+             : (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke('open_bootstrap_log')); \
+         }} catch(e) {{}} return false; }};",
+        js_escape(&html)
+    ));
 }
 
 /// Result type for the shell's startup decision.
@@ -157,9 +254,20 @@ fn ensure_daemon_running() -> StartupOutcome {
     StartupOutcome::Failed("Daemon did not become ready within 120s".into())
 }
 
+#[tauri::command]
+fn open_bootstrap_log() -> Result<(), String> {
+    let path = bootstrap_log_path();
+    Command::new("open")
+        .arg(&path)
+        .status()
+        .map_err(|e| format!("open: {e}"))?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![open_bootstrap_log])
         .setup(|app| {
             // Run startup in a worker thread so we don't block the main runloop.
             // Show a tiny "starting..." window immediately; swap URL when ready.
@@ -179,28 +287,48 @@ pub fn run() {
                         }
                     }
                     StartupOutcome::BootstrapNeeded => {
-                        let terminal_result = launch_bootstrap_in_terminal();
+                        // Show in-shell progress UI and pipe install-talky.sh through it.
                         if let Some(win) = handle.get_webview_window("main") {
-                            let html = match terminal_result {
-                                Ok(()) => format!(
-                                    "<h1>Installing Talky…</h1>\
-<p>Follow the prompts in the Terminal window that just opened.\
-After install completes, relaunch this app.</p>\
-<p style=\"opacity:.6;font-size:.85em\">Installer URL: <code>{}</code></p>",
-                                    BOOTSTRAP_URL
-                                ),
-                                Err(msg) => format!(
-                                    "<h1>Talky needs to be installed</h1>\
-<p>We couldn't open Terminal automatically. Open Terminal yourself and run:</p>\
-<pre style=\"background:#f4f4f4;padding:8px;border-radius:4px\">curl -LsSf {} | bash</pre>\
-<p>Then relaunch this app.</p>\
-<details><summary>Details</summary><pre>{}</pre></details>",
-                                    BOOTSTRAP_URL,
-                                    msg.replace('<', "&lt;")
-                                ),
-                            };
-                            let escaped = html.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n");
-                            let _ = win.eval(&format!("document.body.innerHTML = '{escaped}';"));
+                            render_bootstrap_splash(&win);
+                        }
+                        let win_for_stages = handle.get_webview_window("main");
+                        let result = run_bootstrap(|key, msg| {
+                            if let Some(ref w) = win_for_stages {
+                                update_bootstrap_stage(w, key, msg);
+                            }
+                        });
+                        match result {
+                            Ok(()) => {
+                                // Installer done. Try ensure_daemon_running again — it'll
+                                // find the freshly installed binary and spawn the daemon.
+                                match ensure_daemon_running() {
+                                    StartupOutcome::DaemonReady(port) => {
+                                        let url = webview_url_for(port);
+                                        if let Some(win) = handle.get_webview_window("main") {
+                                            let _ = win.eval(&format!(
+                                                "window.location.replace('{url}');"
+                                            ));
+                                        }
+                                    }
+                                    other => {
+                                        if let Some(win) = handle.get_webview_window("main") {
+                                            let msg = match other {
+                                                StartupOutcome::Failed(m) => m,
+                                                StartupOutcome::BootstrapNeeded => {
+                                                    "Installer reported success but talky binary still missing".into()
+                                                }
+                                                _ => "Unexpected post-install state".into(),
+                                            };
+                                            render_bootstrap_failure(&win, &msg);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                if let Some(win) = handle.get_webview_window("main") {
+                                    render_bootstrap_failure(&win, &err);
+                                }
+                            }
                         }
                     }
                     StartupOutcome::Failed(msg) => {
