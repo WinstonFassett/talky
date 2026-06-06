@@ -51,9 +51,9 @@ fn read_loopback_port_runfile() -> Option<u16> {
 /// is published, the primary port is plain HTTP and we use it directly.
 fn webview_url_for(port: u16) -> String {
     if let Some(loopback) = read_loopback_port_runfile() {
-        format!("http://localhost:{loopback}")
+        format!("http://localhost:{loopback}/?autoconnect=true")
     } else {
-        format!("http://localhost:{port}")
+        format!("http://localhost:{port}/?autoconnect=true")
     }
 }
 

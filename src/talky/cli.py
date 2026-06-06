@@ -45,6 +45,44 @@ def _self_argv() -> list[str]:
     return [sys.executable, "-m", "talky"]
 
 
+def _locate_talky_app() -> Optional[Path]:
+    """Find an installed Talky.app on macOS.
+
+    Checks /Applications, ~/Applications, and the repo dev build path
+    (only meaningful in editable installs — _root points into site-packages
+    otherwise, where the path won't exist).
+    """
+    if sys.platform != "darwin":
+        return None
+    candidates = [
+        Path("/Applications/Talky.app"),
+        Path.home() / "Applications" / "Talky.app",
+        _root / "desktop" / "tauri" / "src-tauri" / "target" / "release" / "bundle" / "macos" / "Talky.app",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
+def _open_client(url: str) -> None:
+    """Open the voice-conversation client.
+
+    Prefers Talky.app if installed (the canonical voice surface, ticket
+    246d), else opens ``url`` in the default browser. The .app connects
+    to the daemon on its own; the URL is only used for the browser path.
+    """
+    app = _locate_talky_app()
+    if app is not None:
+        try:
+            subprocess.Popen(["open", "-a", str(app)])
+            return
+        except Exception:
+            pass
+    import webbrowser
+    webbrowser.open(url)
+
+
 def _read_runfile_port(path: Path) -> Optional[int]:
     try:
         return int(path.read_text().strip())
@@ -655,10 +693,13 @@ def cmd_profile(args):
         live = True  # assume live if we can't tell
 
     if not live:
-        import webbrowser
         client_url = f"{base_url}?autoconnect=true"
-        print(f"   no live pipeline — opening {client_url}")
-        webbrowser.open(client_url)
+        app = _locate_talky_app()
+        if app is not None:
+            print(f"   no live pipeline — opening {app.name}")
+        else:
+            print(f"   no live pipeline — opening {client_url}")
+        _open_client(client_url)
 
 
 def cmd_voice(args):

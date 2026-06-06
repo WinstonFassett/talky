@@ -364,6 +364,42 @@ async def talk_local_audio(text: str, silence_timeout: float = 10.0) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+def _locate_talky_app() -> Path | None:
+    """Find an installed Talky.app on macOS (ticket 246d).
+
+    Duplicated from cli.py to avoid a server→cli import. _PKG_DIR is
+    this package; the dev build path resolves via repo-root-from-package
+    and only exists in editable installs.
+    """
+    if sys.platform != "darwin":
+        return None
+    pkg_dir = Path(__file__).resolve().parent.parent  # src/talky/
+    repo_root = pkg_dir.parents[1]
+    candidates = [
+        Path("/Applications/Talky.app"),
+        Path.home() / "Applications" / "Talky.app",
+        repo_root / "desktop" / "tauri" / "src-tauri" / "target" / "release" / "bundle" / "macos" / "Talky.app",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
+def _open_client(url: str) -> str:
+    """Open Talky.app if installed, else the browser. Returns a label
+    naming what was opened (used for the start_convo response message)."""
+    app = _locate_talky_app()
+    if app is not None:
+        try:
+            subprocess.Popen(["open", "-a", str(app)])
+            return app.name
+        except Exception:
+            pass
+    webbrowser.open(url)
+    return url
+
+
 @mcp.tool()
 async def start_convo(auto_open: bool = True) -> dict:
     """Open a voice conversation with the browser UI.
@@ -384,13 +420,18 @@ async def start_convo(auto_open: bool = True) -> dict:
     scheme = "https" if _resolved_cert else "http"
     client_url = f"{scheme}://{mcp_host}:{mcp_port}?autoconnect=true"
 
+    opened = None
     if auto_open:
-        webbrowser.open(client_url)
+        opened = _open_client(client_url)
 
+    if opened and opened != client_url:
+        msg = f"Voice conversation ready. Opened {opened}."
+    else:
+        msg = f"Voice conversation ready. Browser opened to {client_url}."
     return {
         "success": True,
         "client_url": client_url,
-        "message": f"Voice conversation ready. Browser opened to {client_url}.",
+        "message": msg,
     }
 
 
