@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// Bootstrap & launch flow for the Talky shell.
 ///
@@ -197,10 +197,11 @@ fn render_bootstrap_failure(win: &WebviewWindow, err: &str) {
     let html = format!(
         "<style>body{{font-family:-apple-system,system-ui,sans-serif;padding:32px;max-width:560px;margin:auto;color:#222}} \
 pre{{background:#f4f4f4;padding:10px;border-radius:4px;white-space:pre-wrap;font-size:.85em}} \
-button{{padding:8px 14px;font-size:.95em;cursor:pointer;margin-right:8px}}</style> \
+button{{padding:8px 14px;font-size:.95em;cursor:pointer;margin-right:8px}} \
+button:disabled{{opacity:.5;cursor:wait}}</style> \
 <h2>Talky install failed</h2> \
 <pre>{}</pre> \
-<p><button onclick=\"window.location.reload()\">Retry</button> \
+<p><button id=\"retry-btn\" onclick=\"window.__retryBootstrap(this)\">Retry</button> \
 <button onclick=\"window.__openLog()\">Open log</button></p> \
 <p style=\"opacity:.6;font-size:.8em\">Log: <code>{}</code></p>",
         err.replace('<', "&lt;"),
@@ -212,7 +213,14 @@ button{{padding:8px 14px;font-size:.95em;cursor:pointer;margin-right:8px}}</styl
            (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) \
              ? window.__TAURI_INTERNALS__.invoke('open_bootstrap_log') \
              : (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke('open_bootstrap_log')); \
-         }} catch(e) {{}} return false; }};",
+         }} catch(e) {{}} return false; }}; \
+         window.__retryBootstrap = function(btn){{ \
+           try {{ if (btn) {{ btn.disabled = true; btn.textContent = 'Retrying…'; }} }} catch(e) {{}} \
+           try {{ \
+             (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) \
+               ? window.__TAURI_INTERNALS__.invoke('retry_bootstrap') \
+               : (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke('retry_bootstrap')); \
+           }} catch(e) {{}} return false; }};",
         js_escape(&html)
     ));
 }
@@ -264,10 +272,102 @@ fn open_bootstrap_log() -> Result<(), String> {
     Ok(())
 }
 
+/// Clear runfiles for a daemon whose pid is gone. Avoids second-spawn
+/// races on retry: ensure_daemon_running() trusts the pid file, so a
+/// stale one would make it think the daemon is up when it isn't.
+fn clear_stale_runfiles() {
+    if daemon_is_ready() {
+        return;
+    }
+    let run_dir = talky_run_dir();
+    for name in [
+        "talky-daemon.pid",
+        "talky-daemon.ready",
+        "talky-daemon.port",
+        "talky-daemon.loopback-port",
+        "talky-daemon.lock",
+    ] {
+        let _ = fs::remove_file(run_dir.join(name));
+    }
+}
+
+/// The single startup flow: ensure daemon → navigate webview, with
+/// bootstrap fallback. Called from `setup()` on first launch and again
+/// from the `retry_bootstrap` command after a failure.
+fn run_startup(handle: AppHandle) {
+    thread::spawn(move || {
+        match ensure_daemon_running() {
+            StartupOutcome::DaemonReady(port) => {
+                let url = webview_url_for(port);
+                if let Some(win) = handle.get_webview_window("main") {
+                    let _ = win.eval(&format!("window.location.replace('{url}');"));
+                }
+            }
+            StartupOutcome::BootstrapNeeded => {
+                if let Some(win) = handle.get_webview_window("main") {
+                    render_bootstrap_splash(&win);
+                }
+                let win_for_stages = handle.get_webview_window("main");
+                let result = run_bootstrap(|key, msg| {
+                    if let Some(ref w) = win_for_stages {
+                        update_bootstrap_stage(w, key, msg);
+                    }
+                });
+                match result {
+                    Ok(()) => match ensure_daemon_running() {
+                        StartupOutcome::DaemonReady(port) => {
+                            let url = webview_url_for(port);
+                            if let Some(win) = handle.get_webview_window("main") {
+                                let _ = win.eval(&format!("window.location.replace('{url}');"));
+                            }
+                        }
+                        other => {
+                            if let Some(win) = handle.get_webview_window("main") {
+                                let msg = match other {
+                                    StartupOutcome::Failed(m) => m,
+                                    StartupOutcome::BootstrapNeeded => {
+                                        "Installer reported success but talky binary still missing".into()
+                                    }
+                                    _ => "Unexpected post-install state".into(),
+                                };
+                                render_bootstrap_failure(&win, &msg);
+                            }
+                        }
+                    },
+                    Err(err) => {
+                        if let Some(win) = handle.get_webview_window("main") {
+                            render_bootstrap_failure(&win, &err);
+                        }
+                    }
+                }
+            }
+            StartupOutcome::Failed(msg) => {
+                if let Some(win) = handle.get_webview_window("main") {
+                    render_bootstrap_failure(&win, &msg);
+                }
+            }
+        }
+    });
+}
+
+#[tauri::command]
+fn retry_bootstrap(app: AppHandle) -> Result<(), String> {
+    clear_stale_runfiles();
+    // Show a minimal "retrying..." placeholder so the user sees immediate
+    // feedback while ensure_daemon_running runs.
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.eval(
+            "document.body.innerHTML = '<div style=\"font-family:-apple-system,system-ui,sans-serif;padding:32px;max-width:560px;margin:auto;color:#222\"><h2>Retrying…</h2></div>';"
+        );
+    }
+    run_startup(app);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![open_bootstrap_log])
+        .invoke_handler(tauri::generate_handler![open_bootstrap_log, retry_bootstrap])
         .setup(|app| {
             // Run startup in a worker thread so we don't block the main runloop.
             // Show a tiny "starting..." window immediately; swap URL when ready.
@@ -277,70 +377,7 @@ pub fn run() {
                 .inner_size(900.0, 650.0)
                 .build()?;
 
-            let handle = app.handle().clone();
-            thread::spawn(move || {
-                match ensure_daemon_running() {
-                    StartupOutcome::DaemonReady(port) => {
-                        let url = webview_url_for(port);
-                        if let Some(win) = handle.get_webview_window("main") {
-                            let _ = win.eval(&format!("window.location.replace('{url}');"));
-                        }
-                    }
-                    StartupOutcome::BootstrapNeeded => {
-                        // Show in-shell progress UI and pipe install-talky.sh through it.
-                        if let Some(win) = handle.get_webview_window("main") {
-                            render_bootstrap_splash(&win);
-                        }
-                        let win_for_stages = handle.get_webview_window("main");
-                        let result = run_bootstrap(|key, msg| {
-                            if let Some(ref w) = win_for_stages {
-                                update_bootstrap_stage(w, key, msg);
-                            }
-                        });
-                        match result {
-                            Ok(()) => {
-                                // Installer done. Try ensure_daemon_running again — it'll
-                                // find the freshly installed binary and spawn the daemon.
-                                match ensure_daemon_running() {
-                                    StartupOutcome::DaemonReady(port) => {
-                                        let url = webview_url_for(port);
-                                        if let Some(win) = handle.get_webview_window("main") {
-                                            let _ = win.eval(&format!(
-                                                "window.location.replace('{url}');"
-                                            ));
-                                        }
-                                    }
-                                    other => {
-                                        if let Some(win) = handle.get_webview_window("main") {
-                                            let msg = match other {
-                                                StartupOutcome::Failed(m) => m,
-                                                StartupOutcome::BootstrapNeeded => {
-                                                    "Installer reported success but talky binary still missing".into()
-                                                }
-                                                _ => "Unexpected post-install state".into(),
-                                            };
-                                            render_bootstrap_failure(&win, &msg);
-                                        }
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                if let Some(win) = handle.get_webview_window("main") {
-                                    render_bootstrap_failure(&win, &err);
-                                }
-                            }
-                        }
-                    }
-                    StartupOutcome::Failed(msg) => {
-                        if let Some(win) = handle.get_webview_window("main") {
-                            let _ = win.eval(&format!(
-                                "document.body.innerHTML = '<h1>Talky failed to start</h1><pre>{}</pre>';",
-                                msg.replace('\'', "\\'").replace('\n', "\\n")
-                            ));
-                        }
-                    }
-                }
-            });
+            run_startup(app.handle().clone());
 
             Ok(())
         })
