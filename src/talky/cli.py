@@ -30,6 +30,21 @@ _DAEMON_PORT_FILE = Path.home() / ".talky" / "run" / "talky-daemon.port"
 _DAEMON_LOOPBACK_PORT_FILE = Path.home() / ".talky" / "run" / "talky-daemon.loopback-port"
 
 
+def _self_argv() -> list[str]:
+    """Argv prefix for re-invoking talky from inside talky.
+
+    Uses ``sys.executable -m talky`` so we never depend on ``talky``
+    being on PATH. The interpreter path is always absolute (uv-installed
+    Python lives at a known absolute path), and ``-m`` resolves through
+    ``sys.path``, not the environment — robust under GUI launches,
+    launchd, cron, Electron, MCP-server spawns, etc.
+
+    This is the same pattern used by pipx, poetry, ruff, and the Hermes
+    Desktop blueprint Talky's spike studied.
+    """
+    return [sys.executable, "-m", "talky"]
+
+
 def _read_runfile_port(path: Path) -> Optional[int]:
     try:
         return int(path.read_text().strip())
@@ -840,7 +855,7 @@ def cmd_daemon(args):
     if force and talky_daemon_is_running():
         print("🔪 stopping existing daemon...", file=sys.stderr)
         try:
-            subprocess.run(["talky", "kill"], check=False)
+            subprocess.run([*_self_argv(), "kill"], check=False)
         except (FileNotFoundError, subprocess.SubprocessError) as e:
             print(f"⚠️  talky kill failed: {e}", file=sys.stderr)
 
@@ -972,7 +987,7 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
             log_fh = open(log_path, "a")
             startup_err_fh = open(startup_stderr_path, "w")  # truncate
             proc = subprocess.Popen(
-                ["talky", "daemon", "--foreground"],
+                [*_self_argv(), "daemon", "--foreground"],
                 stdout=log_fh,
                 stderr=startup_err_fh,
                 stdin=subprocess.DEVNULL,

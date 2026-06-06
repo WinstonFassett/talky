@@ -8,10 +8,21 @@ the per-profile ``launcher:`` block in ``talky-profiles.yaml``. The
 """
 
 import subprocess
+import sys
 import time
 from typing import Any, Dict, Optional
 
 from loguru import logger
+
+
+def _self_argv() -> list[str]:
+    """Re-invoke talky via ``sys.executable -m talky`` so PATH isn't required.
+
+    See ``talky.cli._self_argv`` for rationale. Duplicated here (rather
+    than imported) to keep the launcher import-light and avoid pulling
+    the full CLI module just to get a 1-line helper.
+    """
+    return [sys.executable, "-m", "talky"]
 
 
 class DaemonManager:
@@ -44,7 +55,7 @@ class DaemonManager:
             pass
 
         logger.info("Starting talky daemon in background...")
-        daemon_args = ["talky", "daemon"]
+        daemon_args = [*_self_argv(), "daemon"]
 
         if voice_profile := config.get("voice_profile"):
             daemon_args.extend(["--voice-profile", voice_profile])
