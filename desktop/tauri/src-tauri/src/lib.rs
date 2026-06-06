@@ -157,24 +157,72 @@ fn js_escape(s: &str) -> String {
 fn render_bootstrap_splash(win: &WebviewWindow) {
     let log = js_escape(&bootstrap_log_path().display().to_string());
     let url = js_escape(BOOTSTRAP_URL);
+    // Note: we replace document.documentElement.innerHTML below, so this
+    // string carries a full <head>+<body>. Replacing only body would orphan
+    // the user-agent stylesheet's default <body> properties from a prior
+    // splash render, producing weird inline layouts.
     let html = format!(
-        "<style>body{{font-family:-apple-system,system-ui,sans-serif;padding:32px;max-width:560px;margin:auto;color:#222}} \
-.spinner{{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:#333;border-radius:50%;animation:s 1s linear infinite;margin-right:10px;vertical-align:-2px}} \
+        "<head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"light dark\"><style> \
+*,*::before,*::after{{box-sizing:border-box}} \
+:root{{color-scheme:light dark;--bg:#ffffff;--fg:#1a1a1a;--muted:#666;--rule:#e5e5e5;--code-bg:#f4f4f4;--spinner-track:#d0d0d0;--spinner-head:#222}} \
+@media (prefers-color-scheme: dark){{:root{{--bg:#1c1c1e;--fg:#f2f2f7;--muted:#8e8e93;--rule:#3a3a3c;--code-bg:#2c2c2e;--spinner-track:#48484a;--spinner-head:#f2f2f7}}}} \
+html,body{{margin:0;padding:0;background:var(--bg);color:var(--fg)}} \
+body{{font-family:-apple-system,system-ui,sans-serif;line-height:1.4;min-height:100vh}} \
+.wrap{{max-width:640px;margin:0 auto;padding:32px}} \
+h2{{margin:0 0 16px 0;font-weight:600;font-size:1.4em}} \
+.spinner{{display:inline-block;width:14px;height:14px;border:2px solid var(--spinner-track);border-top-color:var(--spinner-head);border-radius:50%;animation:s 1s linear infinite;margin-right:10px;vertical-align:-2px}} \
 @keyframes s{{to{{transform:rotate(360deg)}}}} \
-#stage{{font-size:1.1em;margin:18px 0}} #url{{opacity:.5;font-size:.8em;word-break:break-all}} \
-button{{padding:8px 14px;font-size:.95em;cursor:pointer}}</style> \
+#stage{{font-size:1.05em;margin:18px 0;overflow-wrap:anywhere}} \
+#elapsed{{color:var(--muted);font-size:.85em;font-variant-numeric:tabular-nums;margin-left:8px;white-space:nowrap}} \
+#url{{color:var(--muted);font-size:.8em;overflow-wrap:anywhere;margin:8px 0 0 0}} \
+details{{margin-top:20px;border-top:1px solid var(--rule);padding-top:14px}} \
+summary{{cursor:pointer;color:var(--muted);font-size:.9em;user-select:none}} \
+summary:hover{{color:var(--fg)}} \
+#log-tail{{background:var(--code-bg);color:var(--fg);padding:10px;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.75em;line-height:1.45;max-height:260px;overflow:auto;margin-top:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}}</style></head><body> \
+<div class=\"wrap\"> \
 <h2>Installing Talky…</h2> \
-<div id=\"stage\"><span class=\"spinner\"></span><span id=\"stage-msg\">Starting…</span></div> \
+<div id=\"stage\"><span class=\"spinner\"></span><span id=\"stage-msg\">Starting…</span><span id=\"elapsed\"></span></div> \
 <p id=\"url\">From: {url}</p> \
-<p id=\"log-link\" style=\"display:none\"><a href=\"#\" onclick=\"window.__openLog()\">Open install log</a></p>"
+<details id=\"details\"><summary>Show details</summary><pre id=\"log-tail\">(log not yet available)</pre></details> \
+</div></body>"
     );
+    // The splash sets up:
+    //  - window.__openLog: opens the full log in a system editor
+    //  - window.__stageStart: timestamp the current stage started, used by
+    //    the elapsed-time ticker. update_bootstrap_stage() resets it.
+    //  - elapsed-time ticker: updates #elapsed every 250ms with "(Xs)" or "(Xm Ys)"
+    //  - log-tail poller: every 2s, when <details> is open, fetches the
+    //    last 50 lines of bootstrap.log and updates #log-tail
     let _ = win.eval(&format!(
-        "document.body.innerHTML = '{}'; window.__logPath = '{}'; \
-         window.__openLog = function(){{ try {{ \
-           (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) \
-             ? window.__TAURI_INTERNALS__.invoke('open_bootstrap_log') \
-             : (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke('open_bootstrap_log')); \
-         }} catch(e) {{}} return false; }};",
+        "document.documentElement.innerHTML = '{}'; window.__logPath = '{}'; \
+         var _inv = function(cmd, args){{ try {{ \
+           return (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) \
+             ? window.__TAURI_INTERNALS__.invoke(cmd, args) \
+             : (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(cmd, args)); \
+         }} catch(e) {{ return Promise.reject(e); }} }}; \
+         window.__openLog = function(){{ _inv('open_bootstrap_log'); return false; }}; \
+         window.__stageStart = Date.now(); \
+         var _fmtElapsed = function(ms){{ var s = Math.floor(ms/1000); if (s < 60) return '(' + s + 's)'; \
+           var m = Math.floor(s/60); var r = s - m*60; return '(' + m + 'm ' + r + 's)'; }}; \
+         if (window.__elapsedTimer) clearInterval(window.__elapsedTimer); \
+         window.__elapsedTimer = setInterval(function(){{ \
+           var el = document.getElementById('elapsed'); \
+           if (!el) return; \
+           var dt = Date.now() - window.__stageStart; \
+           el.textContent = ' ' + _fmtElapsed(dt); \
+         }}, 250); \
+         if (window.__tailTimer) clearInterval(window.__tailTimer); \
+         window.__tailTimer = setInterval(function(){{ \
+           var det = document.getElementById('details'); \
+           if (!det || !det.open) return; \
+           var p = _inv('read_bootstrap_log_tail', {{ lines: 50 }}); \
+           if (p && p.then) p.then(function(text){{ \
+             var pre = document.getElementById('log-tail'); \
+             if (!pre) return; \
+             pre.textContent = text || '(log empty)'; \
+             pre.scrollTop = pre.scrollHeight; \
+           }}); \
+         }}, 2000);",
         js_escape(&html),
         log
     ));
@@ -187,7 +235,9 @@ fn update_bootstrap_stage(win: &WebviewWindow, key: &str, msg: &str) {
         msg.to_string()
     };
     let _ = win.eval(&format!(
-        "var el=document.getElementById('stage-msg');if(el)el.textContent='{}';",
+        "var el=document.getElementById('stage-msg');if(el)el.textContent='{}'; \
+         window.__stageStart = Date.now(); \
+         var et=document.getElementById('elapsed');if(et)et.textContent='';",
         js_escape(&text)
     ));
 }
@@ -195,20 +245,32 @@ fn update_bootstrap_stage(win: &WebviewWindow, key: &str, msg: &str) {
 fn render_bootstrap_failure(win: &WebviewWindow, err: &str) {
     let log = bootstrap_log_path().display().to_string();
     let html = format!(
-        "<style>body{{font-family:-apple-system,system-ui,sans-serif;padding:32px;max-width:560px;margin:auto;color:#222}} \
-pre{{background:#f4f4f4;padding:10px;border-radius:4px;white-space:pre-wrap;font-size:.85em}} \
-button{{padding:8px 14px;font-size:.95em;cursor:pointer;margin-right:8px}} \
-button:disabled{{opacity:.5;cursor:wait}}</style> \
+        "<head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"light dark\"><style> \
+*,*::before,*::after{{box-sizing:border-box}} \
+:root{{color-scheme:light dark;--bg:#ffffff;--fg:#1a1a1a;--muted:#666;--code-bg:#f4f4f4;--btn-bg:#f0f0f0;--btn-border:#d0d0d0}} \
+@media (prefers-color-scheme: dark){{:root{{--bg:#1c1c1e;--fg:#f2f2f7;--muted:#8e8e93;--code-bg:#2c2c2e;--btn-bg:#3a3a3c;--btn-border:#48484a}}}} \
+html,body{{margin:0;padding:0;background:var(--bg);color:var(--fg)}} \
+body{{font-family:-apple-system,system-ui,sans-serif;line-height:1.4;min-height:100vh}} \
+.wrap{{max-width:560px;margin:0 auto;padding:32px}} \
+h2{{margin:0 0 16px 0;font-weight:600;font-size:1.4em}} \
+pre{{background:var(--code-bg);color:var(--fg);padding:10px;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.82em;line-height:1.45;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}} \
+button{{padding:8px 14px;font-size:.95em;cursor:pointer;margin-right:8px;background:var(--btn-bg);color:var(--fg);border:1px solid var(--btn-border);border-radius:6px}} \
+button:hover{{filter:brightness(1.1)}} \
+button:disabled{{opacity:.5;cursor:wait}} \
+.log-path{{color:var(--muted);font-size:.8em}} \
+code{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}}</style></head><body> \
+<div class=\"wrap\"> \
 <h2>Talky install failed</h2> \
 <pre>{}</pre> \
 <p><button id=\"retry-btn\" onclick=\"window.__retryBootstrap(this)\">Retry</button> \
 <button onclick=\"window.__openLog()\">Open log</button></p> \
-<p style=\"opacity:.6;font-size:.8em\">Log: <code>{}</code></p>",
+<p class=\"log-path\">Log: <code>{}</code></p> \
+</div></body>",
         err.replace('<', "&lt;"),
         log.replace('<', "&lt;")
     );
     let _ = win.eval(&format!(
-        "document.body.innerHTML = '{}'; \
+        "document.documentElement.innerHTML = '{}'; \
          window.__openLog = function(){{ try {{ \
            (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) \
              ? window.__TAURI_INTERNALS__.invoke('open_bootstrap_log') \
@@ -270,6 +332,21 @@ fn open_bootstrap_log() -> Result<(), String> {
         .status()
         .map_err(|e| format!("open: {e}"))?;
     Ok(())
+}
+
+/// Return the last `lines` lines of ~/.talky/run/bootstrap.log so the
+/// splash can surface install activity (dd2b — bootstrap visibility).
+/// Empty string if the log doesn't exist yet.
+#[tauri::command]
+fn read_bootstrap_log_tail(lines: usize) -> Result<String, String> {
+    let path = bootstrap_log_path();
+    let content = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Ok(String::new()),
+    };
+    let n = lines.max(1);
+    let tail: Vec<&str> = content.lines().rev().take(n).collect();
+    Ok(tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
 }
 
 /// Clear runfiles for a daemon whose pid is gone. Avoids second-spawn
@@ -357,7 +434,7 @@ fn retry_bootstrap(app: AppHandle) -> Result<(), String> {
     // feedback while ensure_daemon_running runs.
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.eval(
-            "document.body.innerHTML = '<div style=\"font-family:-apple-system,system-ui,sans-serif;padding:32px;max-width:560px;margin:auto;color:#222\"><h2>Retrying…</h2></div>';"
+            "document.documentElement.innerHTML = '<head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"light dark\"><style>:root{color-scheme:light dark;--bg:#fff;--fg:#1a1a1a}@media (prefers-color-scheme:dark){:root{--bg:#1c1c1e;--fg:#f2f2f7}}html,body{margin:0;padding:0;background:var(--bg);color:var(--fg)}body{font-family:-apple-system,system-ui,sans-serif;line-height:1.4;min-height:100vh}.wrap{max-width:560px;margin:0 auto;padding:32px}h2{margin:0 0 16px 0;font-weight:600;font-size:1.4em}</style></head><body><div class=\"wrap\"><h2>Retrying…</h2></div></body>';"
         );
     }
     run_startup(app);
@@ -367,7 +444,11 @@ fn retry_bootstrap(app: AppHandle) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![open_bootstrap_log, retry_bootstrap])
+        .invoke_handler(tauri::generate_handler![
+            open_bootstrap_log,
+            retry_bootstrap,
+            read_bootstrap_log_tail
+        ])
         .setup(|app| {
             // Run startup in a worker thread so we don't block the main runloop.
             // Show a tiny "starting..." window immediately; swap URL when ready.
