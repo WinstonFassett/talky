@@ -69,8 +69,31 @@ These came up while debugging — left as follow-up tickets:
 - Actually sign + notarize a Tauri build (needs Apple Developer ID + creds).
 - Wire a hosted version of `install-talky.sh` at a pinned commit / CDN.
 - Replace the Terminal.app bootstrap fallback with a native progress UI (parse `::stage::` lines from the shell).
-- Update `client/README.md` to note the daemon-must-be-running prereq for `npm run dev`.
+- Update `client/README.md` to note the daemon-must-be-running prereq for `npm run dev`. *(done in phase 3)*
 - Cross-platform bootstrap (PowerShell variant for Windows). Out of scope per the ticket — mac-only.
+- **Homebrew cask.** Decided not to scaffold in this spike — needs a stable GH Releases artifact URL + sha256, neither of which exists yet, so a checked-in `talky.rb` would be mostly placeholders. Sketch for when the release pipeline is ready:
+  - Tap repo at `WinstonFassett/homebrew-talky` (separate from this repo so cask updates don't churn here).
+  - Cask installs `Talky.app` from a tagged GH Release; depends on a `talky` formula or a post-install `uv tool install talky`.
+  - User flow: `brew tap WinstonFassett/talky && brew install --cask talky`.
+  - Homebrew strips quarantine on cask installs → no right-click-open ceremony.
+  - Decision deferred: bundle the CLI install into the cask, or ship the cask `.app`-only and require a separate `brew install talky-cli` formula. The latter aligns better with the "thin shell + bootstrap" architecture but doubles the user's tap commands.
+
+## Phase 3 additions (2026-06-06)
+
+Picked up after phases 1 + 2:
+
+1. **BootstrapNeeded path actually exercised** with a hidden talky binary (commit `fe0d30a`). Three real bugs found and fixed:
+   - osascript failures were silently swallowed (splash claimed "Installing Talky…" with no Terminal window); now captured + surfaced with a copy-paste curl fallback.
+   - Default bootstrap URL had wrong-case owner (`winstonfassett/talky` → 404 on raw.githubusercontent.com, which is case-sensitive); fixed to `WinstonFassett/talky`.
+   - URL pinned to `main` blocks spike-branch dogfood; added `TALKY_BOOTSTRAP_URL` build-time override.
+   - End-to-end verified: fresh `$HOME`, hidden PATH → splash → Terminal opens → curl|bash → all 6 bootstrap stages succeed.
+   - **Caveat:** Terminal inherits the user's real shell env when spawned by osascript, so the recipe doesn't simulate a true fresh-account state. For that, use a separate user account or container.
+
+2. **Venv drift checker** at `scripts/check-venv-drift.py` (commit `78b9886`). Compares the global `talky` tool venv against the project `.venv`; flags version mismatches with critical-package highlighting. Exit codes 0/1/2 for tooling integration. Initial run surfaced 12 mismatches in the current state — none critical, but proves the drift is real.
+
+3. **README rewrites** (commit `ba813ff`):
+   - `desktop/tauri/README.md` — was stale (described the Zig shell). Replaced end-to-end with the actual Tauri shell story: daemon-discovery flow, build commands, bootstrap URL override, BootstrapNeeded test recipe, ad-hoc sign + right-click-open ceremony.
+   - `client/README.md` — new, documents the vite-needs-daemon-runfile prereq.
 
 ## Files touched
 
