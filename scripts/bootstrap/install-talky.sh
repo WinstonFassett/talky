@@ -10,8 +10,14 @@
 #   2. uv: install uv via curl|sh if missing
 #   3. python: uv-managed Python 3.12 (no embed; uv handles it)
 #   4. talky: install/upgrade `talky` from PyPI into uv tool
-#   5. portaudio: brew-install if missing (so `talky say` works later)
-#   6. done: print final talky binary path
+#   5. done: print final talky binary path
+#
+# Scope note: this installer is for the desktop-app / WebRTC voice path.
+# It does NOT install PortAudio. The CLI's local-audio path
+# (`talky say` / `talky ask`) uses a separate daemon backed by PyAudio
+# and requires PortAudio system-side — that's installed by the
+# `local_audio` extra's on-demand installer when the user actually runs
+# one of those commands. Keep this script lean: uv + python + wheel.
 #
 # Failure mode: prints "::error::<message>" and exits non-zero. The
 # shell parses for these and surfaces them in the UI.
@@ -75,31 +81,7 @@ fi
 uv tool install --python 3.12 --force "$TALKY_WHEEL"
 echo "  talky: $(uv tool dir 2>/dev/null || echo '?')/talky/bin/talky"
 
-# --- 5. portaudio (optional, for local audio) --------------------------------
-stage portaudio "Checking PortAudio (system dep for local audio)"
-
-case "$OS" in
-  Darwin)
-    if command -v brew >/dev/null 2>&1; then
-      if ! brew list portaudio >/dev/null 2>&1; then
-        brew install portaudio || echo "  portaudio install failed; 'talky say' will be unavailable until you install it manually"
-      else
-        echo "  portaudio already installed"
-      fi
-    else
-      echo "  Homebrew not found; skipping portaudio (install with: brew install portaudio)"
-    fi
-    ;;
-  Linux)
-    if command -v apt-get >/dev/null 2>&1; then
-      echo "  on Debian/Ubuntu run: sudo apt-get install -y portaudio19-dev"
-    elif command -v dnf >/dev/null 2>&1; then
-      echo "  on Fedora run: sudo dnf install -y portaudio-devel"
-    fi
-    ;;
-esac
-
-# --- 6. done -----------------------------------------------------------------
+# --- 5. done -----------------------------------------------------------------
 TALKY_BIN="$(command -v talky 2>/dev/null || echo '')"
 [ -n "$TALKY_BIN" ] || emit_err "talky not on PATH after install"
 echo "::stage::done::Talky installed at $TALKY_BIN"

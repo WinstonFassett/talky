@@ -33,17 +33,21 @@ Voice interface for AI. Talk to OpenClaw, Moltis, Hermes or Pi. Or use MCP to ta
 
 ## Quick Start
 
-**Requirements**: Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/), Homebrew
+**Requirements**: Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/)
 
 ```bash
-brew install portaudio                # required for local audio (talky say)
 uv tool install talky                 # from PyPI, or: uv tool install --editable . (from source)
 talky openclaw                    # Talk to OpenClaw
 talky moltis                      # Talk to Moltis  
 talky hermes                      # Talk to Hermes (NousResearch)
 talky pi                          # Talk to Pi
-talky say "Hello world"           # Test voice output
 ```
+
+> **CLI local audio (optional):** `talky say` / `talky ask` use a separate
+> local-audio daemon that needs PortAudio system-side. Install it only if
+> you want those commands: `brew install portaudio` (macOS) or
+> `apt-get install portaudio19-dev` (Debian/Ubuntu). The browser /
+> desktop-app voice path doesn't need it.
 
 > **Install via `uv tool`, not `pip`.** Talky installs heavy LLM / TTS / STT
 > dependencies on-demand via `uv tool install --with`. Plain `pip install talky`
@@ -80,9 +84,9 @@ talky say "Hello world"           # Test voice output
 - `talky config` - Create config files
 - Add API keys to `~/.talky/credentials/` (one JSON file per provider)
 
-> **Note:** The default voice profile uses local providers (kokoro TTS + whisper STT).
-> These require `brew install portaudio` and will download ML models on first use.
-> To avoid this, set a cloud voice profile in `~/.talky/settings.yaml` before running.
+> **Note:** The default voice profile uses local providers (kokoro TTS + whisper STT)
+> and will download ML models on first use (~1-2 GB). To skip the download, set a
+> cloud voice profile in `~/.talky/settings.yaml` before running.
 
 **Example API Keys**
 ```bash

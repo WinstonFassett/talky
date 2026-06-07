@@ -103,14 +103,18 @@ xattr -dr com.apple.quarantine Talky.app
 The shell expects an installer at `BOOTSTRAP_URL` (configurable at
 build time, see above). The installer is in this repo at
 [`scripts/bootstrap/install-talky.sh`](../../scripts/bootstrap/install-talky.sh)
-and runs six stages:
+and runs five stages:
 
 1. detect — OS, arch, existing talky binary
 2. uv — install uv via `curl | sh` if missing
 3. python — `uv` installs Python 3.12
 4. talky — `uv tool install --python 3.12 talky` from PyPI
-5. portaudio — brew-install if missing (for `talky say`)
-6. done — print final talky binary path
+5. done — print final talky binary path
+
+The desktop / WebRTC voice path needs no native audio libs. PortAudio /
+PyAudio are only required by the CLI `talky say` / `talky ask` path, and
+are installed on demand by the `local_audio` extra when the user runs
+those commands — not by this installer.
 
 Stage transitions are written as `::stage::<name>::<message>` lines so a
 future native progress UI can parse them. Today the user sees raw
