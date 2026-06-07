@@ -6,6 +6,7 @@ voice_backends:
       description: "Local TTS via Kokoro (no API key)"
       requires_credentials: false
       service_class: "pipecat.services.kokoro.tts.KokoroTTSService"
+      extra: "tts-kokoro"
       default_voice: "af_heart"
       available_voices:
         # Female voices
@@ -70,6 +71,7 @@ voice_backends:
       requires_credentials: true
       service_class: "pipecat.services.cartesia.tts.CartesiaHttpTTSService"
       credential_type: "cartesia"
+      extra: "tts-cartesia"
       default_voice: "e07c00bc-4134-4eae-9ea4-1a55fb45746b"
       available_voices:
         # English voices - using real Cartesia voice IDs
@@ -88,6 +90,7 @@ voice_backends:
       requires_credentials: true
       service_class: "pipecat.services.elevenlabs.tts.ElevenLabsHttpTTSService"
       credential_type: "elevenlabs"
+      extra: "tts-elevenlabs"
       default_voice: "pNInz6obpgDQGcFmaJgB"
       available_voices:
         # Official ElevenLabs premade voices from API
@@ -118,6 +121,7 @@ voice_backends:
       requires_credentials: true
       service_class: "pipecat.services.google.tts.GoogleTTSService"
       credential_type: "google"
+      extra: "stt-google"
       default_voice: "en-US-Chirp3-HD-Puck"
       available_voices:
         # US English voices
@@ -250,6 +254,7 @@ voice_backends:
       description: "Local Whisper via MLX (no API key, macOS)"
       requires_credentials: false
       service_class: pipecat.services.whisper.stt.WhisperSTTServiceMLX
+      extra: "stt-whisper-local"
       default_model: "mlx-community/whisper-large-v3-turbo"
 
     deepgram:
@@ -257,18 +262,21 @@ voice_backends:
       requires_credentials: true
       service_class: "pipecat.services.deepgram.stt.DeepgramSTTService"
       credential_type: "deepgram"
+      extra: "stt-deepgram"
       default_model: "nova-2"
-    
+
     assemblyai:
       description: "AssemblyAI STT"
       requires_credentials: true
       service_class: "pipecat.services.assemblyai.stt.AssemblyAISTTService"
       credential_type: "assemblyai"
+      extra: "stt-assemblyai"
       default_model: "best"
-    
+
     google:
       description: "Google Cloud Speech-to-Text"
       requires_credentials: true
       service_class: "pipecat.services.google.stt.GoogleSTTService"
       credential_type: "google"
+      extra: "stt-google"
       default_model: "latest_short"

@@ -1005,6 +1005,9 @@ def _build_webrtc_routes():
                         # Empty before the first pipeline build; the picker
                         # uses this to gray out / annotate non-Ready backends.
                         "backendStatus": voice_channel.backend_status(),
+                        # Voice Provider Status — STT/TTS equivalent (ticket 4b1c).
+                        # Keys: "<kind>:<provider>", e.g. "tts:cartesia".
+                        "voiceProviderStatus": voice_channel.voice_provider_status(),
                     },
                 )
                 yield init.sse()

@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
 
+export interface VoiceProviderStatus {
+  status: 'ready' | 'installable' | 'misconfigured' | 'blocked';
+  reason: string;
+}
+
 export interface VoiceProfile {
   name: string;
   description: string;
@@ -7,6 +12,9 @@ export interface VoiceProfile {
   provider?: string;
   tts?: string;
   stt?: string;
+  ttsStatus?: VoiceProviderStatus;
+  sttStatus?: VoiceProviderStatus;
+  ready?: boolean;
 }
 
 export function inferProvider(v: VoiceProfile): string {

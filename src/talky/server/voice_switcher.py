@@ -76,8 +76,17 @@ class VoiceProfileSwitcher:
         initial_profile_obj = self.pm.get_voice_profile(self.current_profile)
         initial_provider = initial_profile_obj.tts_provider if initial_profile_obj else None
 
-        # Try to create TTS services for all providers
+        # Provider Status gate (ticket 4b1c) — skip non-Ready providers
+        # explicitly so we don't try to import a missing dep here. The
+        # picker already shows the reason.
+        from talky.backends import BackendStatus
+        from talky.shared.voice_status import voice_provider_status
+
         for provider in unique_providers:
+            bs, reason = voice_provider_status("tts", provider)
+            if bs is not BackendStatus.READY:
+                logger.info(f"VoiceProfileSwitcher: skipping TTS {provider!r} ({bs.value}): {reason}")
+                continue
             try:
                 # Pick the voice this provider's service starts speaking. For
                 # the initial profile's provider, use the initial profile's
@@ -101,13 +110,8 @@ class VoiceProfileSwitcher:
                     )
                     tts_services[provider] = service
                     logger.info(f"Created TTS service for {provider}: {type(service).__name__}")
-            except ValueError as e:
-                if "Credentials required" in str(e):
-                    logger.warning(f"Provider {provider} has profiles but credentials missing - switching to this provider will not be available")
-                else:
-                    logger.error(f"Failed to create TTS service for {provider}: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error creating TTS service for {provider}: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Failed to construct TTS service for {provider!r}: {e}")
         
         if not tts_services:
             raise ValueError("No TTS services could be created. Check credentials and configuration.")

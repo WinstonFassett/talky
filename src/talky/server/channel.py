@@ -253,6 +253,12 @@ class VoiceChannel:
         # Shape: {backend_name: {"status": BackendStatus, "reason": str}}.
         self._backend_status: dict[str, dict] = {}
 
+        # Voice Provider Status — STT/TTS equivalent (ticket 4b1c). Populated
+        # during warmup via talky.shared.voice_status; refreshed on each
+        # _bootstrap_tts_services call. Shape:
+        # {"<kind>:<provider>": {"status": str, "reason": str}}.
+        self._voice_provider_status: dict[str, dict] = {}
+
     # ── warmup ──────────────────────────────────────────────────────────────
 
     def warmup(self) -> None:
@@ -288,6 +294,9 @@ class VoiceChannel:
         # each adapter's `status()` is a pure config/install check, no
         # network. See UBIQUITOUS_LANGUAGE.md.
         self._refresh_backend_status(pm)
+
+        # Voice Provider Status — STT/TTS parallel (ticket 4b1c).
+        self._refresh_voice_provider_status()
 
         self._warm = True
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -366,6 +375,26 @@ class VoiceChannel:
         build. Shape: ``{backend_name: {"status": str, "reason": str}}``.
         """
         return dict(self._backend_status)
+
+    def voice_provider_status(self) -> dict[str, dict]:
+        """Return Voice Provider Status per STT/TTS provider (ticket 4b1c).
+
+        Keys are ``"<kind>:<provider>"`` (e.g. ``"tts:cartesia"``). The
+        picker uses this to gray out voice profiles whose providers are
+        Installable / Misconfigured / Blocked. Shape parallels
+        ``backend_status()``.
+        """
+        return dict(self._voice_provider_status)
+
+    def _refresh_voice_provider_status(self) -> None:
+        """Recompute Voice Provider Status. Cheap; safe to call repeatedly."""
+        try:
+            from talky.shared.voice_status import all_voice_provider_status
+
+            self._voice_provider_status = all_voice_provider_status()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"VoiceChannel: voice_provider_status refresh failed: {e}")
+            self._voice_provider_status = {}
 
     # ── room occupancy & TTL ────────────────────────────────────────────────
 
@@ -684,7 +713,10 @@ class VoiceChannel:
     def voices_info(self) -> list[dict]:
         """Return available voice profiles with current selection.
 
-        Works without a live pipeline — reads from config.
+        Works without a live pipeline — reads from config. Each entry also
+        carries ``ttsStatus`` / ``sttStatus`` ({"status", "reason"}) from
+        the Voice Provider Status map so the picker can gray out / surface
+        reasons for non-Ready profiles (ticket 4b1c).
         """
         from talky.shared.profile_manager import get_profile_manager
 
@@ -694,6 +726,7 @@ class VoiceChannel:
                 current = self._voice_switcher.current_profile
             else:
                 current = self._pending_voice_profile or pm.get_default_voice_profile() or None
+            vps = self._voice_provider_status
             out = []
             for name, _desc in pm.list_voice_profiles().items():
                 p = pm.get_voice_profile(name)
@@ -709,6 +742,9 @@ class VoiceChannel:
                     stt = f"{p.stt_provider} · {p.stt_model}"
                 else:
                     stt = p.stt_provider
+                tts_status = vps.get(f"tts:{p.tts_provider}", {"status": "ready", "reason": ""})
+                stt_status = vps.get(f"stt:{p.stt_provider}", {"status": "ready", "reason": ""})
+                ready = tts_status["status"] == "ready" and stt_status["status"] == "ready"
                 out.append(
                     {
                         "name": name,
@@ -717,6 +753,9 @@ class VoiceChannel:
                         "tts": tts,
                         "stt": stt,
                         "provider": p.tts_provider,
+                        "ttsStatus": tts_status,
+                        "sttStatus": stt_status,
+                        "ready": ready,
                     }
                 )
             return out
@@ -741,6 +780,47 @@ class VoiceChannel:
             raise ValueError(
                 f"unknown voice profile {profile_name!r}"
             )
+
+        # On-demand install for STT/TTS extras (ticket 4b1c). Mirror of the
+        # LLM backend pattern in switch_to_profile(): if either provider
+        # used by this voice profile is Installable, try to install the
+        # extra now. The dep won't be importable until the daemon restarts —
+        # warn the user and refuse the switch so they don't get a silent
+        # failure.
+        try:
+            from talky.backends import BackendStatus
+            from talky.shared.dependency_installer import install_extra_no_reexec
+            from talky.shared.voice_status import (
+                get_voice_provider_extra,
+                voice_provider_status,
+            )
+
+            for kind, prov in (("tts", profile.tts_provider), ("stt", profile.stt_provider)):
+                bs, reason = voice_provider_status(kind, prov)
+                if bs is BackendStatus.INSTALLABLE:
+                    extra = get_voice_provider_extra(kind, prov)
+                    if extra:
+                        logger.info(
+                            f"VoiceChannel.switch_voice: installing extra {extra!r} for {kind} {prov!r}"
+                        )
+                        ok = install_extra_no_reexec(extra)
+                        if ok:
+                            raise ValueError(
+                                f"Installed extra {extra!r} for {kind} provider {prov!r}. "
+                                "Restart the daemon to use it: talky kill && talky daemon"
+                            )
+                        else:
+                            raise ValueError(
+                                f"Could not install extra {extra!r} for {kind} provider {prov!r}: {reason}"
+                            )
+                elif bs is not BackendStatus.READY:
+                    raise ValueError(
+                        f"Voice profile {profile_name!r} {kind} provider {prov!r} is {bs.value}: {reason}"
+                    )
+        except ValueError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"VoiceChannel.switch_voice: provider status check failed: {e}")
 
         if not self.is_live() or self._voice_switcher is None:
             self._pending_voice_profile = profile_name
@@ -1259,6 +1339,28 @@ class VoiceChannel:
                 raise RuntimeError(f"Voice profile '{profile_name}' disappeared")
         # Consume the pending selection — it's now the active one.
         self._pending_voice_profile = None
+
+        # Voice Provider Status gate (ticket 4b1c). Refresh first because
+        # an on-demand install or credential drop could have changed state
+        # since warmup. If the *active* profile's STT or TTS isn't Ready,
+        # bail with a structured error — the picker already surfaces the
+        # status, so the user knows why.
+        self._refresh_voice_provider_status()
+        from talky.backends import BackendStatus as _VBS
+
+        vps = self._voice_provider_status
+        tts_st = vps.get(f"tts:{vp.tts_provider}", {"status": _VBS.READY.value, "reason": ""})
+        stt_st = vps.get(f"stt:{vp.stt_provider}", {"status": _VBS.READY.value, "reason": ""})
+        if tts_st["status"] != _VBS.READY.value:
+            raise RuntimeError(
+                f"Voice profile {profile_name!r} TTS provider {vp.tts_provider!r} "
+                f"is {tts_st['status']}: {tts_st['reason']}"
+            )
+        if stt_st["status"] != _VBS.READY.value:
+            raise RuntimeError(
+                f"Voice profile {profile_name!r} STT provider {vp.stt_provider!r} "
+                f"is {stt_st['status']}: {stt_st['reason']}"
+            )
 
         # STT, fresh per pipeline (modules are already loaded).
         stt = create_stt_service_from_config(vp.stt_provider, model=vp.stt_model)

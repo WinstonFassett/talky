@@ -75,11 +75,18 @@ export const VoiceProfileSelect = ({
           <ComboboxGroup heading="Voice profile">
             {voices.map((v) => {
               const selected = v.name === activeVoice;
+              const ready = v.ready !== false;
+              const reason =
+                (v.ttsStatus && v.ttsStatus.status !== 'ready' && `TTS ${v.ttsStatus.status}: ${v.ttsStatus.reason}`) ||
+                (v.sttStatus && v.sttStatus.status !== 'ready' && `STT ${v.sttStatus.status}: ${v.sttStatus.reason}`) ||
+                '';
               return (
                 <ComboboxItem
                   key={v.name}
                   value={v.name}
                   className="flex flex-col items-stretch gap-1"
+                  style={ready ? undefined : { opacity: 0.55 }}
+                  title={reason || undefined}
                 >
                   {/* Row 1: description (fallback to name) · check */}
                   <div className="flex items-center gap-2 w-full">
@@ -110,6 +117,18 @@ export const VoiceProfileSelect = ({
                       {v.tts && <>{v.tts.split('·')[0].trim()} TTS</>}
                       {v.tts && v.stt && <> · </>}
                       {v.stt && <>{v.stt.split('·')[0].trim()} STT</>}
+                    </div>
+                  )}
+                  {!ready && reason && (
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--color-text-mute)',
+                        fontStyle: 'italic',
+                      }}
+                      className="truncate"
+                    >
+                      {reason}
                     </div>
                   )}
                 </ComboboxItem>
