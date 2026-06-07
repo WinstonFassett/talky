@@ -71,6 +71,7 @@ PROVIDER_TO_EXTRA: dict[str, str] = {
     "camb":          "tts-openai",
     "cartesia":      "tts-cartesia",
     "deepgram":      "stt-deepgram",
+    "edge":          "tts-edge",
     "elevenlabs":    "tts-elevenlabs",
     "fal":           "fal",
     "fish":          "tts-fish",

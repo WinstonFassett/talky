@@ -60,6 +60,10 @@ tts-rime = ["pipecat-ai[rime]"]
 tts-sambanova = ["pipecat-ai[sambanova]"]
 tts-sarvam = ["pipecat-ai[sarvam]"]
 tts-kokoro = ["pipecat-ai[kokoro]"]
+# Edge Read Aloud: free, no API key. Owns its own websocket (talky.backends.edge_tts).
+# The free endpoint only serves MP3/opus (no PCM), so we decode MP3 -> PCM with
+# miniaudio (pure wheel, no ffmpeg). websockets ships with pipecat core; pinned here.
+tts-edge = ["websockets", "miniaudio"]
 
 # STT provider extras
 stt-assemblyai = ["pipecat-ai[assemblyai]"]

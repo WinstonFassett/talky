@@ -66,6 +66,35 @@ voice_backends:
         zm_yunxia: "Male voice"
         zm_yunyang: "Chinese male voice - Yunyang"
 
+    edge:
+      description: "Microsoft Edge Read Aloud TTS (free, no API key)"
+      requires_credentials: false
+      service_class: "talky.backends.edge_tts.EdgeTTSService"
+      extra: "tts-edge"
+      default_voice: "en-US-AndrewMultilingualNeural"
+      available_voices:
+        # US English
+        en-US-AndrewMultilingualNeural: "Andrew - warm, confident (male)"
+        en-US-BrianMultilingualNeural: "Brian - casual, friendly (male)"
+        en-US-AvaMultilingualNeural: "Ava - bright, expressive (female)"
+        en-US-EmmaMultilingualNeural: "Emma - light, cheerful (female)"
+        en-US-GuyNeural: "Guy - newscaster (male)"
+        en-US-JennyNeural: "Jenny - assistant, friendly (female)"
+        en-US-AriaNeural: "Aria - clear, positive (female)"
+        en-US-ChristopherNeural: "Christopher - reliable, calm (male)"
+        en-US-EricNeural: "Eric - rational (male)"
+        en-US-RogerNeural: "Roger - lively (male)"
+        en-US-SteffanNeural: "Steffan - serious narrator (male)"
+        en-US-MichelleNeural: "Michelle - pleasant (female)"
+        # British English
+        en-GB-RyanNeural: "Ryan - British male"
+        en-GB-SoniaNeural: "Sonia - British female"
+        en-GB-ThomasNeural: "Thomas - British male"
+        en-GB-LibbyNeural: "Libby - British female"
+        # Australian English
+        en-AU-WilliamNeural: "William - Australian male"
+        en-AU-NatashaNeural: "Natasha - Australian female"
+
     cartesia:
       description: "Cartesia TTS (HTTP)"
       requires_credentials: true
