@@ -965,6 +965,10 @@ class VoiceChannel:
         """
         if not self.is_live() or self._pipeline_task is None:
             return
+        from talky.shared.audio_cues import audio_cues_enabled, cue_duration_s
+
+        if not audio_cues_enabled():
+            return
         frame = OutputAudioRawFrame(
             audio=pcm,
             sample_rate=sample_rate,
@@ -973,8 +977,6 @@ class VoiceChannel:
         await self._pipeline_task.queue_frames([frame])
         # Let the frame actually play out before the caller tears anything
         # down. Duration of the cue plus a small buffer for transport latency.
-        from talky.shared.audio_cues import cue_duration_s
-
         await asyncio.sleep(cue_duration_s() + 0.1)
 
     async def interrupt(self) -> bool:

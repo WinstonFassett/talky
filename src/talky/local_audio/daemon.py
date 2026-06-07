@@ -182,6 +182,10 @@ class VoiceDaemon:
 
     async def _play_tone(self, tone_data: bytes) -> None:
         """Play a short indicator tone through speakers."""
+        from talky.shared.audio_cues import audio_cues_enabled
+
+        if not audio_cues_enabled():
+            return
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._play_audio, tone_data, TONE_SAMPLE_RATE)
 

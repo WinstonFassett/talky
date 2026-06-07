@@ -23,3 +23,9 @@ network:
   # https:                   # Uncomment to serve TLS (run `talky certs` first)
   #   cert: "~/.talky/ssl/server-cert.pem"
   #   key:  "~/.talky/ssl/server-key.pem"
+
+# Audio cues — the short three-beep tones played on mic open/close and on
+# request_leave. Set ``enabled: false`` for a quieter experience. Env var
+# ``TALKY_AUDIO_CUES=0`` overrides this at runtime.
+audio_cues:
+  enabled: true

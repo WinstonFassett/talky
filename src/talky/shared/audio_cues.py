@@ -112,3 +112,31 @@ def cue_duration_s() -> float:
     cue before starting/finishing the listen window.
     """
     return 3 * _BEEP_DURATION_S + 2 * _BEEP_GAP_S
+
+
+def audio_cues_enabled() -> bool:
+    """Whether to emit audio cues.
+
+    Precedence:
+      1. ``TALKY_AUDIO_CUES`` env var (``"0"``/``"false"``/``"off"`` → off).
+      2. ``audio_cues.enabled`` in ``~/.talky/settings.yaml``.
+      3. ``True`` (default — cues on).
+
+    Tolerates a missing/broken profile manager (returns the default).
+    """
+    import os
+
+    raw = os.getenv("TALKY_AUDIO_CUES")
+    if raw is None:
+        try:
+            from talky.shared.profile_manager import get_profile_manager
+
+            settings = getattr(get_profile_manager(), "settings", {}) or {}
+            yaml_raw = settings.get("audio_cues", {}).get("enabled")
+            if yaml_raw is not None:
+                raw = str(yaml_raw)
+        except Exception:  # noqa: BLE001
+            raw = None
+    if raw is None:
+        return True
+    return str(raw).strip().lower() not in ("0", "false", "off", "no")
