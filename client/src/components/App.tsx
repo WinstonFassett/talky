@@ -213,13 +213,21 @@ export const App = ({
 
   const showTransportSelector = availableTransports.length > 1;
   const transportConnected = transportState === 'connected' || transportState === 'ready';
-  const voiceState = useVoiceState(client, transportConnected);
+  const transportConnecting =
+    transportState === 'initializing' ||
+    transportState === 'authenticating' ||
+    transportState === 'connecting';
+  const voiceState = useVoiceState(client, transportConnected, transportConnecting);
   const isNarrow = useMediaQuery('(max-width: 640px)');
 
-  // Show transcript (over EmptyState) whenever we're connected OR a dev fixture is mounted.
+  // Show transcript (over EmptyState) whenever we're connected, mid-handshake,
+  // OR a dev fixture is mounted. Including the connecting states means the
+  // header (which renders the ConnectButton's "Connecting…" label) is visible
+  // during autoconnect instead of a silent EmptyState gap (0f94).
   const fixtureName = useUrlParam('fixture');
   const messages = useTalkyMessages();
-  const showTranscript = transportConnected || messages.length > 0 || isDevRoute() || !!fixtureName;
+  const showTranscript =
+    transportConnected || transportConnecting || messages.length > 0 || isDevRoute() || !!fixtureName;
   const showHeader = showTranscript;
 
   return (

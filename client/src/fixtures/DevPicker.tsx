@@ -4,6 +4,7 @@ import { FIXTURE_NAMES } from './messages';
 const VOICE_STATES: (SimulatedVoiceState | '')[] = [
   '',
   'disconnected',
+  'connecting',
   'idle',
   'listening',
   'thinking',

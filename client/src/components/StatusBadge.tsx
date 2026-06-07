@@ -3,6 +3,7 @@ import { type VoiceState, VOICE_STATE_LABELS } from './useVoiceState';
 export const StatusBadge = ({ state }: { state: VoiceState }) => {
   const isActive = state === 'listening' || state === 'thinking' || state === 'speaking';
   const isDisconnected = state === 'disconnected';
+  const isConnecting = state === 'connecting';
   const animation =
     state === 'thinking'
       ? 'pulse 1.2s ease-in-out infinite'
@@ -10,9 +11,11 @@ export const StatusBadge = ({ state }: { state: VoiceState }) => {
         ? 'pulse 0.5s ease-in-out infinite'
         : state === 'listening'
           ? 'pulse 1.6s ease-in-out infinite'
-          : 'none';
+          : isConnecting
+            ? 'pulse 1.0s ease-in-out infinite'
+            : 'none';
 
-  // disconnected = dim/muted; idle = quietly live (text-dim); active = accent
+  // disconnected = dim/muted; connecting = dim text-dim pulse; idle = quietly live; active = accent
   const color = isActive
     ? 'var(--color-accent)'
     : isDisconnected

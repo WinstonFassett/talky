@@ -10,6 +10,7 @@ export type VoiceState = SimulatedVoiceState;
 export function useVoiceState(
   client: PipecatClient | null,
   transportConnected: boolean,
+  transportConnecting: boolean = false,
 ): VoiceState {
   const [botThinking, setBotThinking] = useState(false);
   const [botSpeaking, setBotSpeaking] = useState(false);
@@ -50,7 +51,7 @@ export function useVoiceState(
   }, [client]);
 
   if (override) return override;
-  if (!transportConnected) return 'disconnected';
+  if (!transportConnected) return transportConnecting ? 'connecting' : 'disconnected';
   if (botSpeaking) return 'speaking';
   if (botThinking) return 'thinking';
   if (userSpeaking) return 'listening';
@@ -59,6 +60,7 @@ export function useVoiceState(
 
 export const VOICE_STATE_LABELS: Record<VoiceState, string> = {
   disconnected: 'DISCONNECTED',
+  connecting: 'CONNECTING',
   idle: 'IDLE',
   listening: 'LISTENING',
   thinking: 'THINKING',

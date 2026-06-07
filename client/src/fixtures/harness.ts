@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 export type SimulatedVoiceState =
   | 'disconnected'
+  | 'connecting'
   | 'idle'
   | 'listening'
   | 'thinking'
@@ -9,6 +10,7 @@ export type SimulatedVoiceState =
 
 const VOICE_STATES: SimulatedVoiceState[] = [
   'disconnected',
+  'connecting',
   'idle',
   'listening',
   'thinking',
