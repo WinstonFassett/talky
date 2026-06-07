@@ -245,11 +245,28 @@ Components are **refined and unhurried**: modest 8px radius, clear states, no de
 
 ### Navigation / Chrome
 
-The header is roomy, not dense. Left: the voice visualizer (larger than transport defaults) with the state label adjacent. Center: profile picker. Right: audio controls, connect/end-call, more-menu. Header height is generous (~64px) — talky is not a power-bar tool.
+Chrome is a thin desktop-IDE frame — a slim header above the transcript and a slim footer below it — so the transcript keeps almost all the surface. Neither bar is a power-bar; both are doorframes for the room.
+
+**Header (h-10, `panel` over `bg`, `border-soft` bottom).** Left: the session title — the bare active-profile label (e.g. `OpenClaw`, sentence case) rendered as a headline-weight text trigger with `▾`. No border or background at rest; hover raises one tonal step to `panel-2`; focus/open shows the 1px accent border. Clicking it opens the LLM profile picker as a left-anchored popover. Right cluster, in locked order: voice **Status** badge → **Mute** toggle (lucide `Mic` / `MicOff`) → **More** menu (lucide `MoreHorizontal`). lucide icons only, no emoji. Responsive: the status label collapses to a dot below ~900px and the whole badge hides below 640px.
+
+**Footer (h-8, `panel` over `bg`, `border-soft` top, Label typography throughout).** Left: the LLM profile picker then the voice picker, rendered flat (Geist Mono 10px, 0.12em tracking) with a subtle `panel-2` rest / `panel-3` hover — no separator between them. The voice picker is prefixed with a dim literal `Voice:` label. Right: the session timer (`mm:ss`, then `h:mm:ss` past an hour) and a `v{version} {commitShortHash}` chip. Disconnected: pickers stay (they set the profile for the next connect), the timer hides, the version stays. Below 640px both pickers collapse into the SessionSheet drawer.
+
+**Connect lives in the conversation, not the chrome.** The connect/end control is the **Converse button** in the input row (see below), not a header button — the chrome carries identity and status, the conversation carries the act of talking.
+
+> **Evolution note.** This thin-frame chrome deliberately replaces the earlier "roomy ~64px header" with the header voice visualizer and centered pickers. The Quiet Console north star and transcript-as-product principle are unchanged; the chrome simply got out of the transcript's way, taking the Hermes Desktop frame as a reference. The header `CircularWaveform` visualizer was retired from the chrome (the component stays in the repo, unused); voice state now reads from the Status badge plus the inline bar visualizers described below.
 
 ### Signature: The Voice Visualizer
 
-The single continuously-moving element. It always renders, but communicates state through color and motion amplitude: idle is dim and slow, listening is dim and reactive to mic input, thinking is accent-tinted with rhythmic motion, speaking is accent-saturated and reactive to TTS output. It is the room's heartbeat — the proof that talky is present.
+The continuously-moving proof that talky is present — now an inline bars-in-a-row visualizer (voice-ui-kit `VoiceVisualizer`) placed exactly where the live moment is happening, rather than a single always-on header element:
+
+- **User talking** → bars render *inside the Converse button's bounds*, driven by the local mic track.
+- **Bot talking** → the **bot-speaking bar** appears just above the input row (speaker icon + `SPEAKING RESPONSE` label + bars driven by the bot audio track + an optional Stop), and clears when TTS ends.
+
+Both read accent-tinted and amplitude-reactive; both degrade to near-static under `prefers-reduced-motion`. Everything else in the chrome holds still so these moments land.
+
+### Signature: The Converse Button
+
+The single connect/talk/end control, living in the input row to the right of the text field (it replaced the header connect button). States: **Converse** at rest (connects on click); the mic bar-visualizer inside its own bounds while the user is talking; **Thinking…** / **End** with a spinner while the bot works or speaks; destructive-tinted **Retry** on error. Accent border while a session is live so the act of talking reads as the live moment.
 
 ### Signature: The Approval Card
 

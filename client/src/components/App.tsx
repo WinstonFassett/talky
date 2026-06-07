@@ -1,25 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
-import { ConnectButton } from '@pipecat-ai/voice-ui-kit';
-import { AudioPill } from './audio/AudioPill';
 import { ConversationPanelWithReasoning } from './ConversationPanelWithReasoning';
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
 import type { TransportType } from '../config';
-import { TransportSelect } from './TransportSelect';
-import { BotVisualizer } from './BotVisualizer';
 import { LLMProfileSelect } from './LLMProfileSelect';
-import { VoiceProfileSelect } from './VoiceProfileSelect';
-import { SessionSheet } from './SessionSheet';
 import { PermissionBanner } from './PermissionBanner';
 import { StatusBadge } from './StatusBadge';
 import { useVoiceState } from './useVoiceState';
 import { MoreMenu } from './MoreMenu';
+import { MuteButton } from './MuteButton';
+import { StatusBar } from './StatusBar';
 import { EmptyState } from './EmptyState';
 import { isDevRoute, useUrlParam } from '../fixtures/harness';
 import { useTalkyMessages } from '../messages/useTalkyMessages';
-import { PhoneIcon, PhoneOffIcon } from 'lucide-react';
 
 interface TransportWithDataChannel {
   dc?: RTCDataChannel;
@@ -54,9 +49,6 @@ export const App = ({
   client,
   handleConnect,
   handleDisconnect,
-  transportType,
-  onTransportChange,
-  availableTransports,
   autoconnect = false,
 }: AppProps) => {
   const autoconnectAttempted = useRef(false);
@@ -128,7 +120,6 @@ export const App = ({
     let cancelled = false;
 
     const attach = () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const transport = (client as unknown as { _transport?: TransportWithDataChannel })?._transport;
       const dc: RTCDataChannel | undefined = transport?.dc;
       if (!dc || dc.readyState !== 'open') return false;
@@ -211,7 +202,6 @@ export const App = ({
     }
   }, [autoconnect, client, wrappedConnect]);
 
-  const showTransportSelector = availableTransports.length > 1;
   const transportConnected = transportState === 'connected' || transportState === 'ready';
   const transportConnecting =
     transportState === 'initializing' ||
@@ -219,6 +209,9 @@ export const App = ({
     transportState === 'connecting';
   const voiceState = useVoiceState(client, transportConnected, transportConnecting);
   const isNarrow = useMediaQuery('(max-width: 640px)');
+  // Below ~900px the status label collapses to a dot; below 640px (isNarrow)
+  // the StatusBadge is hidden entirely.
+  const isMedium = useMediaQuery('(max-width: 900px)');
 
   // Show transcript (over EmptyState) whenever we're connected, mid-handshake,
   // OR a dev fixture is mounted. Including the connecting states means the
@@ -235,77 +228,23 @@ export const App = ({
       <PermissionBanner />
       {showHeader && (
       <header
-        className="flex items-center shrink-0 border-b gap-2 pl-2 pr-2 sm:pr-4 min-h-12 sm:min-h-16"
+        className="flex items-center shrink-0 border-b gap-2 pl-2 pr-2 sm:pr-3 h-10"
         style={{
           borderColor: 'var(--color-border-soft)',
           backgroundColor: 'var(--color-card)',
         }}
       >
-        {/* 1. Visualizer (+ status badge on desktop) — fixed left, doubles as MoreMenu trigger. */}
-        <div className="flex items-center gap-2 shrink-0">
-          <MoreMenu trigger={<BotVisualizer client={client} />} />
-          {!isNarrow && <StatusBadge state={voiceState} />}
+        {/* Left: bare profile-label title trigger → opens the LLM picker. */}
+        <div className="flex items-center min-w-0 flex-1">
+          <LLMProfileSelect variant="title" />
         </div>
 
-        {/* 2. Session controls. Mobile: single Session button (sheet). Desktop: centered inline pickers. */}
-        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 sm:justify-center">
-          {isNarrow ? (
-            <div className="min-w-0 flex-1">
-              <SessionSheet currentLabel={activeProfile ? activeProfileLabel : undefined} />
-            </div>
-          ) : (
-            <>
-              <div className="shrink-0">
-                <LLMProfileSelect />
-              </div>
-              <div className="shrink-0">
-                <VoiceProfileSelect />
-              </div>
-              {showTransportSelector ? (
-                <TransportSelect
-                  transportType={transportType}
-                  onTransportChange={onTransportChange}
-                  availableTransports={availableTransports}
-                />
-              ) : null}
-            </>
-          )}
-        </div>
-
-        {/* 3-5. Right cluster — audio (desktop only) · connect · more */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {!isNarrow && <AudioPill size="md" variant="ghost" />}
-          <ConnectButton
-            size="md"
-            onConnect={wrappedConnect}
-            onDisconnect={wrappedDisconnect}
-            stateContent={{
-              disconnected: {
-                children: isNarrow ? <PhoneIcon size={16} /> : 'Connect',
-                variant: 'active',
-                className: isNarrow ? 'connect-go aspect-square px-0' : 'connect-go',
-              },
-              initialized: {
-                children: isNarrow ? <PhoneIcon size={16} /> : 'Connect',
-                variant: 'active',
-                className: isNarrow ? 'connect-go aspect-square px-0' : 'connect-go',
-              },
-              ready: {
-                children: isNarrow ? <PhoneOffIcon size={16} /> : 'Disconnect',
-                variant: 'destructive',
-                className: isNarrow ? 'connect-stop aspect-square px-0' : 'connect-stop',
-              },
-              connected: {
-                children: isNarrow ? <PhoneOffIcon size={16} /> : 'Disconnect',
-                variant: 'destructive',
-                className: isNarrow ? 'connect-stop aspect-square px-0' : 'connect-stop',
-              },
-              connecting: { children: isNarrow ? '…' : 'Connecting…', variant: 'secondary' },
-              initializing: { children: isNarrow ? '…' : 'Initializing…', variant: 'secondary' },
-              disconnecting: { children: isNarrow ? '…' : 'Disconnecting…', variant: 'secondary' },
-              error: { children: 'Error', variant: 'destructive' },
-            }}
-          />
+        {/* Right cluster (locked order): Status → Mute → More.
+            Status label drops to dot-only below ~900px, hidden below 640px. */}
+        <div className="flex items-center gap-0.5 shrink-0">
+          {!isNarrow && <StatusBadge state={voiceState} compact={isMedium} />}
+          <MuteButton />
+          <MoreMenu />
         </div>
       </header>
       )}
@@ -313,12 +252,28 @@ export const App = ({
       <main className="flex-1 overflow-hidden flex flex-col">
         <div className="h-full mx-auto flex flex-col w-full" style={{ maxWidth: 600 }}>
           {showTranscript ? (
-            <ConversationPanelWithReasoning activeProfile={activeProfile} />
+            <ConversationPanelWithReasoning
+              activeProfile={activeProfile}
+              voiceState={voiceState}
+              connected={transportConnected}
+              connecting={transportConnecting}
+              error={transportState === 'error'}
+              onConnect={wrappedConnect}
+              onDisconnect={wrappedDisconnect}
+            />
           ) : (
             <EmptyState onConnect={wrappedConnect} />
           )}
         </div>
       </main>
+
+      {showHeader && (
+        <StatusBar
+          connected={transportConnected}
+          isNarrow={isNarrow}
+          currentLabel={activeProfile ? activeProfileLabel : undefined}
+        />
+      )}
     </div>
   );
 };

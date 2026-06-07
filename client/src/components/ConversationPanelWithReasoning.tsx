@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useCallback, useState, memo, Fragment } from 'react';
-import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
+import { usePipecatClient } from '@pipecat-ai/client-react';
 import { ChevronRightIcon, CopyIcon, CheckIcon } from 'lucide-react';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
 import { TalkyTextInput } from './TalkyTextInput';
@@ -8,6 +8,19 @@ import { Streamdown } from 'streamdown';
 import { useTalkyMessages } from '../messages/useTalkyMessages';
 import type { TalkyMessage, TalkyPart } from '../messages/types';
 import { SteerModeChip } from './SteerModeChip';
+import { BotSpeakingBar } from './BotSpeakingBar';
+import { ConverseButton } from './ConverseButton';
+import type { VoiceState } from './useVoiceState';
+import { useUrlParam } from '../fixtures/harness';
+
+export interface ConversationChromeProps {
+  voiceState: VoiceState;
+  connected: boolean;
+  connecting: boolean;
+  error: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}
 
 // Streamdown plugins are heavy (Shiki for code, KaTeX for math, Mermaid for
 // diagrams). Only code is useful here, and it's lazy-loaded so first paint
@@ -257,10 +270,22 @@ function MessageRow({ message }: { message: TalkyMessage }) {
 }
 
 // ─── TRANSCRIPT ────────────────────────────────────────────────────────
-function ConversationMessages({ activeProfile }: { activeProfile: string }) {
+function ConversationMessages({
+  activeProfile,
+  chrome,
+}: {
+  activeProfile: string;
+  chrome: ConversationChromeProps;
+}) {
   const messages = useTalkyMessages();
-  const transportState = usePipecatClientTransportState();
-  const connected = transportState === 'connected' || transportState === 'ready';
+  const client = usePipecatClient();
+  const { voiceState, connected } = chrome;
+  // ?voiceState=speaking lets the bot-speaking bar be inspected in fixtures
+  // without a live bot.
+  const voiceStateOverride = useUrlParam('voiceState');
+  const botSpeaking =
+    voiceStateOverride === 'speaking' ||
+    (!voiceStateOverride && connected && voiceState === 'speaking');
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -280,22 +305,47 @@ function ConversationMessages({ activeProfile }: { activeProfile: string }) {
         ))}
       </div>
       <div
-        className="p-3 border-t flex items-center gap-2"
+        className="px-3 pt-2 pb-3 border-t"
         style={{
           borderColor: 'var(--color-border-soft)',
           backgroundColor: 'var(--color-card)',
         }}
       >
-        <SteerModeChip activeProfile={activeProfile} />
-        <TalkyTextInput connected={connected} />
+        {botSpeaking && (
+          <BotSpeakingBar
+            onStop={() => {
+              // Cancel in-flight TTS by sending an 'interrupt' app-message over
+              // the existing WebRTC data channel. The daemon's on_app_message
+              // handler queues one InterruptionFrame — the same frame a VAD
+              // speech-onset produces. Rides the audio connection (no separate
+              // HTTP round-trip); the bar clears when botStoppedSpeaking arrives.
+              client?.sendClientMessage('interrupt');
+            }}
+          />
+        )}
+        <div className="flex items-center gap-2">
+          <SteerModeChip activeProfile={activeProfile} />
+          <TalkyTextInput connected={connected} />
+          <ConverseButton
+            voiceState={voiceState}
+            connected={chrome.connected}
+            connecting={chrome.connecting}
+            error={chrome.error}
+            onConnect={chrome.onConnect}
+            onDisconnect={chrome.onDisconnect}
+          />
+        </div>
       </div>
     </div>
   );
 }
 
 export const ConversationPanelWithReasoning = memo(
-  ({ activeProfile }: { activeProfile: string }) => {
-    return <ConversationMessages activeProfile={activeProfile} />;
+  ({
+    activeProfile,
+    ...chrome
+  }: { activeProfile: string } & ConversationChromeProps) => {
+    return <ConversationMessages activeProfile={activeProfile} chrome={chrome} />;
   },
 );
 

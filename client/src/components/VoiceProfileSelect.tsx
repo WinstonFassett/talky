@@ -14,7 +14,10 @@ import {
 import { PickerTrigger } from './PickerTrigger';
 import { useVoiceProfiles } from './useVoiceProfiles';
 
-export const VoiceProfileSelect = ({ compact = false }: { compact?: boolean } = {}) => {
+export const VoiceProfileSelect = ({
+  compact = false,
+  variant = 'bordered',
+}: { compact?: boolean; variant?: 'bordered' | 'footer' } = {}) => {
   const { voices, activeVoice, switching, error, switchVoice } = useVoiceProfiles();
   const [open, setOpen] = useState(false);
 
@@ -38,14 +41,21 @@ export const VoiceProfileSelect = ({ compact = false }: { compact?: boolean } = 
       <ComboboxTrigger asChild>
         <PickerTrigger
           open={open}
+          variant={variant}
           disabled={switching}
           title={`Switch voice profile · current: ${current.description || current.name}`}
         >
-          <VolumeIcon
-            size={12}
-            style={{ color: 'var(--color-text-mute)' }}
-            className="shrink-0"
-          />
+          {variant === 'footer' ? (
+            <span style={{ color: 'var(--color-text-mute)' }} className="shrink-0">
+              Voice:
+            </span>
+          ) : (
+            <VolumeIcon
+              size={12}
+              style={{ color: 'var(--color-text-mute)' }}
+              className="shrink-0"
+            />
+          )}
           {!compact && (
             <span className="truncate">
               {current.description || current.name}

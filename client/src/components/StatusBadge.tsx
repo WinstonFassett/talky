@@ -1,6 +1,13 @@
 import { type VoiceState, VOICE_STATE_LABELS } from './useVoiceState';
 
-export const StatusBadge = ({ state }: { state: VoiceState }) => {
+export const StatusBadge = ({
+  state,
+  compact = false,
+}: {
+  state: VoiceState;
+  /** Dot only — no text label. Used at medium widths (≤900px). */
+  compact?: boolean;
+}) => {
   const isActive = state === 'listening' || state === 'thinking' || state === 'speaking';
   const isDisconnected = state === 'disconnected';
   const isConnecting = state === 'connecting';
@@ -25,7 +32,7 @@ export const StatusBadge = ({ state }: { state: VoiceState }) => {
   return (
     <div
       aria-label={`Voice status: ${VOICE_STATE_LABELS[state]}`}
-      className="flex items-center gap-2 w-[110px] shrink-0"
+      className={`flex items-center gap-2 shrink-0 ${compact ? 'px-1.5' : 'w-[110px]'}`}
     >
       <div
         className="size-1.5 rounded-full shrink-0 transition-colors"
@@ -35,12 +42,14 @@ export const StatusBadge = ({ state }: { state: VoiceState }) => {
           animation,
         }}
       />
-      <span
-        className="font-mono text-[10px] font-semibold tracking-widest uppercase whitespace-nowrap overflow-hidden text-ellipsis transition-colors"
-        style={{ color }}
-      >
-        {VOICE_STATE_LABELS[state]}
-      </span>
+      {!compact && (
+        <span
+          className="font-mono text-[10px] font-semibold tracking-widest uppercase whitespace-nowrap overflow-hidden text-ellipsis transition-colors"
+          style={{ color }}
+        >
+          {VOICE_STATE_LABELS[state]}
+        </span>
+      )}
     </div>
   );
 };

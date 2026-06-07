@@ -26,7 +26,9 @@ interface ProfilesResponse {
   live: boolean;
 }
 
-export const LLMProfileSelect = () => {
+export const LLMProfileSelect = ({
+  variant = 'bordered',
+}: { variant?: 'bordered' | 'footer' | 'title' } = {}) => {
   const [profiles, setProfiles] = useState<LLMProfile[]>([]);
   const [activeProfile, setActiveProfile] = useState<string>('');
   const [switching, setSwitching] = useState(false);
@@ -132,19 +134,50 @@ export const LLMProfileSelect = () => {
       onOpenChange={setOpen}
     >
       <ComboboxTrigger asChild>
-        <PickerTrigger
-          open={open}
-          disabled={switching}
-          title={`Switch profile · current: ${current.label}`}
-        >
-          <StatusDot healthy={current.healthy} />
-          <span className="truncate">{current.label}</span>
-          <ChevronDownIcon
-            size={11}
-            style={{ color: 'var(--color-text-mute)' }}
-            className="shrink-0"
-          />
-        </PickerTrigger>
+        {variant === 'title' ? (
+          <button
+            type="button"
+            disabled={switching}
+            title={`Switch profile · current: ${current.label}`}
+            aria-label={`Session: ${current.label}. Switch profile`}
+            className="session-title-trigger flex items-center gap-1.5 min-w-0 max-w-full bg-transparent rounded-md px-2 -ml-2 h-9 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              border: `1px solid ${open ? 'color-mix(in oklab, var(--color-accent) 40%, transparent)' : 'transparent'}`,
+            }}
+          >
+            <span
+              className="truncate font-medium"
+              style={{
+                fontSize: '1.125rem',
+                lineHeight: 1.3,
+                letterSpacing: '-0.01em',
+                color: 'var(--color-foreground)',
+              }}
+            >
+              {current.label}
+            </span>
+            <ChevronDownIcon
+              size={15}
+              style={{ color: 'var(--color-text-mute)' }}
+              className="shrink-0"
+            />
+          </button>
+        ) : (
+          <PickerTrigger
+            open={open}
+            variant={variant}
+            disabled={switching}
+            title={`Switch profile · current: ${current.label}`}
+          >
+            <StatusDot healthy={current.healthy} />
+            <span className="truncate">{current.label}</span>
+            <ChevronDownIcon
+              size={11}
+              style={{ color: 'var(--color-text-mute)' }}
+              className="shrink-0"
+            />
+          </PickerTrigger>
+        )}
       </ComboboxTrigger>
       <ComboboxContent className="min-w-[280px]" popoverOptions={{ align: 'start' }}>
         <ComboboxInput placeholder="Search profiles…" />

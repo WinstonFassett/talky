@@ -3,7 +3,36 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
 import os from 'os';
+import { execSync } from 'child_process';
 import { readFileSync } from 'fs';
+
+// Footer version chip (StatusBar). The version of record is the Python
+// package in ../pyproject.toml, not client/package.json (which is 0.0.0).
+// Both resolve to empty string on failure so the StatusBar hides the chip
+// rather than rendering "v undefined".
+const getAppVersion = (): string => {
+  if (process.env.VITE_APP_VERSION) return process.env.VITE_APP_VERSION;
+  try {
+    const py = readFileSync(path.resolve(__dirname, '..', 'pyproject.toml'), 'utf8');
+    const m = py.match(/^version\s*=\s*"([^"]+)"/m);
+    if (m) return m[1];
+  } catch { /* fall through */ }
+  return '';
+};
+
+const getGitSha = (): string => {
+  if (process.env.VITE_GIT_SHA) return process.env.VITE_GIT_SHA;
+  try {
+    return execSync('git rev-parse --short HEAD', {
+      cwd: __dirname,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return '';
+  }
+};
 
 // Get allowed hosts from environment or use defaults
 const getAllowedHosts = (): string[] => {
@@ -40,6 +69,10 @@ const getDaemonUrl = (): string => {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  define: {
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(getAppVersion()),
+    'import.meta.env.VITE_GIT_SHA': JSON.stringify(getGitSha()),
+  },
   resolve: { alias: { '@': path.resolve(__dirname, './src') } },
   server: {
     host: getHost(),

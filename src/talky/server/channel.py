@@ -77,6 +77,7 @@ from typing import Any, Optional
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
+    InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
@@ -976,6 +977,25 @@ class VoiceChannel:
 
         await asyncio.sleep(cue_duration_s() + 0.1)
 
+    async def interrupt(self) -> bool:
+        """Cancel in-flight/queued TTS without disconnecting.
+
+        Queues a single ``InterruptionFrame`` into the live pipeline — the
+        exact frame the VAD path ultimately produces when the user starts
+        speaking. It flushes the TTS aggregator and tells the output
+        transport to drop buffered audio mid-utterance. Unlike a real
+        speech-onset interruption it does NOT synthesize
+        ``UserStartedSpeakingFrame`` / ``UserStoppedSpeakingFrame`` — this is
+        a "stop talking, I didn't say anything" signal, used by the browser
+        Stop button on the bot-speaking bar.
+
+        Returns True if the frame was queued, False if no pipeline is live.
+        """
+        if not self.is_live() or self._pipeline_task is None:
+            return False
+        await self._pipeline_task.queue_frames([InterruptionFrame()])
+        return True
+
     # ── attach / detach ─────────────────────────────────────────────────────
 
     async def attach(self, connection: SmallWebRTCConnection) -> None:
@@ -1376,6 +1396,22 @@ class VoiceChannel:
         async def on_connected(transport, client):  # noqa: ANN001, ARG001
             elapsed_ms = (time.monotonic() - t0) * 1000
             logger.info(f"VoiceChannel: client connected ({elapsed_ms:.0f}ms to build)")
+
+        # Browser app-messages → channel actions. The client sends these via
+        # the Pipecat JS `sendClientMessage(type, data)` over the WebRTC data
+        # channel; SmallWebRTC surfaces them here as `on_app_message`. Today
+        # the only message is the bot-speaking-bar Stop button, which cancels
+        # in-flight TTS by queuing one InterruptionFrame (same frame a VAD
+        # speech-onset produces). Riding the existing data channel keeps the
+        # signal on the same connection as the audio — no separate round-trip.
+        @transport.event_handler("on_app_message")
+        async def on_app_message(transport, message, sender=None):  # noqa: ANN001, ARG001
+            try:
+                msg_type = message.get("type") if isinstance(message, dict) else None
+            except Exception:  # noqa: BLE001
+                msg_type = None
+            if msg_type == "interrupt":
+                await self.interrupt()
 
         @transport.event_handler("on_client_disconnected")
         async def on_disconnected(transport, client):  # noqa: ANN001, ARG001

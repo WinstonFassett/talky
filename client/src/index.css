@@ -122,6 +122,24 @@
   --color-warning: #d4a843;
 }
 
+/* ─── Footer pickers (StatusBar) ─────────────────────────────────
+   The flat picker variant: subtle panel-2 at rest, panel-3 on hover,
+   foreground text on hover. No border — the tonal step does the work
+   (DESIGN.md §4 Tonal Step Rule). Hover lives in CSS so PickerTrigger
+   doesn't need JS hover state. */
+.picker-footer:hover:not(:disabled) {
+  background-color: var(--color-panel-3) !important;
+  color: var(--color-foreground);
+}
+
+/* ─── Session title trigger (header) ─────────────────────────────
+   The bare profile label that opens the LLM picker. No border/bg at
+   rest; hover → panel-2; focus/open → accent border (inline style on
+   the element). */
+.session-title-trigger:hover:not(:disabled) {
+  background-color: var(--color-panel-2);
+}
+
 /* ─── Scrollbar ──────────────────────────────────────────────────
    Native scrollbars are jarring on dark — bright white track,
    chunky thumb. These styles apply globally to scrollable surfaces
