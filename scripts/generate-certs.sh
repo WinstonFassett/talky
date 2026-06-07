@@ -1,8 +1,14 @@
 #!/bin/bash
 # Generate self-signed SSL certificates for development HTTPS
+#
+# DEPRECATED (ticket 1edf): Use `talky certs` instead — same logic, no repo
+# checkout needed, no openssl shell-out. This script is kept for one release
+# because it also handles the repo-only client/localhost-*.pem path. It will
+# be removed once Vite dev cert reuse stabilizes.
 
 set -e
 
+echo "⚠️  scripts/generate-certs.sh is deprecated — prefer 'talky certs'." >&2
 echo "🔐 Generating SSL certificates for development..."
 
 # Function to get external hostname from settings

@@ -456,6 +456,45 @@ def cmd_kill(args):
     return 0
 
 
+def cmd_certs(args):
+    """Generate self-signed TLS certs in ~/.talky/ssl/ (ticket 1edf).
+
+    Wheel-install-friendly replacement for scripts/generate-certs.sh.
+    """
+    from talky.shared import certs
+
+    hostnames = certs.resolve_hostnames(args.hostname)
+    summary = certs.cert_summary()
+
+    if summary and not args.force:
+        if summary["expired"]:
+            print(f"⚠️  Existing cert expired ({summary['not_after']}) — regenerating.")
+        else:
+            print("✅ Existing cert is valid; not overwriting (use --force to regenerate).")
+            print(f"   path: {certs.CERT_PATH}")
+            print(f"   CN:   {summary['cn']}")
+            print(f"   SANs: {', '.join(summary['sans'])}")
+            print(f"   expires: {summary['not_after']}")
+            return 0
+
+    print(f"🔐 Generating server cert for hostnames: {', '.join(hostnames)}")
+    cert_path, key_path = certs.generate(hostnames)
+    print(f"✅ Wrote {cert_path}")
+    print(f"✅ Wrote {key_path}")
+
+    if certs.enable_https_in_settings():
+        print("🔧 Uncommented network.https block in ~/.talky/settings.yaml")
+    else:
+        print("ℹ️  If HTTPS isn't already enabled in settings.yaml, add:")
+        print("    network:")
+        print("      https:")
+        print(f"        cert: \"{cert_path}\"")
+        print(f"        key:  \"{key_path}\"")
+
+    print("\n🚀 Restart the daemon to pick up the new cert: talky kill && talky daemon")
+    return 0
+
+
 def cmd_transcribe(args):
     """Handle the 'transcribe' subcommand."""
     # Set log level environment variable if specified
@@ -1130,7 +1169,7 @@ def main():
     # Shortcut: treat first non-option, non-command arg as a profile name.
     # `talky openclaw` → `talky profile openclaw`. `cmd_profile` ensures
     # the daemon is up.
-    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch"}
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch", "certs"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         candidate = sys.argv[1]
         # If the profile carries a ``launcher:`` block, route through the
@@ -1190,6 +1229,15 @@ def main():
         help="Stop the talky daemon (voice daemon untouched)",
     )
     kill_parser.set_defaults(func=cmd_kill)
+
+    # === certs subcommand (ticket 1edf) ===
+    certs_parser = subparsers.add_parser(
+        "certs",
+        help="Generate self-signed TLS certs in ~/.talky/ssl/ (replaces generate-certs.sh)",
+    )
+    certs_parser.add_argument("--hostname", help="Override hostname (default: from settings.yaml network.allowed_hosts, or 'localhost')")
+    certs_parser.add_argument("--force", action="store_true", help="Regenerate even if existing certs are valid")
+    certs_parser.set_defaults(func=cmd_certs)
 
     # === daemon subcommand ===
     # Ensures the talky daemon is running. The daemon hosts

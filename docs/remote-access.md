@@ -8,8 +8,10 @@ One port: **9090**. The daemon serves WebRTC, the browser UI, and MCP tools. To 
 
 1. **Generate SSL certificates** with your external hostname as SAN:
    ```bash
-   ./scripts/generate-certs.sh macbook-pro.tailc3138.ts.net
+   talky certs --hostname macbook-pro.tailc3138.ts.net
    ```
+   (Wheel-friendly — no repo checkout needed. The legacy `./scripts/generate-certs.sh`
+   still works for repo dev, but is deprecated for one release.)
 
 2. **Configure `~/.talky/settings.yaml`** (one-time):
    ```yaml
@@ -74,7 +76,7 @@ lsof -i :9090   # Should show *:9090 or 0.0.0.0:9090, not 127.0.0.1:9090
 
 **Vite proxy error: self-signed certificate**
 - Run the one-time `security add-trusted-cert` step above
-- Cert must be regenerated with the correct hostname SAN (`generate-certs.sh <hostname>`)
+- Cert must be regenerated with the correct hostname SAN (`talky certs --hostname <name>`)
 
 **Browser cert warning**
 - Self-signed certs show a warning — click Advanced → Proceed, or install the cert on the device
