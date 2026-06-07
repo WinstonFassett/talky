@@ -17,7 +17,11 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder}
 ///   4. Poll for the port runfile, then open the webview at http://localhost:<port>.
 ///
 /// Failure mode: a fallback splash page surfaces the error to the user.
-const DAEMON_POLL_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long we'll wait for the daemon's ready file once the HTTP port is up.
+/// Bumped from 120s to 600s in 08d0 because a cold HF cache can take several
+/// minutes to populate on a fresh install. The wait is no longer silent —
+/// during this window the splash polls /api/ready and surfaces task progress.
+const DAEMON_POLL_TIMEOUT: Duration = Duration::from_secs(600);
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Bootstrap installer URL. Resolved at build time by `build.rs` to a
@@ -228,6 +232,86 @@ summary:hover{{color:var(--fg)}} \
     ));
 }
 
+/// Splash shown while we're waiting on the daemon's ready file but HTTP is
+/// already serving. Polls /api/ready via a Tauri command and renders any
+/// open readiness tasks (HF model downloads, native dep installs, etc.).
+/// 08d0 — turns a silent multi-minute hang into a visible progress display.
+fn render_starting_splash(win: &WebviewWindow, port: u16) {
+    let html = "<head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"light dark\"><style> \
+*,*::before,*::after{box-sizing:border-box} \
+:root{color-scheme:light dark;--bg:#ffffff;--fg:#1a1a1a;--muted:#666;--rule:#e5e5e5;--code-bg:#f4f4f4;--spinner-track:#d0d0d0;--spinner-head:#222;--bar-track:#e5e5e5;--bar-fill:#0a84ff} \
+@media (prefers-color-scheme: dark){:root{--bg:#1c1c1e;--fg:#f2f2f7;--muted:#8e8e93;--rule:#3a3a3c;--code-bg:#2c2c2e;--spinner-track:#48484a;--spinner-head:#f2f2f7;--bar-track:#3a3a3c;--bar-fill:#0a84ff}} \
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg)} \
+body{font-family:-apple-system,system-ui,sans-serif;line-height:1.4;min-height:100vh} \
+.wrap{max-width:640px;margin:0 auto;padding:32px} \
+h2{margin:0 0 16px 0;font-weight:600;font-size:1.4em} \
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--spinner-track);border-top-color:var(--spinner-head);border-radius:50%;animation:s 1s linear infinite;margin-right:10px;vertical-align:-2px} \
+@keyframes s{to{transform:rotate(360deg)}} \
+#stage{font-size:1.05em;margin:18px 0;overflow-wrap:anywhere} \
+#elapsed{color:var(--muted);font-size:.85em;font-variant-numeric:tabular-nums;margin-left:8px;white-space:nowrap} \
+.task{margin:14px 0;padding:10px 12px;border:1px solid var(--rule);border-radius:6px} \
+.task-name{font-size:.95em;overflow-wrap:anywhere} \
+.task-msg{color:var(--muted);font-size:.8em;margin-top:4px;overflow-wrap:anywhere} \
+.bar{margin-top:8px;height:6px;background:var(--bar-track);border-radius:3px;overflow:hidden} \
+.bar-fill{height:100%;background:var(--bar-fill);transition:width 200ms ease;width:0%} \
+.bar-fill.indet{width:30%;animation:slide 1.4s ease-in-out infinite} \
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}} \
+#hint{color:var(--muted);font-size:.8em;margin-top:18px}</style></head><body> \
+<div class=\"wrap\"> \
+<h2>Starting Talky…</h2> \
+<div id=\"stage\"><span class=\"spinner\"></span><span id=\"stage-msg\">Waiting for daemon…</span><span id=\"elapsed\"></span></div> \
+<div id=\"tasks\"></div> \
+<p id=\"hint\">First launch downloads voice models. Subsequent launches are fast.</p> \
+</div></body>";
+    let _ = win.eval(&format!(
+        "document.documentElement.innerHTML = '{}'; \
+         window.__daemonPort = {}; \
+         window.__stageStart = Date.now(); \
+         var _fmtElapsed = function(ms){{ var s = Math.floor(ms/1000); if (s < 60) return '(' + s + 's)'; \
+           var m = Math.floor(s/60); var r = s - m*60; return '(' + m + 'm ' + r + 's)'; }}; \
+         if (window.__elapsedTimer) clearInterval(window.__elapsedTimer); \
+         window.__elapsedTimer = setInterval(function(){{ \
+           var el = document.getElementById('elapsed'); \
+           if (!el) return; \
+           el.textContent = ' ' + _fmtElapsed(Date.now() - window.__stageStart); \
+         }}, 250); \
+         var _inv = function(cmd, args){{ try {{ \
+           return (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) \
+             ? window.__TAURI_INTERNALS__.invoke(cmd, args) \
+             : (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke(cmd, args)); \
+         }} catch(e) {{ return Promise.reject(e); }} }}; \
+         if (window.__readyTimer) clearInterval(window.__readyTimer); \
+         window.__readyTimer = setInterval(function(){{ \
+           var p = _inv('read_daemon_readiness', {{ port: window.__daemonPort }}); \
+           if (!p || !p.then) return; \
+           p.then(function(json){{ \
+             var data; try {{ data = JSON.parse(json); }} catch(e) {{ return; }} \
+             var tasks = (data && data.tasks) || []; \
+             var stageMsg = document.getElementById('stage-msg'); \
+             if (stageMsg) stageMsg.textContent = tasks.length > 0 ? 'Preparing voice models…' : 'Waiting for daemon…'; \
+             var container = document.getElementById('tasks'); \
+             if (!container) return; \
+             container.innerHTML = ''; \
+             for (var i = 0; i < tasks.length; i++) {{ \
+               var t = tasks[i]; \
+               var div = document.createElement('div'); div.className = 'task'; \
+               var name = document.createElement('div'); name.className = 'task-name'; name.textContent = t.name || '(task)'; \
+               div.appendChild(name); \
+               var bar = document.createElement('div'); bar.className = 'bar'; \
+               var fill = document.createElement('div'); fill.className = 'bar-fill'; \
+               if (t.pct != null) {{ fill.style.width = Math.max(0, Math.min(100, t.pct)) + '%'; }} \
+               else {{ fill.classList.add('indet'); }} \
+               bar.appendChild(fill); div.appendChild(bar); \
+               if (t.msg) {{ var m = document.createElement('div'); m.className='task-msg'; m.textContent = t.msg; div.appendChild(m); }} \
+               container.appendChild(div); \
+             }} \
+           }}).catch(function(){{}}); \
+         }}, 500);",
+        js_escape(html),
+        port
+    ));
+}
+
 fn update_bootstrap_stage(win: &WebviewWindow, key: &str, msg: &str) {
     let text = if msg.is_empty() {
         key.to_string()
@@ -294,7 +378,7 @@ enum StartupOutcome {
     Failed(String),
 }
 
-fn ensure_daemon_running() -> StartupOutcome {
+fn ensure_daemon_running(app: Option<&AppHandle>) -> StartupOutcome {
     // Already running? Use existing port.
     if daemon_is_ready() {
         if let Some(port) = read_port_runfile() {
@@ -311,17 +395,36 @@ fn ensure_daemon_running() -> StartupOutcome {
         return StartupOutcome::Failed(format!("Failed to spawn talky daemon: {e}"));
     }
 
-    // Poll for port runfile + ready signal.
+    // Two-phase wait:
+    //   1. Wait for the HTTP port runfile — usually a couple of seconds.
+    //   2. Once the daemon is serving HTTP, swap the splash to "Starting
+    //      daemon" mode and let it poll /api/ready directly (showing HF
+    //      download progress etc.). We just wait for the ready file.
     let deadline = Instant::now() + DAEMON_POLL_TIMEOUT;
+    let mut splash_rendered = false;
     while Instant::now() < deadline {
         if daemon_is_ready() {
             if let Some(port) = read_port_runfile() {
                 return StartupOutcome::DaemonReady(port);
             }
         }
+        // Once we have a port, the daemon's HTTP is up — show the
+        // starting-daemon splash so the user sees download progress instead
+        // of a hung index.html.
+        if !splash_rendered {
+            if let (Some(handle), Some(port)) = (app, read_port_runfile()) {
+                if let Some(win) = handle.get_webview_window("main") {
+                    render_starting_splash(&win, port);
+                    splash_rendered = true;
+                }
+            }
+        }
         thread::sleep(DAEMON_POLL_INTERVAL);
     }
-    StartupOutcome::Failed("Daemon did not become ready within 120s".into())
+    StartupOutcome::Failed(format!(
+        "Daemon did not become ready within {}s",
+        DAEMON_POLL_TIMEOUT.as_secs()
+    ))
 }
 
 #[tauri::command]
@@ -349,8 +452,26 @@ fn read_bootstrap_log_tail(lines: usize) -> Result<String, String> {
     Ok(tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
 }
 
+/// Proxy GET http://localhost:<port>/api/ready and return the raw JSON body.
+/// The starting-daemon splash polls this so it can render readiness tasks
+/// (HF model downloads etc.) while waiting for the ready file. Short timeout
+/// because the daemon is local and any hang here would just stall the UI.
+#[tauri::command]
+fn read_daemon_readiness(port: u16) -> Result<String, String> {
+    let url = format!("http://localhost:{port}/api/ready");
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(2))
+        .build();
+    let resp = agent
+        .get(&url)
+        .call()
+        .map_err(|e| format!("readiness GET {url}: {e}"))?;
+    resp.into_string()
+        .map_err(|e| format!("readiness body read: {e}"))
+}
+
 /// Clear runfiles for a daemon whose pid is gone. Avoids second-spawn
-/// races on retry: ensure_daemon_running() trusts the pid file, so a
+/// races on retry: ensure_daemon_running(Some(&handle)) trusts the pid file, so a
 /// stale one would make it think the daemon is up when it isn't.
 fn clear_stale_runfiles() {
     if daemon_is_ready() {
@@ -373,7 +494,7 @@ fn clear_stale_runfiles() {
 /// from the `retry_bootstrap` command after a failure.
 fn run_startup(handle: AppHandle) {
     thread::spawn(move || {
-        match ensure_daemon_running() {
+        match ensure_daemon_running(Some(&handle)) {
             StartupOutcome::DaemonReady(port) => {
                 let url = webview_url_for(port);
                 if let Some(win) = handle.get_webview_window("main") {
@@ -391,7 +512,7 @@ fn run_startup(handle: AppHandle) {
                     }
                 });
                 match result {
-                    Ok(()) => match ensure_daemon_running() {
+                    Ok(()) => match ensure_daemon_running(Some(&handle)) {
                         StartupOutcome::DaemonReady(port) => {
                             let url = webview_url_for(port);
                             if let Some(win) = handle.get_webview_window("main") {
@@ -447,7 +568,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_bootstrap_log,
             retry_bootstrap,
-            read_bootstrap_log_tail
+            read_bootstrap_log_tail,
+            read_daemon_readiness
         ])
         .setup(|app| {
             // Run startup in a worker thread so we don't block the main runloop.

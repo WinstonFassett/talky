@@ -1211,27 +1211,41 @@ def _build_app():
 
         # Generic pre-warm: fetch any HF-backed assets the active voice
         # profile needs, reporting progress through the readiness tracker.
-        # Off-thread so the event loop stays responsive and SSE / /api/ready
-        # subscribers can observe progress.
-        try:
-            from talky.server.prewarm import prewarm_hf_assets
-            await asyncio.to_thread(prewarm_hf_assets)
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Pre-warm failed: {e}")
-
-        # Signal to the CLI that the daemon is ready to accept requests.
-        # Gated on the readiness tracker so the ready-file only appears
-        # once all registered startup work is actually done.
+        # Run as a background task so HTTP starts serving immediately —
+        # otherwise a cold HF cache (multi-GB download) blocks lifespan,
+        # which blocks the listener, which blocks any client (Tauri shell,
+        # SPA, CLI) from seeing readiness progress at all. The ready-file
+        # is gated on the readiness tracker, so consumers that wait on the
+        # file still wait the right amount of time — they just get a
+        # responsive /api/ready endpoint to poll while they do (08d0).
         from talky.server.readiness import readiness as _readiness
-        await _readiness.wait_ready()
-        DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
-        DAEMON_READY_PATH.write_text(str(os.getpid()))
-        logger.info(f"Daemon ready (pid={os.getpid()}, ready_file={DAEMON_READY_PATH})")
+
+        async def _prewarm_then_signal_ready():
+            try:
+                from talky.server.prewarm import prewarm_hf_assets
+                await asyncio.to_thread(prewarm_hf_assets)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Pre-warm failed: {e}")
+            try:
+                await _readiness.wait_ready()
+                DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
+                DAEMON_READY_PATH.write_text(str(os.getpid()))
+                logger.info(
+                    f"Daemon ready (pid={os.getpid()}, ready_file={DAEMON_READY_PATH})"
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Ready-file write failed: {e}")
+
+        _prewarm_task = asyncio.create_task(_prewarm_then_signal_ready())
 
         async with _original_lifespan(app):
             try:
                 yield
             finally:
+                # Best-effort cancel of the prewarm task on shutdown so we
+                # don't leak a thread waiting on a half-done HF download.
+                if not _prewarm_task.done():
+                    _prewarm_task.cancel()
                 logger.info("Lifespan shutdown: tearing down voice channel")
                 try:
                     DAEMON_READY_PATH.unlink(missing_ok=True)
