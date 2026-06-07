@@ -14,9 +14,16 @@ Bootstrap and notarization work focused on `desktop/tauri/`. Zero-native stays p
 
 ### Port redo: keys renamed, random-by-default
 
-Decision flipped during the spike based on a user follow-up: ports are now **random by default** with the chosen port written to `~/.talky/run/talky-daemon.port` so shells/openers can discover it. Settings.yaml `network.port` (and `network.loopback_port`) override with a fixed value only when stable LAN/mobile access matters.
+> **Superseded.** The model below was an intermediate step. The current
+> canonical model is two listeners by reach — `local_port` (always-on local
+> HTTP, default 8765) and `remote_port` (HTTPS, cert-gated). See
+> [docs/ports.md](ports.md). The table here is retained only as a record of
+> this spike's migration; the keys `network.port` / `network.loopback_port`
+> shown in the "New" column were themselves later retired.
 
-Key changes:
+Decision flipped during the spike based on a user follow-up: ports were made **random by default** with the chosen port written to a runfile so shells/openers could discover it. Settings.yaml `network.port` (and `network.loopback_port`) overrode with a fixed value only when stable LAN/mobile access mattered.
+
+Key changes (this spike — see superseded note above):
 
 | Old                          | New                          |
 |------------------------------|------------------------------|

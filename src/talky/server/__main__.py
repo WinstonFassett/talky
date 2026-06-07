@@ -75,54 +75,58 @@ logger.remove()
 logger.add(sys.stderr, level="INFO")
 
 # Network config precedence (highest → lowest):
-#   1. TALKY_HOST / TALKY_PORT / TALKY_LOOPBACK_PORT / TALKY_HTTPS_CERT / TALKY_HTTPS_KEY env vars
-#   2. ~/.talky/settings.yaml  network: { host, port, loopback_port, https: { cert, key } }
-#   3. Defaults: host="localhost", port=random-free, loopback_port=random-free (only bound when TLS is on), no TLS
+#   1. TALKY_LOCAL_PORT / TALKY_REMOTE_PORT / TALKY_HOST / TALKY_HTTPS_CERT / TALKY_HTTPS_KEY env vars
+#   2. ~/.talky/settings.yaml  network: { local_port, remote_port, host, https: { cert, key } }
+#   3. Defaults: local_port=random-free, remote_port=random-free, host="localhost", no TLS
 #
-# Random-by-default: when no port is configured, the daemon picks a free
-# ephemeral port and writes it to ~/.talky/run/talky-daemon.port so
-# desktop shells / openers can discover where to connect. Set
-# network.port (or TALKY_PORT) to pin a stable port when LAN/mobile
-# access matters.
+# Two listeners, named by reach (see docs/ports.md — the canonical port truth):
+#   local_port  — always bound, plain HTTP on 127.0.0.1. Serves the one app
+#                 (web client + API + MCP). The local browser and local MCP
+#                 clients (Claude Code, etc.) always have a plain-HTTP path.
+#   remote_port — bound ONLY when a TLS cert resolves. HTTPS on `host`
+#                 (e.g. 0.0.0.0) for off-box reach (LAN, mobile, ngrok).
+#                 Browsers require HTTPS for mic access over a network.
 #
-# DEPRECATED keys (hard break — daemon refuses to start):
-#   network.https_port → use network.port
-#   network.http_port  → use network.loopback_port
-#   MCP_HOST / MCP_PORT / MCP_SSL_* env vars → drop the MCP_ prefix
+# Random-by-default: when no port is configured, each listener picks a free
+# ephemeral port and writes it to a runfile so desktop shells / openers can
+# discover where to connect:
+#   ~/.talky/run/talky-daemon.local-port    (always)
+#   ~/.talky/run/talky-daemon.remote-port   (only when TLS is on)
+# Pin network.local_port / network.remote_port (or the env vars) for stable
+# ports when LAN/mobile access matters.
+#
+# DEPRECATED keys (HARD BREAK — daemon refuses to start, no migration hint):
+#   network.port, network.https_port, network.http_port, network.loopback_port
+#   MCP_* env vars
+# Stale config fails loud. The new names are local_port / remote_port.
 
 
 def _reject_deprecated_keys(net: dict) -> None:
-    """Hard-break on old key names. Tell the user exactly how to migrate."""
+    """Hard-break on retired key names. No hint — the new names are known."""
     if not isinstance(net, dict):
         return
-    bad = []
-    if "https_port" in net:
-        bad.append(("https_port", "port"))
-    if "http_port" in net:
-        bad.append(("http_port", "loopback_port"))
+    retired = ("port", "https_port", "http_port", "loopback_port")
+    bad = [k for k in retired if k in net]
     if bad:
-        lines = [f"  network.{old}  →  network.{new}" for old, new in bad]
         logger.error(
-            "Deprecated network keys in ~/.talky/settings.yaml — rename:\n"
-            + "\n".join(lines)
+            "Retired network keys in ~/.talky/settings.yaml: "
+            + ", ".join(f"network.{k}" for k in bad)
+            + ". Use network.local_port / network.remote_port. See docs/ports.md."
         )
         sys.exit(2)
 
 
 def _reject_deprecated_env() -> None:
-    """Hard-break on MCP_* env vars."""
-    deprecated = {
-        "MCP_HOST": "TALKY_HOST",
-        "MCP_PORT": "TALKY_PORT",
-        "MCP_SSL_CERTFILE": "TALKY_HTTPS_CERT",
-        "MCP_SSL_KEYFILE": "TALKY_HTTPS_KEY",
-        "TALKY_HTTP_PORT": "TALKY_LOOPBACK_PORT",
-    }
-    bad = [(old, new) for old, new in deprecated.items() if os.getenv(old)]
+    """Hard-break on retired env vars. No hint — the new names are known."""
+    retired = (
+        "MCP_HOST", "MCP_PORT", "MCP_SSL_CERTFILE", "MCP_SSL_KEYFILE",
+        "TALKY_PORT", "TALKY_HTTP_PORT", "TALKY_LOOPBACK_PORT",
+    )
+    bad = [k for k in retired if os.getenv(k)]
     if bad:
-        lines = [f"  {old}  →  {new}" for old, new in bad]
         logger.error(
-            "Deprecated env vars set — rename:\n" + "\n".join(lines)
+            "Retired env vars set: " + ", ".join(bad)
+            + ". Use TALKY_LOCAL_PORT / TALKY_REMOTE_PORT. See docs/ports.md."
         )
         sys.exit(2)
 
@@ -182,24 +186,25 @@ def _resolve_port_from(env_name: str, settings_key: str, net: dict) -> int:
         sys.exit(1)
 
 
-mcp_host, _resolved_cert, _resolved_key, _net_dict = _resolve_network_config()
-mcp_port = _resolve_port_from("TALKY_PORT", "port", _net_dict)
+remote_host, _resolved_cert, _resolved_key, _net_dict = _resolve_network_config()
 
+# local_port — always-on plain HTTP on 127.0.0.1 (client + API + MCP).
+# remote_port — HTTPS on `remote_host`, bound only when a TLS cert resolves.
+local_port = _resolve_port_from("TALKY_LOCAL_PORT", "local_port", _net_dict)
+remote_port = _resolve_port_from("TALKY_REMOTE_PORT", "remote_port", _net_dict)
 
-def _resolve_loopback_port() -> int:
-    """Plain-HTTP loopback port (only bound when TLS is on)."""
-    return _resolve_port_from("TALKY_LOOPBACK_PORT", "loopback_port", _net_dict)
-
-mcp = FastMCP(name="pipecat-mcp-server", host=mcp_host, port=mcp_port)
+# FastMCP binds the canonical, always-present listener: local HTTP on loopback.
+mcp = FastMCP(name="pipecat-mcp-server", host="127.0.0.1", port=local_port)
 
 # Ready file: written after uvicorn binds + lifespan completes. The CLI
 # checks this instead of sniffing ports with lsof.
 DAEMON_RUN_DIR = Path.home() / ".talky" / "run"
 DAEMON_READY_PATH = DAEMON_RUN_DIR / "talky-daemon.ready"
-# Port discovery file: shells / openers read this to learn the daemon's
-# (random) port. Written after uvicorn binds; cleaned up on shutdown.
-DAEMON_PORT_PATH = DAEMON_RUN_DIR / "talky-daemon.port"
-DAEMON_LOOPBACK_PORT_PATH = DAEMON_RUN_DIR / "talky-daemon.loopback-port"
+# Port discovery files: shells / openers read these to learn the daemon's
+# (random) ports. local-port is always written; remote-port only when TLS is
+# on. Written after uvicorn binds; cleaned up on shutdown.
+DAEMON_LOCAL_PORT_PATH = DAEMON_RUN_DIR / "talky-daemon.local-port"
+DAEMON_REMOTE_PORT_PATH = DAEMON_RUN_DIR / "talky-daemon.remote-port"
 
 def _read_idle_ttl_seconds() -> Optional[float]:
     """Load the idle-room TTL (ticket 0c5d).
@@ -417,8 +422,8 @@ async def start_convo(auto_open: bool = True) -> dict:
         Connection information including the browser URL.
 
     """
-    scheme = "https" if _resolved_cert else "http"
-    client_url = f"{scheme}://{mcp_host}:{mcp_port}?autoconnect=true"
+    # Open the always-on local HTTP listener — the local browser path.
+    client_url = f"http://127.0.0.1:{local_port}?autoconnect=true"
 
     opened = None
     if auto_open:
@@ -612,9 +617,9 @@ def _check_ports_or_exit():
         DAEMON_READY_PATH.unlink(missing_ok=True)
 
     # Fallback: check if something is actually LISTENING on either listener port.
-    ports_to_check = [mcp_port]
+    ports_to_check = [local_port]
     if _resolved_cert and _resolved_key:
-        ports_to_check.append(_resolve_loopback_port())
+        ports_to_check.append(remote_port)
     if holder_pid is None:
         for port in ports_to_check:
             try:
@@ -634,7 +639,7 @@ def _check_ports_or_exit():
 
     if force:
         logger.warning(
-            f"TALKY_DAEMON_FORCE: killing pid {holder_pid} holding port {mcp_port}"
+            f"TALKY_DAEMON_FORCE: killing pid {holder_pid} holding port {local_port}"
         )
         try:
             os.kill(holder_pid, signal.SIGTERM)
@@ -647,14 +652,14 @@ def _check_ports_or_exit():
         except ProcessLookupError:
             pass
         except PermissionError as e:
-            logger.error(f"Cannot kill pid {holder_pid} on port {mcp_port}: {e}")
+            logger.error(f"Cannot kill pid {holder_pid} on port {local_port}: {e}")
             sys.exit(2)
         DAEMON_READY_PATH.unlink(missing_ok=True)
         _t.sleep(0.3)
         return
 
     logger.error(
-        f"Port {mcp_port} already held by pid {holder_pid} — cannot start talky daemon."
+        f"Port {local_port} already held by pid {holder_pid} — cannot start talky daemon."
     )
     logger.error("Fix: run `talky kill` to reclaim, then retry.")
     logger.error("Or: rerun with `talky daemon --force` to take over automatically.")
@@ -1252,8 +1257,8 @@ def _build_app():
                 logger.info("Lifespan shutdown: tearing down voice channel")
                 try:
                     DAEMON_READY_PATH.unlink(missing_ok=True)
-                    DAEMON_PORT_PATH.unlink(missing_ok=True)
-                    DAEMON_LOOPBACK_PORT_PATH.unlink(missing_ok=True)
+                    DAEMON_LOCAL_PORT_PATH.unlink(missing_ok=True)
+                    DAEMON_REMOTE_PORT_PATH.unlink(missing_ok=True)
                 except Exception:
                     pass
                 try:
@@ -1305,8 +1310,8 @@ def main():
         pass
     import uvicorn
 
-    # 727e defense #4: refuse to start if 9090 is already held. Honors
-    # TALKY_DAEMON_FORCE=1 (or legacy TALKY_MCP_FORCE=1) to reclaim.
+    # 727e defense #4: refuse to start if the local port is already held.
+    # Honors TALKY_DAEMON_FORCE=1 (or legacy TALKY_MCP_FORCE=1) to reclaim.
     _check_ports_or_exit()
 
     # Best-effort handlers. uvicorn replaces these via Server.capture_signals
@@ -1318,61 +1323,64 @@ def main():
 
     ssl_certfile = _resolved_cert
     ssl_keyfile = _resolved_key
-    ssl_enabled = bool(ssl_certfile and ssl_keyfile)
+    tls_enabled = bool(ssl_certfile and ssl_keyfile)
 
-    primary_kwargs = {
-        "host": mcp_host,
-        "port": mcp_port,
+    # Local listener: ALWAYS bound. Plain HTTP on 127.0.0.1. Serves the one
+    # app (web client + API + MCP) to the local browser and local MCP clients
+    # (Claude Code, etc.) — they always have a plain-HTTP path.
+    local_kwargs = {
+        "host": "127.0.0.1",
+        "port": local_port,
         "log_level": "info",
     }
-    if ssl_enabled:
-        primary_kwargs["ssl_certfile"] = ssl_certfile
-        primary_kwargs["ssl_keyfile"] = ssl_keyfile
-        logger.info(f"SSL enabled on :{mcp_port} (cert={ssl_certfile})")
+    logger.info(f"Local listener: http://127.0.0.1:{local_port}")
 
-    scheme = "https" if ssl_enabled else "http"
-    logger.info(f"Primary listener: {scheme}://{mcp_host}:{mcp_port}")
-
-    # When SSL is on, also bind plain HTTP loopback-only so MCP clients that
-    # don't speak self-signed HTTPS can connect. Set via
-    # TALKY_LOOPBACK_PORT or settings.yaml network.loopback_port (default: random).
-    http_port = _resolve_loopback_port() if ssl_enabled else None
+    # Remote listener: bound ONLY when a TLS cert resolves. HTTPS on
+    # `remote_host` (e.g. 0.0.0.0) for off-box reach. Browsers require HTTPS
+    # for mic access over a network. Set network.remote_port to pin it.
+    remote_kwargs = None
+    if tls_enabled:
+        remote_kwargs = {
+            "host": remote_host,
+            "port": remote_port,
+            "log_level": "info",
+            "ssl_certfile": ssl_certfile,
+            "ssl_keyfile": ssl_keyfile,
+            # The local listener owns the lifespan — the MCP session manager
+            # refuses to .run() twice on the same app instance. The remote
+            # listener reuses the already-mounted routes.
+            "lifespan": "off",
+        }
+        logger.info(
+            f"Remote listener: https://{remote_host}:{remote_port} "
+            f"(cert={ssl_certfile})"
+        )
 
     # Write port discovery files so shells / openers can find us.
     DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        DAEMON_PORT_PATH.write_text(str(mcp_port))
+        DAEMON_LOCAL_PORT_PATH.write_text(str(local_port))
     except OSError as e:
-        logger.warning(f"Could not write port discovery file {DAEMON_PORT_PATH}: {e}")
-    if http_port is not None:
+        logger.warning(
+            f"Could not write local-port discovery file {DAEMON_LOCAL_PORT_PATH}: {e}"
+        )
+    if remote_kwargs is not None:
         try:
-            DAEMON_LOOPBACK_PORT_PATH.write_text(str(http_port))
+            DAEMON_REMOTE_PORT_PATH.write_text(str(remote_port))
         except OSError as e:
             logger.warning(
-                f"Could not write loopback-port discovery file "
-                f"{DAEMON_LOOPBACK_PORT_PATH}: {e}"
+                f"Could not write remote-port discovery file "
+                f"{DAEMON_REMOTE_PORT_PATH}: {e}"
             )
 
     try:
-        if http_port is not None:
-            secondary_kwargs = {
-                "host": "127.0.0.1",
-                "port": http_port,
-                "log_level": "info",
-                # Skip lifespan on the secondary — the MCP session manager
-                # refuses to .run() twice on the same FastAPI app instance.
-                # Primary owns the lifespan; the secondary just reuses
-                # the already-mounted routes.
-                "lifespan": "off",
-            }
-            logger.info(f"Secondary listener: http://127.0.0.1:{http_port} (loopback only)")
+        if remote_kwargs is not None:
             import asyncio as _asyncio
             servers = [
-                uvicorn.Server(uvicorn.Config(app, **primary_kwargs)),
-                uvicorn.Server(uvicorn.Config(app, **secondary_kwargs)),
+                uvicorn.Server(uvicorn.Config(app, **local_kwargs)),
+                uvicorn.Server(uvicorn.Config(app, **remote_kwargs)),
             ]
-            # Disable signal handling on the secondary so the primary handles
-            # SIGTERM/SIGINT for the whole process.
+            # The local listener owns signal handling for the whole process.
             servers[1].install_signal_handlers = lambda: None  # type: ignore[method-assign]
 
             async def _run_both():
@@ -1380,7 +1388,7 @@ def main():
 
             _asyncio.run(_run_both())
         else:
-            uvicorn.run(app, **primary_kwargs)
+            uvicorn.run(app, **local_kwargs)
     except KeyboardInterrupt:
         logger.info("Ctrl-C detected, exiting!")
     # No finally cleanup needed — the lifespan handles it inside uvicorn's

@@ -7,7 +7,7 @@ alongside the daemon and vite proxies API/WebSocket requests to it.
 ## Develop
 
 The daemon must be running **before** `npm run dev` — vite reads
-`~/.talky/run/talky-daemon.port` to set its proxy target and will
+`~/.talky/run/talky-daemon.local-port` to set its proxy target and will
 fail to start without it.
 
 ```bash

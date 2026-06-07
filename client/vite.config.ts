@@ -49,12 +49,12 @@ const getHost = (): string => {
   return process.env.VITE_HOST || 'localhost';
 };
 
-// Get daemon URL for proxying.
-// Precedence: VITE_DAEMON_URL env → ~/.talky/run/talky-daemon.port runfile
-//             → settings.yaml network.port → error.
+// Get daemon URL for proxying. Targets the always-on local HTTP listener.
+// Precedence: VITE_DAEMON_URL env → ~/.talky/run/talky-daemon.local-port runfile
+//             → error.
 const getDaemonUrl = (): string => {
   if (process.env.VITE_DAEMON_URL) return process.env.VITE_DAEMON_URL;
-  const runFile = path.join(os.homedir(), '.talky', 'run', 'talky-daemon.port');
+  const runFile = path.join(os.homedir(), '.talky', 'run', 'talky-daemon.local-port');
   try {
     const port = parseInt(readFileSync(runFile, 'utf8').trim(), 10);
     if (port) return `http://localhost:${port}`;

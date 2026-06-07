@@ -2,12 +2,11 @@
  * Pi Voice Extension
  *
  * Bridges a running Pi terminal session to the talky daemon's voice pipeline.
- * Connects to the daemon's plain-HTTP loopback WebSocket endpoint.
+ * Connects to the daemon's always-on local HTTP WebSocket endpoint.
  *
  * Port discovery (in order):
  *   1. TALKY_AGENT_WS_URL — full ws:// URL override
- *   2. ~/.talky/run/talky-daemon.loopback-port — written by the daemon when TLS is on
- *   3. ~/.talky/run/talky-daemon.port — primary port when TLS is off
+ *   2. ~/.talky/run/talky-daemon.local-port — the always-on local HTTP port
  *
  * Usage (user-initiated): load this extension in any Pi session
  *   pi -e ~/.pi/agent/extensions/pi-voice.ts
@@ -35,7 +34,7 @@ function resolveDaemonWsUrl(): string {
 			return null;
 		}
 	};
-	const port = tryPort("talky-daemon.loopback-port") ?? tryPort("talky-daemon.port");
+	const port = tryPort("talky-daemon.local-port");
 	if (!port) {
 		throw new Error(
 			"talky daemon not running (no port runfile at ~/.talky/run/). Start it with `talky daemon`.",

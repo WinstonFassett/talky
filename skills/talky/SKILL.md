@@ -27,11 +27,11 @@ Default state is **listening**. Exit only on explicit end signal ("that's all," 
 
 ## MCP Voice Conversation
 
-Requires daemon on port 9090.
+Requires the talky daemon running (local HTTP on port 8765 by default).
 
 ```bash
 talky daemon   # start if not running
-talky kill     # reclaim 9090 if stuck
+talky kill     # stop the daemon if stuck
 ```
 
 **Tools:**

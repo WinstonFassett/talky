@@ -149,8 +149,8 @@ const KITCHEN_SINK: TalkyMessage[] = [
           "Based on the README, here are the **top 3–5 things** you should know about Talky:\n\n" +
           "**It's a voice interface for AI** — Talky lets you talk to multiple AI assistants " +
           '(OpenClaw, Moltis, Hermes, Pi) or use MCP to integrate with Claude Desktop and Claude Code. ' +
-          'Everything runs through a browser UI on `localhost:9090`.\n\n' +
-          '**It runs on a daemon** — `talky daemon` runs the core service on port 9090. ' +
+          'Everything runs through a browser UI on `localhost:8765`.\n\n' +
+          '**It runs on a daemon** — `talky daemon` runs the core service on port 8765. ' +
           'It serves the browser UI and MCP tools, and auto-spawns any daemon-dependent processes.\n\n' +
           '**Local or cloud voices** — The default uses local ML models (Kokoro TTS + Whisper STT), ' +
           'but you can swap to cloud providers like Google or Deepgram by adding API keys.',

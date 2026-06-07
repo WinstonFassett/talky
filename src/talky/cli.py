@@ -26,8 +26,8 @@ _DAEMON_BASE_URL_CACHE: str | None = None
 _DAEMON_SSL_CTX: ssl.SSLContext | None = None
 
 
-_DAEMON_PORT_FILE = Path.home() / ".talky" / "run" / "talky-daemon.port"
-_DAEMON_LOOPBACK_PORT_FILE = Path.home() / ".talky" / "run" / "talky-daemon.loopback-port"
+_DAEMON_LOCAL_PORT_FILE = Path.home() / ".talky" / "run" / "talky-daemon.local-port"
+_DAEMON_REMOTE_PORT_FILE = Path.home() / ".talky" / "run" / "talky-daemon.remote-port"
 
 
 def _self_argv() -> list[str]:
@@ -99,27 +99,39 @@ def _settings_net() -> dict:
         return {}
 
 
-def _daemon_host_port() -> tuple[str, int]:
-    """Resolve the daemon's primary host:port.
+def _daemon_local_port() -> int:
+    """Resolve the daemon's always-on local HTTP port (127.0.0.1).
 
     Precedence: env → settings.yaml → runfile (random port written at
-    daemon startup) → ephemeral fallback. The runfile is the load-bearing
-    discovery channel for the random-port-by-default flow.
+    daemon startup) → 0 sentinel. The runfile is the load-bearing discovery
+    channel for the random-port-by-default flow. Callers should generally
+    first check ``talky_daemon_is_running()``.
     """
-    host = os.environ.get("TALKY_DAEMON_HOST", os.environ.get("TALKY_HOST", "localhost"))
-    raw_port = os.environ.get("TALKY_DAEMON_PORT") or os.environ.get("TALKY_PORT")
-    if raw_port is None:
-        p = _settings_net().get("port")
+    raw = os.environ.get("TALKY_LOCAL_PORT")
+    if raw is None:
+        p = _settings_net().get("local_port")
         if p is not None:
-            raw_port = str(p)
-    if raw_port is None:
-        rf = _read_runfile_port(_DAEMON_PORT_FILE)
-        if rf is not None:
-            return host, rf
-        # Daemon isn't running yet and no fixed port configured. Return a
-        # sentinel — callers should generally first check `talky_daemon_is_running()`.
-        return host, 0
-    return host, int(raw_port)
+            raw = str(p)
+    if raw is None:
+        return _read_runfile_port(_DAEMON_LOCAL_PORT_FILE) or 0
+    return int(raw)
+
+
+def _daemon_remote_host_port() -> tuple[str, Optional[int]]:
+    """Resolve the daemon's remote HTTPS host:port (bound only when TLS is on).
+
+    Precedence: env → settings.yaml → runfile. Returns ``(host, None)`` when
+    no remote port is configured or discoverable.
+    """
+    host = os.environ.get("TALKY_HOST") or _settings_net().get("host") or "localhost"
+    raw = os.environ.get("TALKY_REMOTE_PORT")
+    if raw is None:
+        p = _settings_net().get("remote_port")
+        if p is not None:
+            raw = str(p)
+    if raw is None:
+        return host, _read_runfile_port(_DAEMON_REMOTE_PORT_FILE)
+    return host, int(raw)
 
 
 def _daemon_tls_configured() -> bool:
@@ -140,18 +152,6 @@ def _daemon_tls_configured() -> bool:
     return os.path.exists(cert) and os.path.exists(key)
 
 
-def _daemon_loopback_port() -> Optional[int]:
-    """Plain-HTTP loopback port (only bound when TLS is on)."""
-    raw = os.environ.get("TALKY_LOOPBACK_PORT")
-    if raw is None:
-        p = _settings_net().get("loopback_port")
-        if p is not None:
-            raw = str(p)
-    if raw is None:
-        return _read_runfile_port(_DAEMON_LOOPBACK_PORT_FILE)
-    return int(raw)
-
-
 def _unverified_ssl_ctx() -> ssl.SSLContext:
     global _DAEMON_SSL_CTX
     if _DAEMON_SSL_CTX is None:
@@ -165,20 +165,20 @@ def _unverified_ssl_ctx() -> ssl.SSLContext:
 def daemon_base_url() -> str:
     """Probe the daemon scheme + port once per process.
 
-    Primary-port scheme follows TLS config (HTTPS iff cert+key resolve, else HTTP).
-    Falls back to the plain-HTTP loopback port when TLS is on but primary HTTPS misses.
+    Prefers the always-on local HTTP listener (127.0.0.1) — it is always
+    bound and needs no TLS. Falls back to the remote HTTPS listener when the
+    local one isn't reachable (e.g. probing a remote daemon).
     """
     global _DAEMON_BASE_URL_CACHE
     if _DAEMON_BASE_URL_CACHE is not None:
         return _DAEMON_BASE_URL_CACHE
-    host, primary_port = _daemon_host_port()
-    loopback_port = _daemon_loopback_port()
-    tls = _daemon_tls_configured()
+    local_port = _daemon_local_port()
+    remote_host, remote_port = _daemon_remote_host_port()
     candidates: list[tuple[str, str, int]] = []
-    if primary_port:
-        candidates.append(("https" if tls else "http", host, primary_port))
-    if tls and loopback_port:
-        candidates.append(("http", "localhost", loopback_port))
+    if local_port:
+        candidates.append(("http", "127.0.0.1", local_port))
+    if remote_port:
+        candidates.append(("https", remote_host, remote_port))
     for scheme, h, p in candidates:
         url = f"{scheme}://{h}:{p}/api/profiles"
         try:
@@ -188,9 +188,12 @@ def daemon_base_url() -> str:
                 return _DAEMON_BASE_URL_CACHE
         except (urllib.error.URLError, ssl.SSLError, ConnectionError, OSError):
             continue
-    fallback_scheme = "https" if tls else "http"
-    fallback_port = primary_port or loopback_port or 0
-    _DAEMON_BASE_URL_CACHE = f"{fallback_scheme}://{host}:{fallback_port}"
+    # Nothing reachable — return the best guess (local HTTP) for error messages.
+    fallback_port = local_port or (remote_port or 0)
+    if local_port:
+        _DAEMON_BASE_URL_CACHE = f"http://127.0.0.1:{local_port}"
+    else:
+        _DAEMON_BASE_URL_CACHE = f"https://{remote_host}:{fallback_port}"
     return _DAEMON_BASE_URL_CACHE
 
 
@@ -421,14 +424,14 @@ def cmd_ask(args):
 def cmd_kill(args):
     """Handle the 'kill' subcommand — stop the talky daemon on both listeners.
 
-    Kills the process listening on the primary (HTTPS) port and the secondary
-    (HTTP loopback) port. The voice daemon (unix socket) is intentionally left
+    Kills the process listening on the local (HTTP) port and the remote
+    (HTTPS) port. The voice daemon (unix socket) is intentionally left
     alone — its lifecycle is separate. Use `talky say --stop-daemon` to bounce
     that one.
     """
-    _, primary_port = _daemon_host_port()
-    loopback_port = _daemon_loopback_port()
-    ports = [p for p in {primary_port, loopback_port} if p]
+    local_port = _daemon_local_port()
+    _, remote_port = _daemon_remote_host_port()
+    ports = [p for p in {local_port, remote_port} if p]
 
     any_killed = False
     for port in ports:
@@ -629,7 +632,7 @@ def cmd_profile(args):
                 marker = "*" if p == data.get("active") else " "
                 print(f"  {marker} {p}")
         else:
-            _, _port = _daemon_host_port()
+            _port = _daemon_local_port()
             print(f"no profiles available — connect a browser to localhost:{_port} first")
         return
 
@@ -806,13 +809,13 @@ def _read_runfile_int(path: Path) -> Optional[int]:
 def _gather_daemon_status() -> dict:
     """Single source of truth for daemon state — runfiles + /api/ready.
 
-    Returns a dict with: ready, pid, port, loopback_port, profile, voice,
+    Returns a dict with: ready, pid, local_port, remote_port, profile, voice,
     tls, reachable, readiness_tasks. Missing fields are None.
     """
     run_dir = Path.home() / ".talky" / "run"
     pid = _read_runfile_int(run_dir / "talky-daemon.ready") or _read_runfile_int(run_dir / "talky-daemon.pid")
-    port = _read_runfile_int(run_dir / "talky-daemon.port")
-    loopback_port = _read_runfile_int(run_dir / "talky-daemon.loopback-port")
+    local_port = _read_runfile_int(run_dir / "talky-daemon.local-port")
+    remote_port = _read_runfile_int(run_dir / "talky-daemon.remote-port")
 
     # Liveness: pid alive + ready file exists.
     ready = False
@@ -826,9 +829,9 @@ def _gather_daemon_status() -> dict:
     out: dict = {
         "ready": ready,
         "pid": pid,
-        "port": port,
-        "loopback_port": loopback_port,
-        "tls": loopback_port is not None,  # secondary listener implies TLS on primary
+        "local_port": local_port,
+        "remote_port": remote_port,
+        "tls": remote_port is not None,  # remote HTTPS listener implies TLS on
         "profile": None,
         "voice": None,
         "reachable": False,
@@ -863,7 +866,7 @@ def _gather_daemon_status() -> dict:
 def cmd_talkystatus(args):
     """Show daemon status — active profile, voice, health.
 
-    --json: emit structured status (ready/pid/port/loopback_port/profile/voice/tls)
+    --json: emit structured status (ready/pid/local_port/remote_port/profile/voice/tls)
     suitable for shells and other tools.
     """
     status = _gather_daemon_status()
@@ -879,14 +882,14 @@ def cmd_talkystatus(args):
         sys.exit(1)
 
     if not status["reachable"]:
-        port = status["port"]
+        port = status["local_port"]
         print(f"⚠️  daemon pid {status['pid']} alive but HTTP not reachable on :{port}")
         sys.exit(1)
 
     profiles = status.get("_profiles", [])
     print(f"pipeline: {'live' if status.get('_live') else 'not live'}")
-    print(f"pid: {status['pid']}  port: {status['port']}"
-          + (f"  loopback: {status['loopback_port']}" if status['loopback_port'] else "")
+    print(f"pid: {status['pid']}  local: {status['local_port']}"
+          + (f"  remote: {status['remote_port']}" if status['remote_port'] else "")
           + (f"  tls: on" if status['tls'] else ""))
     print(f"active profile: {status['profile'] or '(none)'}")
     print(f"active voice: {status['voice'] or '(none)'}")
@@ -940,7 +943,7 @@ def cmd_daemon(args):
             print(f"⚠️  talky kill failed: {e}", file=sys.stderr)
 
     if talky_daemon_is_running():
-        _, _port = _daemon_host_port()
+        _port = _daemon_local_port()
         print(f"✅ talky daemon already running on :{_port}")
         return
 
@@ -1100,7 +1103,7 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
         while time.monotonic() < deadline:
             if talky_daemon_is_running():
                 if verbose:
-                    _, _port = _daemon_host_port()
+                    _port = _daemon_local_port()
                     # Clear any in-progress status line.
                     if last_status_line:
                         print("\r" + " " * len(last_status_line) + "\r", file=sys.stderr, end="", flush=True)
@@ -1292,7 +1295,7 @@ def main():
     status_parser.add_argument(
         "--json",
         action="store_true",
-        help="Emit structured JSON (ready, pid, port, loopback_port, profile, voice, tls)",
+        help="Emit structured JSON (ready, pid, local_port, remote_port, profile, voice, tls)",
     )
     status_parser.set_defaults(func=cmd_talkystatus)
 
@@ -1396,16 +1399,14 @@ def _ensure_claude_mcp_connected() -> None:
         result = _sp.run(["claude", "mcp", "list"], capture_output=True, text=True, timeout=10)
         if "talky" in result.stdout or "pipecat-mcp-server" in result.stdout:
             return
-        # Pick the plain-HTTP loopback port if TLS is on, else the primary port.
-        # We need a non-HTTPS URL so Claude's MCP transport doesn't choke on self-signed certs.
-        loopback = _daemon_loopback_port()
-        _, primary_port = _daemon_host_port()
-        http_target_port = loopback if (_daemon_tls_configured() and loopback) else primary_port
-        if not http_target_port:
-            print("⚠️  Cannot configure Claude MCP — daemon not running and no fixed port set", file=sys.stderr)
+        # The always-on local HTTP listener is the plain-HTTP MCP target —
+        # Claude's MCP transport can't trust a self-signed HTTPS cert.
+        local_port = _daemon_local_port()
+        if not local_port:
+            print("⚠️  Cannot configure Claude MCP — daemon not running and no fixed local_port set", file=sys.stderr)
             return
         _sp.run(
-            ["claude", "mcp", "add", "--transport", "http", "talky", f"http://localhost:{http_target_port}/mcp"],
+            ["claude", "mcp", "add", "--transport", "http", "talky", f"http://localhost:{local_port}/mcp"],
             capture_output=True, timeout=30,
         )
     except Exception as e:

@@ -61,7 +61,7 @@ talky pi                          # Talk to Pi
 - `talky moltis` - Moltis assistant  
 - `talky hermes` - Hermes agent (NousResearch)
 - `talky pi` - Pi coding assistant
-- Opens browser at `localhost:9090` for voice chat
+- Opens browser at `localhost:8765` for voice chat
 
 **Change Voice**
 - `talky moltis -v kokoro-uk-george` - Use different voice
@@ -71,7 +71,7 @@ talky pi                          # Talk to Pi
 - `talky ls` - See all available voices and profiles
 
 **Daemon / MCP** (for Claude Desktop/Claude Code)
-- `talky daemon` - Start the talky daemon (listens on 9090, serves browser UI + MCP tools)
+- `talky daemon` - Start the talky daemon (local HTTP on 8765, serves browser UI + MCP tools — see [docs/ports.md](docs/ports.md))
 - Any daemon-dependent command (e.g. `talky openclaw`) auto-spawns the daemon if it isn't running
 
 ## Documentation

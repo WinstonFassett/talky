@@ -4,8 +4,8 @@ Thin Tauri 2 desktop shell for the talky daemon. The shell:
 
 1. Looks for `talky` on `PATH` (and the canonical uv tool locations).
 2. Spawns `talky daemon` if it isn't already running.
-3. Waits for the daemon's port runfile (`~/.talky/run/talky-daemon.port`)
-   and ready signal, then loads the webview at `http://localhost:<port>`.
+3. Waits for the daemon's local-port runfile (`~/.talky/run/talky-daemon.local-port`)
+   and ready signal, then loads the webview at `http://localhost:<local_port>`.
 4. If `talky` is missing entirely, launches `scripts/bootstrap/install-talky.sh`
    in Terminal.app and shows a fallback copy-paste curl command in the
    splash when Terminal automation fails.
@@ -50,17 +50,17 @@ changing the var triggers a rebuild.
 
 ## Daemon discovery flow
 
-The shell is port-agnostic. It does not hardcode 9090 or anything else.
+The shell is port-agnostic. It does not hardcode any port.
 At launch it:
 
 1. Reads `~/.talky/run/talky-daemon.ready` and PID-signals it (`kill(pid, 0)`).
-2. Reads `~/.talky/run/talky-daemon.port` for the primary port.
-3. If TLS is on, reads `~/.talky/run/talky-daemon.loopback-port` and
-   prefers it — the webview speaks plain HTTP to avoid self-signed-cert
-   friction inside WKWebView.
-4. If neither runfile exists, finds `talky` on PATH and spawns it, then
+2. Reads `~/.talky/run/talky-daemon.local-port` — the always-on local HTTP
+   listener. The webview speaks plain HTTP to it, avoiding self-signed-cert
+   friction inside WKWebView regardless of whether the remote HTTPS listener
+   is also up.
+3. If the runfile doesn't exist, finds `talky` on PATH and spawns it, then
    polls for up to 120s.
-5. If `talky` isn't found, launches `install-talky.sh` in Terminal.app
+4. If `talky` isn't found, launches `install-talky.sh` in Terminal.app
    (or shows a copy-paste fallback if Terminal automation fails).
 
 ## Distribution / installing

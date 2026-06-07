@@ -8,16 +8,16 @@ Pi is a coding agent with an extension system. This integration adds voice conve
 
 ```mermaid
 graph TB
-    Pi[Pi Agent + pi-voice extension] -->|ws://localhost:9090/ws/agent| Daemon[Talky Daemon :9090]
+    Pi[Pi Agent + pi-voice extension] -->|ws://localhost:8765/ws/agent| Daemon[Talky Daemon localhost:8765]
     Browser[WebRTC Audio Client] <-->|WebRTC| Daemon
 ```
 
-The talky daemon is a single process on `:9090` that embeds the WebRTC handler, serves the browser UI from `client/dist/`, hosts FastMCP tools, and owns the in-process voice pipeline. One port, one process.
+The talky daemon is a single process that embeds the WebRTC handler, serves the browser UI from `client/dist/`, hosts FastMCP tools, and owns the in-process voice pipeline. It exposes that one app through a local HTTP listener (`localhost:8765` by default) plus an optional remote HTTPS listener — see [docs/ports.md](../ports.md) for the canonical port model.
 
 **Components:**
 - **pi-voice extension** (`extensions/pi-voice/extension.ts`) — Bridges Pi to the daemon over a single WebSocket. Pi events → daemon STT/abort frames; daemon `stt` / `greet` messages → Pi user messages.
 - **Talky daemon** (`talky daemon`) — Runs the voice pipeline + WebRTC + the `/ws/agent` endpoint
-- **Browser** — Connects to the daemon for WebRTC audio I/O at `http://localhost:9090`
+- **Browser** — Connects to the daemon for WebRTC audio I/O at `http://localhost:8765`
 
 **Protocol:** The extension speaks a minimal JSON-over-WebSocket protocol (see `agent_ext_llm_service.py` docstring). When the user speaks, the daemon sends `{"type":"stt","text":"..."}`; the extension hands that to Pi as a user message. Pi's response token deltas stream back as `{"type":"tts","text":"..."}` frames. On connect the daemon also sends a `{"type":"greet","instruction":"..."}` so the agent speaks first in its own words (ticket 5d95).
 
@@ -43,10 +43,10 @@ pi:
 ```
 
 ### What happens
-1. `talky pi` ensures the daemon is running on `:9090`.
-2. Opens the browser at `http://localhost:9090/?autoconnect=true` for WebRTC audio.
+1. `talky pi` ensures the daemon is running on the local HTTP listener (`localhost:8765`).
+2. Opens the browser at `http://localhost:8765/?autoconnect=true` for WebRTC audio.
 3. Exec's into `pi -e <project_root>/extensions/pi-voice/extension.ts`.
-4. The extension connects to `ws://localhost:9090/ws/agent`. Daemon switches the active LLM to the `agent-ext` backend (so the picker shows "pi").
+4. The extension connects to `ws://localhost:8765/ws/agent`. Daemon switches the active LLM to the `agent-ext` backend (so the picker shows "pi").
 5. Daemon sends a `greet` instruction. Pi generates its own greeting words and streams them back via TTS.
 6. Conversation loop: user speaks → STT → daemon → ws `stt` → Pi user message → Pi generates → ws `tts` deltas → daemon TTS → user hears.
 
@@ -57,9 +57,9 @@ Close the Pi terminal (`Ctrl+C` or `/quit`) or close the browser tab. The daemon
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TALKY_DAEMON_PORT` | `9090` | Port the CLI uses to reach the daemon (fallback: `TALKY_PORT`) |
+| `TALKY_LOCAL_PORT` | `8765` | Port the extension uses to reach the daemon's local HTTP listener |
 | `TALKY_DAEMON_HOST` | `localhost` | Host the CLI uses to reach the daemon (fallback: `TALKY_HOST`) |
-| `TALKY_AGENT_WS_URL` | `ws://localhost:9090/ws/agent` | Full ws URL the extension dials (overrides host/port) |
+| `TALKY_AGENT_WS_URL` | `ws://localhost:8765/ws/agent` | Full ws URL the extension dials (overrides host/port) |
 
 ## Extension Details
 
@@ -87,7 +87,7 @@ Extension → daemon:
 
 ### Voice never connects
 **Symptom:** Browser opens but no audio
-**Fix:** Confirm the daemon is up — `curl -s localhost:9090/status`. Read `~/.talky/run/talky-daemon.log` for errors.
+**Fix:** Confirm the daemon is up — `curl -s localhost:8765/status`. Read `~/.talky/run/talky-daemon.log` for errors.
 
 ### Extension not loading
 **Symptom:** Pi runs but the daemon never sees an extension connect

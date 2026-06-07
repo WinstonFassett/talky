@@ -5,10 +5,10 @@
 ```bash
 uv tool install --editable . --python 3.12   # install/update global `talky` binary
 uv sync                                      # sync project venv (dev + after dep changes)
-talky daemon                          # ensure the daemon is running (listens on 9090)
+talky daemon                          # ensure the daemon is running (local_port 8765 + optional remote — see docs/ports.md)
 talky <profile>                       # e.g. `talky openclaw` — ensures daemon and switches its active LLM
 talky profile [<name>]                # explicit daemon profile control (list / switch)
-talky kill                            # reclaim port 9090
+talky kill                            # stop the daemon (discovers it via ~/.talky/run/talky-daemon.local-port)
 uv run ruff check . && uv run pyright
 ```
 
@@ -34,7 +34,7 @@ After changing pyproject.toml deps: `uv sync && uv tool install --editable . --f
 
 One unified daemon. There is no legacy standalone bot anymore (ripped in 5098).
 
-- **talky daemon** — `talky daemon` runs a single process on `:9090` that embeds the WebRTC handler, serves `client/dist/`, hosts FastMCP tools, and owns the in-process voice pipeline. The pipeline includes an `LLMSwitcher` whose slot contains `MCPDriverLLMService` (null passthrough — the default) plus every configured LLM backend. Switch via `talky profile openclaw` or the shortcut `talky openclaw`. Any daemon-dependent command auto-spawns the daemon if it isn't already running (`ensure_mcp_daemon()`, 9d02 / d239c5d). This is the 58db / ea77 / c3a1 architecture.
+- **talky daemon** — `talky daemon` runs a single process that serves one collapsed app — WebRTC handler, `client/dist/`, FastMCP tools, and the in-process voice pipeline — over an always-on local HTTP listener (`local_port`, default 8765) plus an optional remote HTTPS listener (`remote_port`) when a cert resolves. See [docs/ports.md](docs/ports.md). The pipeline includes an `LLMSwitcher` whose slot contains `MCPDriverLLMService` (null passthrough — the default) plus every configured LLM backend. Switch via `talky profile openclaw` or the shortcut `talky openclaw`. Any daemon-dependent command auto-spawns the daemon if it isn't already running (`ensure_mcp_daemon()`, 9d02 / d239c5d). This is the 58db / ea77 / c3a1 architecture.
 
 Pipeline shape: `Mic → VAD → STT → LLMSwitcher → TTS → Speaker`. The switcher routes frames to whichever LLM is active. `MCPDriverLLMService` consumes `LLMContextFrame` by pushing the latest user message onto the daemon's speech queue (read by `convo_listen`) and passes injected `LLMTextFrame`s through to TTS. Real LLMs (openclaw, moltis, hermes, etc.) run inference against their own remote sessions.
 
@@ -52,11 +52,11 @@ LLM backends in `src/talky/backends/` extend Pipecat's `LLMService`.
 
 ### Talky daemon
 
-`talky daemon` runs a unified process on port 9090. The voice pipeline is **in-process** on uvicorn's event loop — there is no separate pipecat child. Restart to pick up code changes: `talky kill && talky daemon`. `talky kill` reclaims 9090 via PID-by-port.
+`talky daemon` runs a unified process with two listeners by reach — an always-on local HTTP listener (`local_port`, default 8765) and an optional remote HTTPS listener (`remote_port`) bound only when a cert resolves (see [docs/ports.md](docs/ports.md) — the canonical port truth). The voice pipeline is **in-process** on uvicorn's event loop — there is no separate pipecat child. Restart to pick up code changes: `talky kill && talky daemon`. `talky kill` discovers the daemon via `~/.talky/run/talky-daemon.local-port` / `.ready` and stops it by PID.
 
 **Do not** use `pkill -f "talky daemon"` — it only matches the parent and can orphan children. **Do not** run via `uv run talky daemon` either — the `uv run` wrapper inserts an intermediate process that breaks process-group signal delivery. Run `talky daemon` directly.
 
-If another daemon is already running on 9090, the new one refuses to start with a clear error. To take over: `talky daemon --force` (or `TALKY_FORCE=1 talky daemon`).
+If another daemon is already running, the new one refuses to start with a clear error. To take over: `talky daemon --force` (or `TALKY_FORCE=1 talky daemon`).
 
 ### Profile switching
 
@@ -75,7 +75,7 @@ Switching uses `ManuallySwitchServiceFrame` — the transport stays connected, o
 **Do:** Background-mode shortcuts (`talky pi`, `talky openclaw`, `talky hermes`, `talky moltis`) switch the daemon profile via `cmd_profile` → POST `/api/profile`. They are all the same operation. Foreground shortcuts (`talky pi-tui`, `talky claude`) take a different path — `cmd_launch` execs into the agent's CLI with a voice extension loaded. `claude` is foreground despite its bare name; see "Agent integration modalities" below.
 **Don't:** Create agent-specific CLI subcommands that do something different from profile-switching or `cmd_launch`. Don't create a subcommand just to hardcode a profile name — let the shortcut handle it.
 
-Ports: 9090 is the only port. 7860 and 5173 are dead (ripped in 5098).
+Ports: `local_port` (8765, always-on HTTP) + optional `remote_port` (HTTPS, cert-gated) — see [docs/ports.md](docs/ports.md). 7860 is dead (ripped in 5098); 5173 is vite dev only.
 
 ## Debugging
 

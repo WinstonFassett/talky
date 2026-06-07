@@ -60,8 +60,10 @@ MCP uses a tool-based protocol pattern:
 ### MCP Server Setup
 ```bash
 uv tool install -e .
-talky daemon  # runs on localhost:9090
+talky daemon  # runs on localhost:8765 (local HTTP listener)
 ```
+
+See [docs/ports.md](../ports.md) for the canonical port model (the local HTTP listener is always bound at `8765`; HTTPS is additive for remote reach).
 
 ### MCP Client Configuration
 Configuration varies by MCP client. Example for HTTP-based clients:
@@ -71,7 +73,7 @@ Configuration varies by MCP client. Example for HTTP-based clients:
     "pipecat": {
       "command": "npx",
       "args": ["-y", "@pyroprompts/mcp-stdio-to-streamable-http-adapter"],
-      "env": { "URI": "http://localhost:9090/mcp" }
+      "env": { "URI": "http://localhost:8765/mcp" }
     }
   }
 }
@@ -80,8 +82,7 @@ Configuration varies by MCP client. Example for HTTP-based clients:
 Run `talky daemon` first, then restart your MCP client application.
 
 ### Environment Variables
-- `MCP_SERVER_HOST`: Override server host (default: localhost)
-- `MCP_SERVER_PORT`: Override server port (default: 9090)
+- `TALKY_LOCAL_PORT`: Override the local HTTP listener port (default: 8765)
 - `PIPECAT_LOG_LEVEL`: Logging level for voice pipeline
 
 ## Implementation Details
@@ -263,7 +264,7 @@ while True:
 
 #### Server Won't Start
 **Symptom**: "Address already in use" errors
-**Cause**: Port 9090 already occupied
+**Cause**: Port 8765 already occupied
 **Fix**: Kill existing process or change port
 
 #### Voice Agent Not Responding

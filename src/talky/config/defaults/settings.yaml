@@ -6,22 +6,28 @@ defaults:
 
 # Network settings
 network:
-  host: "localhost"          # "0.0.0.0" to listen on all interfaces (remote access)
+  # See docs/ports.md — the canonical port truth.
+  host: "0.0.0.0"            # remote (HTTPS) bind host. "0.0.0.0" = all interfaces.
   external_host: ""          # External hostname for browser URLs (e.g. macbook.tailnet.ts.net)
 
-  # Port. Omit (or leave commented) to pick a random free port at startup.
-  # The chosen port is written to ~/.talky/run/talky-daemon.port so desktop
-  # shells and openers can discover it. Pin a value here when you want a
-  # stable port for LAN/mobile access.
-  # port: 8765
+  # Two listeners, named by reach:
+  #
+  # local_port  — ALWAYS bound. Plain HTTP on 127.0.0.1. Serves the one app
+  #               (web client + API + MCP) to the local browser and local MCP
+  #               clients (Claude Code, etc.). Pinned to 8765 so a static MCP
+  #               config (.mcp.json) and bookmarks have a stable target. Set to
+  #               null / comment out to pick a random free port instead, written
+  #               to ~/.talky/run/talky-daemon.local-port for discovery.
+  local_port: 8765
 
-  # Loopback plain-HTTP port. Only bound when TLS is on (its job is giving
-  # MCP clients a non-HTTPS path while the primary serves HTTPS over LAN).
-  # Random by default; pin a value when you want a stable port.
-  # loopback_port: 8764
+  # remote_port — bound ONLY when a TLS cert resolves (see https: below).
+  #               HTTPS on `host` for off-box reach (LAN, mobile, ngrok).
+  #               Omit/comment → random free port, written to
+  #               ~/.talky/run/talky-daemon.remote-port.
+  # remote_port: 8764
 
-  # https:                   # Uncomment to serve TLS (run `talky certs` first)
-  #   cert: "~/.talky/ssl/server-cert.pem"
+  # https:                   # Uncomment to serve the remote HTTPS listener
+  #   cert: "~/.talky/ssl/server-cert.pem"   # (run `talky certs` first)
   #   key:  "~/.talky/ssl/server-key.pem"
 
 # Audio cues — the short three-beep tones played on mic open/close and on

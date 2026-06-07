@@ -5,12 +5,12 @@ This guide shows how to set up Claude Code to work with Talky's voice capabiliti
 ## Architecture
 
 ```
-Claude Code ──MCP over HTTP──► Talky Daemon (:9090) ──► Voice Pipeline (WebRTC, in-process)
+Claude Code ──MCP over HTTP──► Talky Daemon (localhost:8765) ──► Voice Pipeline (WebRTC, in-process)
                                         ▲
-                                Browser connects for audio at http://localhost:9090
+                                Browser connects for audio at http://localhost:8765
 ```
 
-The talky daemon is a single process: WebRTC, voice pipeline, browser UI, FastMCP tools — all on :9090. One port, one process.
+The talky daemon is a single process: WebRTC, voice pipeline, browser UI, FastMCP tools. It serves that one collapsed app over the always-on local HTTP listener (`localhost:8765` by default) plus an optional remote HTTPS listener bound only when a TLS cert resolves. See [docs/ports.md](../ports.md) for the canonical port model.
 
 ## Setup Steps
 
@@ -29,7 +29,7 @@ claude --version
 ### 2. Start the Talky Daemon
 
 ```bash
-# Start the daemon (listens on :9090)
+# Start the daemon (local HTTP listener on localhost:8765)
 talky daemon
 
 # Or let talky claude start it automatically
@@ -40,7 +40,7 @@ talky claude
 
 ```bash
 # Connect Claude to Talky MCP server
-claude mcp add --transport http talky http://localhost:9090/mcp
+claude mcp add --transport http talky http://localhost:8765/mcp
 
 # Verify connection
 claude mcp list
@@ -83,7 +83,7 @@ If you prefer manual setup:
 
 1. **Start MCP server**: `talky daemon`
 2. **Install skill**: `npx skills install ./skills/talky` (one-time)
-3. **Connect Claude**: `claude mcp add --transport http talky http://localhost:9090/mcp`
+3. **Connect Claude**: `claude mcp add --transport http talky http://localhost:8765/mcp`
 4. **Run Claude**: `claude`
 5. **Start voice**: "I want to have a voice conversation"
 
@@ -128,7 +128,7 @@ voice_listen()
 ### Daemon settings
 
 The talky daemon runs on:
-- **Port**: 9090
+- **Port**: 8765 (the always-on local HTTP listener; see [docs/ports.md](../ports.md) for the full model)
 - **MCP endpoint**: `/mcp`
 - **Browser UI**: `/` (served from `client/dist/`)
 - **Transport**: HTTP (streamable)
@@ -162,7 +162,7 @@ talky claude --dir /path/to/project
 
 If you see "Voice agent process has stopped":
 
-1. Check if the talky daemon is running: `lsof -i :9090`
+1. Check if the talky daemon is running: `lsof -i :8765`
 2. Restart the daemon: `talky kill && talky daemon`
 3. Try again: `talky claude`
 
@@ -170,16 +170,16 @@ If you see "Voice agent process has stopped":
 
 If Claude can't connect to the daemon:
 
-1. Verify the daemon is running: `curl http://localhost:9090/mcp`
+1. Verify the daemon is running: `curl http://localhost:8765/mcp`
 2. Check MCP configuration: `claude mcp list`
-3. Remove and re-add: `claude mcp remove talky && claude mcp add --transport http talky http://localhost:9090/mcp`
+3. Remove and re-add: `claude mcp remove talky && claude mcp add --transport http talky http://localhost:8765/mcp`
 
 ### Audio Not Working
 
 If you can't hear audio or the microphone isn't working:
 
 1. Check browser permissions for microphone
-2. Ensure the talky daemon is running on port 9090
+2. Ensure the talky daemon is running on its local HTTP port (8765 by default)
 3. Tail `~/.talky/run/mcp-daemon.log` for errors
 4. Try refreshing the browser window
 
@@ -213,7 +213,7 @@ If you prefer to manage the daemon separately:
 talky daemon &
 
 # Connect Claude
-claude mcp add --transport http talky http://localhost:9090/mcp
+claude mcp add --transport http talky http://localhost:8765/mcp
 
 # Use Claude normally
 claude
@@ -227,7 +227,7 @@ talky kill
 ### Components
 
 1. **Claude Code**: AI coding assistant with MCP support
-2. **Talky Daemon**: Single process on :9090 — MCP tools, voice pipeline, WebRTC, browser UI
+2. **Talky Daemon**: Single process serving the collapsed app over the local HTTP listener (`localhost:8765` by default) plus an optional remote HTTPS listener — MCP tools, voice pipeline, WebRTC, browser UI
 3. **Browser**: WebRTC client for audio I/O
 
 ### Data Flow
@@ -239,7 +239,7 @@ talky kill
 
 ### Security
 
-- Daemon runs locally (localhost:9090)
+- Daemon runs locally (localhost:8765)
 - WebRTC connection is peer-to-peer within your machine
 - No audio data leaves your local network
 - MCP tools require explicit permission in Claude Code

@@ -2,9 +2,11 @@
 
 Use Talky from other devices on your network (e.g. phone over Tailscale).
 
-One port: **9090**. The daemon serves WebRTC, the browser UI, and MCP tools. To reach it remotely you need (a) the daemon bound to `0.0.0.0`, (b) HTTPS (browsers require it for mic access on non-localhost URLs), and (c) a cert the browser will accept.
+Remote access reaches the daemon's **remote HTTPS listener** — the `remote_port` (conventionally **8764**), which binds on `host` (e.g. `0.0.0.0`) and only comes up when a TLS cert resolves. The always-on local HTTP listener (`local_port`, 8765) is loopback-only and not used for remote access. See [docs/ports.md](ports.md) for the full two-listener model.
 
-## Production flow (9090 only)
+To reach the daemon remotely you need (a) the daemon bound to `0.0.0.0` via `network.host`, (b) HTTPS (browsers require it for mic access on non-localhost URLs), and (c) a cert the browser will accept.
+
+## Production flow (remote HTTPS listener)
 
 1. **Generate SSL certificates** with your external hostname as SAN:
    ```bash
@@ -17,7 +19,7 @@ One port: **9090**. The daemon serves WebRTC, the browser UI, and MCP tools. To 
    ```yaml
    network:
      host: "0.0.0.0"
-     port: 9090
+     remote_port: 8764
      https:
        cert: "~/.talky/ssl/server-cert.pem"
        key:  "~/.talky/ssl/server-key.pem"
@@ -38,11 +40,11 @@ One port: **9090**. The daemon serves WebRTC, the browser UI, and MCP tools. To 
 
 4. **Open on the remote device:**
    ```
-   https://macbook-pro.tailc3138.ts.net:9090
+   https://macbook-pro.tailc3138.ts.net:8764
    ```
    Accept the self-signed cert warning, or install the cert on the device.
 
-## Dev client flow (5173 → 9090)
+## Dev client flow (5173 → 8764)
 
 For hot-reload dev against a remote daemon. The Vite dev server proxies API calls to the daemon.
 
@@ -58,7 +60,7 @@ security add-trusted-cert -d -r trustRoot \
 cd client
 VITE_HOST=0.0.0.0 \
   VITE_ALLOWED_HOSTS="macbook-pro.tailc3138.ts.net,localhost" \
-  VITE_DAEMON_URL="https://macbook-pro.tailc3138.ts.net:9090" \
+  VITE_DAEMON_URL="https://macbook-pro.tailc3138.ts.net:8764" \
   npm run dev:https
 ```
 
@@ -68,8 +70,9 @@ The `dev:https` script uses `NODE_OPTIONS=--use-system-ca` so Node trusts your l
 
 **"Site not reachable"**
 ```bash
-lsof -i :9090   # Should show *:9090 or 0.0.0.0:9090, not 127.0.0.1:9090
+lsof -i :8764   # remote HTTPS listener should bind 0.0.0.0:8764, not 127.0.0.1
 ```
+The remote HTTPS listener binds `0.0.0.0:8764`; the always-on local HTTP listener separately binds `127.0.0.1:8765`. If `:8764` isn't listening on `0.0.0.0`, the daemon either isn't bound to `host: "0.0.0.0"` or no TLS cert resolved (so the remote listener never came up).
 
 **"HTTPS required" / mic not working**
 - Must use HTTPS, not HTTP, from non-localhost URLs

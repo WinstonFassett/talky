@@ -1,6 +1,6 @@
 # talky-shell
 
-WKWebView desktop shell for the talky daemon. Navigates to `http://localhost:9090` — no bundled frontend.
+WKWebView desktop shell for the talky daemon. Navigates to the daemon's local HTTP listener (`http://localhost:8765` by default; discovered via `~/.talky/run/talky-daemon.local-port`) — no bundled frontend.
 
 ## Prerequisites
 
