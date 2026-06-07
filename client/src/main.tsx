@@ -12,6 +12,8 @@ import {
 } from '@pipecat-ai/voice-ui-kit';
 
 import { App } from './components/App';
+import { BotAudio } from './components/SpeakerMute';
+import { SpeakerMuteProvider } from './components/useSpeakerMute';
 import type { TransportType } from './config';
 import {
   AVAILABLE_TRANSPORTS,
@@ -45,7 +47,8 @@ export const Main = () => {
       <FullScreenContainer>
         <PipecatAppBase
           connectParams={connectParams}
-          transportType={transportType}>
+          transportType={transportType}
+          noAudioOutput>
           {({
             client,
             handleConnect,
@@ -59,15 +62,22 @@ export const Main = () => {
               return <ErrorCard>{error}</ErrorCard>;
             }
             return (
-              <App
-                client={client}
-                handleConnect={handleConnect}
-                handleDisconnect={handleDisconnect}
-                transportType={transportType}
-                onTransportChange={setTransportType}
-                availableTransports={AVAILABLE_TRANSPORTS}
-                autoconnect={autoconnect}
-              />
+              // We own the bot <audio> sink (BotAudio) so the speaker mute
+              // button can control it — PipecatAppBase's own audio is
+              // suppressed via `noAudioOutput`. SpeakerMuteProvider shares the
+              // muted flag between the header button and BotAudio.
+              <SpeakerMuteProvider>
+                <App
+                  client={client}
+                  handleConnect={handleConnect}
+                  handleDisconnect={handleDisconnect}
+                  transportType={transportType}
+                  onTransportChange={setTransportType}
+                  availableTransports={AVAILABLE_TRANSPORTS}
+                  autoconnect={autoconnect}
+                />
+                <BotAudio />
+              </SpeakerMuteProvider>
             );
           }}
         </PipecatAppBase>

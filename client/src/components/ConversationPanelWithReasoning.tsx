@@ -10,6 +10,7 @@ import type { TalkyMessage, TalkyPart } from '../messages/types';
 import { SteerModeChip } from './SteerModeChip';
 import { BotSpeakingBar } from './BotSpeakingBar';
 import { ConverseButton } from './ConverseButton';
+import { MuteButton } from './MuteButton';
 import type { VoiceState } from './useVoiceState';
 import { useUrlParam } from '../fixtures/harness';
 
@@ -325,6 +326,9 @@ function ConversationMessages({
         )}
         <div className="flex items-center gap-2">
           <SteerModeChip activeProfile={activeProfile} />
+          {/* Mic (input) mute lives with the composer; speaker (output) mute
+              lives in the header. Only meaningful once connected. */}
+          {connected && <MuteButton />}
           <TalkyTextInput connected={connected} />
           <ConverseButton
             voiceState={voiceState}

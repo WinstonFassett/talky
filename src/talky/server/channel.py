@@ -1399,18 +1399,29 @@ class VoiceChannel:
 
         # Browser app-messages → channel actions. The client sends these via
         # the Pipecat JS `sendClientMessage(type, data)` over the WebRTC data
-        # channel; SmallWebRTC surfaces them here as `on_app_message`. Today
-        # the only message is the bot-speaking-bar Stop button, which cancels
-        # in-flight TTS by queuing one InterruptionFrame (same frame a VAD
-        # speech-onset produces). Riding the existing data channel keeps the
-        # signal on the same connection as the audio — no separate round-trip.
+        # channel; SmallWebRTC routes any non-signalling JSON to this handler.
+        #
+        # `sendClientMessage` wraps the payload in an RTVI envelope:
+        #   {label: "rtvi-ai", type: "client-message", id, data: {t: <type>, d: <data>}}
+        # so the real message type is at `data.t`, NOT top-level `type`
+        # (which is the constant "client-message"). We read `data.t` and fall
+        # back to top-level `type` to also accept a plain {type: ...} message.
+        #
+        # Today the only message is the bot-speaking-bar Stop button, which
+        # cancels in-flight TTS by queuing one InterruptionFrame (the same
+        # frame a VAD speech-onset produces). Riding the existing data channel
+        # keeps the signal on the same connection as the audio.
         @transport.event_handler("on_app_message")
         async def on_app_message(transport, message, sender=None):  # noqa: ANN001, ARG001
-            try:
-                msg_type = message.get("type") if isinstance(message, dict) else None
-            except Exception:  # noqa: BLE001
-                msg_type = None
+            msg_type = None
+            if isinstance(message, dict):
+                data = message.get("data")
+                if isinstance(data, dict) and data.get("t"):
+                    msg_type = data.get("t")
+                else:
+                    msg_type = message.get("type")
             if msg_type == "interrupt":
+                logger.info("VoiceChannel: interrupt requested via app-message")
                 await self.interrupt()
 
         @transport.event_handler("on_client_disconnected")

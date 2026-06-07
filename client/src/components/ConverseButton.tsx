@@ -60,22 +60,27 @@ export const ConverseButton = ({
   const isActive = connected || connecting;
   const onClick = isActive && !connecting ? onDisconnect : onConnect;
 
-  // Shared shell. Accent border when active so the live moment reads; default
-  // border at rest. No shadow (DESIGN.md flat-by-default).
+  // Shared shell. h-10 to match the text input's rendered height so the
+  // composer row reads as one unit. No shadow (DESIGN.md flat-by-default).
   const baseClass =
-    'inline-flex items-center justify-center gap-2 shrink-0 rounded-md h-9 px-3.5 min-w-[112px] ' +
+    'inline-flex items-center justify-center gap-2 shrink-0 rounded-md h-10 px-3.5 min-w-[112px] ' +
     'text-[13px] font-medium transition-colors cursor-pointer select-none ' +
     'disabled:cursor-not-allowed';
 
+  // Connected = this button is now an "End / hang up" affordance, so it reads
+  // destructive (border + text), with a faint destructive wash. At rest it's
+  // a neutral "Converse" CTA; connecting is neutral/busy; error is destructive.
   let borderColor = 'var(--color-border)';
   let textColor = 'var(--color-foreground)';
-  const bg = 'transparent';
+  let bg = 'transparent';
 
   if (error) {
     borderColor = 'var(--color-destructive)';
     textColor = 'var(--color-destructive)';
-  } else if (isActive) {
-    borderColor = 'color-mix(in oklab, var(--color-accent) 40%, transparent)';
+  } else if (connected) {
+    borderColor = 'color-mix(in oklab, var(--color-destructive) 45%, transparent)';
+    textColor = 'var(--color-destructive)';
+    bg = 'color-mix(in oklab, var(--color-destructive) 8%, transparent)';
   }
 
   const style = {

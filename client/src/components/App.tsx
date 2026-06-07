@@ -5,12 +5,11 @@ import { ConversationPanelWithReasoning } from './ConversationPanelWithReasoning
 import { usePipecatClientTransportState } from '@pipecat-ai/client-react';
 
 import type { TransportType } from '../config';
-import { LLMProfileSelect } from './LLMProfileSelect';
 import { PermissionBanner } from './PermissionBanner';
 import { StatusBadge } from './StatusBadge';
 import { useVoiceState } from './useVoiceState';
 import { MoreMenu } from './MoreMenu';
-import { MuteButton } from './MuteButton';
+import { SpeakerMuteButton } from './SpeakerMuteButton';
 import { StatusBar } from './StatusBar';
 import { EmptyState } from './EmptyState';
 import { isDevRoute, useUrlParam } from '../fixtures/harness';
@@ -228,22 +227,42 @@ export const App = ({
       <PermissionBanner />
       {showHeader && (
       <header
-        className="flex items-center shrink-0 border-b gap-2 pl-2 pr-2 sm:pr-3 h-10"
+        className="grid items-center shrink-0 border-b gap-2 pl-2 pr-1 sm:pr-2 h-9"
         style={{
+          gridTemplateColumns: '1fr auto 1fr',
           borderColor: 'var(--color-border-soft)',
           backgroundColor: 'var(--color-card)',
         }}
       >
-        {/* Left: bare profile-label title trigger → opens the LLM picker. */}
-        <div className="flex items-center min-w-0 flex-1">
-          <LLMProfileSelect variant="title" />
+        {/* Left: voice status indicator. Label drops to dot-only ≤900px,
+            hidden ≤640px (mirrors the old right-cluster behavior). */}
+        <div className="flex items-center min-w-0 justify-self-start">
+          {!isNarrow && <StatusBadge state={voiceState} compact={isMedium} />}
         </div>
 
-        {/* Right cluster (locked order): Status → Mute → More.
-            Status label drops to dot-only below ~900px, hidden below 640px. */}
-        <div className="flex items-center gap-0.5 shrink-0">
-          {!isNarrow && <StatusBadge state={voiceState} compact={isMedium} />}
-          <MuteButton />
+        {/* Center: session title — bare profile label, read-only. Switching
+            lives in the footer picker now, so this is plain text, not a
+            trigger. */}
+        <div className="flex items-center min-w-0 justify-self-center">
+          {activeProfile && (
+            <span
+              className="truncate font-medium"
+              style={{
+                fontSize: '0.9375rem',
+                letterSpacing: '-0.01em',
+                color: 'var(--color-foreground)',
+              }}
+              title={activeProfileLabel}
+            >
+              {activeProfileLabel}
+            </span>
+          )}
+        </div>
+
+        {/* Right: Speaker mute (bot output) → More. Mirrors Hermes Desktop's
+            top-right speaker control. Mic mute lives by the composer instead. */}
+        <div className="flex items-center gap-0.5 shrink-0 justify-self-end">
+          <SpeakerMuteButton />
           <MoreMenu />
         </div>
       </header>
