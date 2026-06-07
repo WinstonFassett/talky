@@ -83,6 +83,7 @@ talky pi                          # Talk to Pi
 **Setup**
 - `talky config` - Create config files
 - Add API keys to `~/.talky/credentials/` (one JSON file per provider)
+- `talky certs --hostname <name>` - Generate self-signed TLS certs for HTTPS / LAN access (see [Remote Access](docs/remote-access.md))
 
 > **Note:** The default voice profile uses local providers (kokoro TTS + whisper STT)
 > and will download ML models on first use (~1-2 GB). To skip the download, set a
