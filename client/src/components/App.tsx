@@ -10,6 +10,8 @@ import { StatusBadge } from './StatusBadge';
 import { useVoiceState } from './useVoiceState';
 import { MoreMenu } from './MoreMenu';
 import { SpeakerMuteButton } from './SpeakerMuteButton';
+import { MuteButton } from './MuteButton';
+import { AudioSettingsButton } from './audio/AudioSettingsButton';
 import { StatusBar } from './StatusBar';
 import { EmptyState } from './EmptyState';
 import { isDevRoute, useUrlParam } from '../fixtures/harness';
@@ -207,10 +209,11 @@ export const App = ({
     transportState === 'authenticating' ||
     transportState === 'connecting';
   const voiceState = useVoiceState(client, transportConnected, transportConnecting);
+  // Header status (dot + label) shows at ALL widths now — neither the old
+  // ≤900px dot-only collapse nor a header hide earned their keep; both dropped
+  // the label where the user expects it. (Restored per redesign feedback.)
+  // isNarrow still drives StatusBar's own footer compaction below.
   const isNarrow = useMediaQuery('(max-width: 640px)');
-  // Below ~900px the status label collapses to a dot; below 640px (isNarrow)
-  // the StatusBadge is hidden entirely.
-  const isMedium = useMediaQuery('(max-width: 900px)');
 
   // Show transcript (over EmptyState) whenever we're connected, mid-handshake,
   // OR a dev fixture is mounted. Including the connecting states means the
@@ -234,17 +237,17 @@ export const App = ({
           backgroundColor: 'var(--color-card)',
         }}
       >
-        {/* Left: voice status indicator. Label drops to dot-only ≤900px,
-            hidden ≤640px (mirrors the old right-cluster behavior). */}
+        {/* Left: voice status indicator (dot + label) — shown at all widths. */}
         <div className="flex items-center min-w-0 justify-self-start">
-          {!isNarrow && <StatusBadge state={voiceState} compact={isMedium} />}
+          <StatusBadge state={voiceState} />
         </div>
 
         {/* Center: session title — bare profile label, read-only. Switching
             lives in the footer picker now, so this is plain text, not a
-            trigger. */}
+            trigger. Dropped ≤640px: on small screens the status label keeps
+            its spot and this vanity title yields the room. */}
         <div className="flex items-center min-w-0 justify-self-center">
-          {activeProfile && (
+          {!isNarrow && activeProfile && (
             <span
               className="truncate font-medium"
               style={{
@@ -259,10 +262,18 @@ export const App = ({
           )}
         </div>
 
-        {/* Right: Speaker mute (bot output) → More. Mirrors Hermes Desktop's
-            top-right speaker control. Mic mute lives by the composer instead. */}
+        {/* Right: Mic mute · Speaker mute · Settings · More. Both mutes show
+            only when connected (no mic/speaker stream to mute otherwise). Mic
+            (input) sits before speaker (output), reading left→right as the
+            audio path. Mirrors Hermes Desktop's top-right cluster. */}
         <div className="flex items-center gap-0.5 shrink-0 justify-self-end">
-          <SpeakerMuteButton />
+          {transportConnected && <MuteButton />}
+          {transportConnected && <SpeakerMuteButton />}
+          {/* Audio device picker (mic + speaker). The footer shows LLM + Voice
+              pickers inline on desktop but no audio devices, so this fills the
+              one missing piece of session config once connected. Same dropdown
+              as our UserAudioControl repro (AudioPill cold path). */}
+          {transportConnected && <AudioSettingsButton />}
           <MoreMenu />
         </div>
       </header>

@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { usePipecatClient } from '@pipecat-ai/client-react';
+import { useConversationContext } from '@pipecat-ai/voice-ui-kit';
 import { SendIcon } from 'lucide-react';
 
 type SlashCommand = {
@@ -23,6 +24,7 @@ interface Props {
 
 export const TalkyTextInput = ({ connected }: Props) => {
   const client = usePipecatClient();
+  const { injectMessage } = useConversationContext();
   const [text, setText] = useState('');
   const [paletteIdx, setPaletteIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -38,10 +40,23 @@ export const TalkyTextInput = ({ connected }: Props) => {
   const submit = async () => {
     const value = text.trim();
     if (!value || !connected || !client) return;
+    // Optimistically render the typed message as a user turn (ticket 9e9b /
+    // 5bc6). The daemon has no RTVI processor that echoes sendText back as a
+    // user-transcription, so without this the typed message is invisible in
+    // the transcript even though the LLM receives it. Mirrors stock
+    // voice-ui-kit's TextInput. This fix was lost in the chrome redesign and
+    // restored from commit 8a57b23.
+    injectMessage({
+      role: 'user',
+      parts: [{ text: value, final: true, createdAt: new Date().toISOString() }],
+    });
+    // run_immediately ends the current user turn so each typed message is a
+    // discrete turn rather than concatenating onto an in-flight (voice or
+    // prior typed) aggregation.
     // Slash commands intentionally don't yet route — they pass through verbatim
     // so the daemon (or a future client handler) can pick them up.
     try {
-      await client.sendText(value);
+      await client.sendText(value, { run_immediately: true });
       setText('');
     } catch (err) {
       console.warn('sendText failed', err);

@@ -15,7 +15,7 @@ export const MuteButton = () => {
           aria-label={isMicEnabled ? 'Mute microphone' : 'Unmute microphone'}
           aria-pressed={!isMicEnabled}
           title={isMicEnabled ? 'Mute microphone' : 'Unmute microphone'}
-          className="inline-flex items-center justify-center shrink-0 size-9 rounded-md bg-transparent transition-colors cursor-pointer hover:bg-[var(--color-panel-2)]"
+          className="inline-flex items-center justify-center shrink-0 size-8 rounded-md bg-transparent transition-colors cursor-pointer hover:bg-[var(--color-panel-2)]"
           style={{
             color: isMicEnabled ? 'var(--color-text-dim)' : 'var(--color-destructive)',
           }}
