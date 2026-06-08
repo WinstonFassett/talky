@@ -100,7 +100,7 @@ function KaraokePart({
 }) {
   const plugins = useCodePlugin();
   return (
-    <span className="karaoke-part">
+    <span className="karaoke-part" data-testid="karaoke-part">
       {spoken && (
         <Streamdown
           className="karaoke-spoken"
@@ -219,6 +219,7 @@ function MessageRow({ message }: { message: TalkyMessage }) {
       style={{ borderBottom: '1px solid var(--color-border-soft)' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      data-testid="transcript-message"
     >
       <div className="flex items-center gap-2 mb-1 min-h-[22px]">
         <span
@@ -299,7 +300,11 @@ function ConversationMessages({
 
   return (
     <div className="relative h-full flex flex-col">
-      <div ref={scrollRef} className="relative flex-1 overflow-y-auto px-5 pt-2">
+      <div
+        ref={scrollRef}
+        className="relative flex-1 overflow-y-auto px-5 pt-2"
+        data-testid="transcript-list"
+      >
         {messages.map((m) => (
           <MessageRow key={m.id} message={m} />
         ))}

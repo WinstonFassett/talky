@@ -36,6 +36,7 @@ export const BotSpeakingBar = ({ onStop }: { onStop?: () => void } = {}) => {
       }}
       role="status"
       aria-live="polite"
+      data-testid="bot-speaking-bar"
     >
       <Volume2Icon
         size={15}

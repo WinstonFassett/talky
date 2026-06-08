@@ -16,6 +16,16 @@ Feasibility chain it asserts, in order:
     2. Start call -> real POST/PATCH /api/offer               — signaling
     3. peer reaches a connected/listening UI state            — wire live
     4. STT transcribes the looped utterance (RTVI transcript) — audio path
+
+Two assertion tiers (ticket af68):
+    Tier 0 (PRIMARY, the floor): language_out + audio_out — the pipe works
+        end to end.
+    Tier 1 (SECONDARY but the class that usually requires the user):
+        client_render_ok — the transcript/"karaoke" surface actually RENDERED
+        (stable data-testid hook + the round-tripped words landed in it). Catches
+        a client misrendering frames the pipeline sent correctly. The
+        bot-speaking bar is also watched but only REPORTED (transient/timing-
+        sensitive — gating on it would risk unattended flakiness).
 """
 
 from __future__ import annotations
@@ -211,6 +221,22 @@ def main() -> int:
             }"""
         )
 
+        # Tier-1 client-render watch (ticket af68): the bot-speaking bar mounts
+        # only WHILE TTS plays, so we can't read it after the fact — poll for it
+        # during the wait and latch if it ever appears. The transcript surface
+        # persists, so it's read at signal-time below. Both assert against
+        # stable data-testid hooks (talky's own JSX), not kit internals / CSS.
+        page.evaluate(
+            """() => {
+              window.__talky_saw_speaking_bar = false;
+              window.__talky_render_poll = setInterval(() => {
+                if (document.querySelector('[data-testid="bot-speaking-bar"]')) {
+                  window.__talky_saw_speaking_bar = true;
+                }
+              }, 200);
+            }"""
+        )
+
         log("driving thread: waiting for echo turn + TTS (25s)...")
         time.sleep(25)
 
@@ -218,10 +244,19 @@ def main() -> int:
         signals = page.evaluate(
             """async () => {
               clearInterval(window.__talky_audio_poll);
+              clearInterval(window.__talky_render_poll);
               if (window.__talky_rec && window.__talky_rec.state !== 'inactive') {
                 window.__talky_rec.stop();
                 await new Promise(r => setTimeout(r, 300));
               }
+              // Tier-1 client-render (af68): assert the transcript surface
+              // actually RENDERED via its stable hook — not just that the text
+              // leaked somewhere into the body. A broken TranscriptPanel that
+              // drops messages fails this even if the round-trip text exists.
+              const transcriptList = document.querySelector('[data-testid="transcript-list"]');
+              const transcriptMsgs = document.querySelectorAll('[data-testid="transcript-message"]');
+              const karaokeParts = document.querySelectorAll('[data-testid="karaoke-part"]');
+              const transcriptText = transcriptList ? (transcriptList.innerText || '') : '';
               // Bot text: scrape the conversation panel. Echo replies
               // "you said: ...", so the heard words round-trip into the text.
               const txt = (document.body.innerText || '');
@@ -242,6 +277,11 @@ def main() -> int:
                 audio_bytes: window.__talky_audio_bytes || 0,
                 audio_capture_started: !!window.__talky_started,
                 panel_text: txt.slice(0, 2000),
+                transcript_rendered: !!transcriptList && transcriptMsgs.length > 0,
+                transcript_msg_count: transcriptMsgs.length,
+                karaoke_part_count: karaokeParts.length,
+                transcript_text: transcriptText.slice(0, 1000),
+                saw_speaking_bar: !!window.__talky_saw_speaking_bar,
                 audio_b64,
               };
             }"""
@@ -255,6 +295,25 @@ def main() -> int:
         )
         audio_out = signals.get("audio_bytes", 0) > 0
 
+        # Tier-1 client-render (af68): the karaoke/transcript surface is the lead
+        # example of the client-render class that usually requires the user. It's
+        # SECONDARY to the audio floor but the proof the rig catches a render
+        # regression unattended. Assert the transcript actually RENDERED (its
+        # hook present + >=1 message) AND the round-tripped words landed inside
+        # that surface — so a TranscriptPanel that drops messages fails here even
+        # while audio_out stays green.
+        transcript_text = (signals.get("transcript_text") or "").lower()
+        transcript_rendered = bool(signals.get("transcript_rendered"))
+        karaoke_rendered = signals.get("karaoke_part_count", 0) > 0
+        transcript_has_words = "you said" in transcript_text or any(
+            w in transcript_text for w in ["hear me", "can you hear"]
+        )
+        # The karaoke renderer (KaraokePart) is the lead client-render surface;
+        # it only emits for assistant turns. Requiring it + the words inside the
+        # transcript surface means a broken karaoke/transcript render fails here
+        # even while audio_out stays green.
+        client_render_ok = transcript_rendered and karaoke_rendered and transcript_has_words
+
         log("RESULT", json.dumps({
             "saw_offer": saw_offer["v"],
             "status": last,
@@ -262,9 +321,20 @@ def main() -> int:
             "audio_out": audio_out,
             "audio_bytes": signals.get("audio_bytes", 0),
             "audio_capture_started": signals.get("audio_capture_started"),
+            # Tier-1 client-render
+            "client_render_ok": client_render_ok,
+            "transcript_rendered": transcript_rendered,
+            "transcript_msg_count": signals.get("transcript_msg_count", 0),
+            "karaoke_rendered": karaoke_rendered,
+            "karaoke_part_count": signals.get("karaoke_part_count", 0),
+            # informational: the speaking bar is transient/timing-sensitive, so
+            # it's reported but does NOT gate (gating risks unattended flakiness).
+            "saw_speaking_bar": signals.get("saw_speaking_bar"),
         }))
         if not language_out:
             log("panel_text sample:", panel[:400])
+        if not client_render_ok:
+            log("transcript_text sample:", transcript_text[:400])
 
         time.sleep(1)
         browser.close()
@@ -291,7 +361,8 @@ def main() -> int:
         else:
             log("no bot audio captured")
 
-        ok = saw_offer["v"] and language_out and audio_out
+        # Tier 0 (audio floor) AND Tier 1 (client-render) must both hold.
+        ok = saw_offer["v"] and language_out and audio_out and client_render_ok
         return 0 if ok else 1
 
 

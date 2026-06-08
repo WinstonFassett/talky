@@ -15,8 +15,9 @@ the same path a user's browser takes — but fully unattended.
 
 ```
 WAV (as the mic) → WebRTC peer → STT → turn detector → echo LLM → TTS → bot audio
-                                                                          ↓
-                                            assert: language out + audio out + play it back
+                                                          ↓               ↓
+                                            assert: transcript/karaoke   audio out
+                                            RENDERED in the client       + play it back
 ```
 
 1. Launches its **own** isolated headless Chromium (Playwright) with Chrome's
@@ -25,11 +26,25 @@ WAV (as the mic) → WebRTC peer → STT → turn detector → echo LLM → TTS 
 2. Sets the daemon to a deterministic, local config: `echo` LLM (repeats the
    transcript back) + `local-test` voice (whisper STT + kokoro TTS).
 3. Clicks "Start call", establishes the real WebRTC peer, lets the WAV loop.
-4. Asserts at the **thread level** (not unit level):
-   - **language out** — the bot text round-trips the heard words (echo replies
-     "you said: …"), proving STT → LLM → client worked.
-   - **audio out** — the bot audio track produced non-empty audio, proving TTS
-     came back down the pipe.
+4. Asserts at the **thread level** (not unit level), in two tiers (ticket af68):
+   - **Tier 0 — the audio floor (PRIMARY).**
+     - **language out** — the bot text round-trips the heard words (echo replies
+       "you said: …"), proving STT → LLM → client worked.
+     - **audio out** — the bot audio track produced non-empty audio, proving TTS
+       came back down the pipe.
+   - **Tier 0 must pass; Tier 1 is the client-render layer** —
+     - **client render** — the transcript/"karaoke" surface actually **rendered**
+       in the browser, asserted via stable `data-testid` hooks
+       (`transcript-list`, `transcript-message`, `karaoke-part`) on talky's own
+       JSX. Catches the client misrendering frames the pipeline sent correctly —
+       the failure that "usually requires the user." A render break trips Tier 1
+       while Tier 0 stays green, so the rig tells pipeline breaks from render
+       breaks apart. The `bot-speaking-bar` hook is also watched but only
+       **reported** (transient/timing-sensitive — gating on it would risk
+       unattended flakiness).
+     - The hooks live on talky's own components (not voice-ui-kit internals), so
+       the contract survives the planned kit rip-out: re-attach the same testids
+       to the replacement.
 5. Saves the bot TTS audio and plays it (`afplay`) so you can ear-check the
    sound. Exact TTS correctness is validated **passively by listening**, not
    parsed — we test the thread, not the units inside it.
@@ -41,8 +56,16 @@ talky daemon                       # ensure the daemon is up (serves the built c
 python3 tests/browser/drive_call.py
 ```
 
-Exit code 0 = pass (offer sent, language out, audio out). The rig prints a
-`RESULT {…}` line and plays the captured audio at the end.
+Exit code 0 = pass (offer sent, language out, audio out, **client render ok**).
+The rig prints a `RESULT {…}` line and plays the captured audio at the end.
+
+**After client changes, rebuild + restart first** — the daemon serves
+`client/dist`, not source:
+
+```bash
+cd client && npm run build && cd ..
+talky kill && talky daemon
+```
 
 ### Prereqs
 

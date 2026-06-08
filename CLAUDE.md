@@ -98,10 +98,20 @@ python3 tests/browser/drive_call.py     # speech in → real pipeline → assert
 
 It launches its own isolated headless Chromium, feeds a WAV as the mic through
 the real WebRTC pipeline (deterministic `echo` LLM + local `whisper`+`kokoro`
-by default, no cloud), and asserts language-out + audio-out. Set
-`TALKY_VOICE_PROFILE=default` to test the cloud config. Full docs, knobs, and
-gotchas: [tests/browser/README.md](tests/browser/README.md). Lower-level unit
-tests live in `tests/test_e2e_*.py`.
+by default, no cloud), and asserts two tiers (ticket af68):
+- **Tier 0 (audio floor):** language-out + audio-out — the pipe works end to end.
+- **Tier 1 (client-render):** the transcript/"karaoke" surface actually
+  rendered (via stable `data-testid` hooks in the client) — catches the client
+  misrendering frames the pipeline sent correctly. **Changed the client render
+  path (transcript, karaoke, reasoning, bot-speaking bar)? Run this — Tier 0
+  stays green while a render break trips Tier 1.** The hooks live on talky's own
+  JSX so the contract survives the planned voice-ui-kit rip-out.
+
+Set `TALKY_VOICE_PROFILE=default` to test the cloud config. Rebuild the client
+(`cd client && npm run build`) and restart the daemon after client changes —
+the daemon serves `client/dist`, not source. Full docs, knobs, and gotchas:
+[tests/browser/README.md](tests/browser/README.md). Lower-level unit tests live
+in `tests/test_e2e_*.py`.
 
 ## Agent integration modalities
 
