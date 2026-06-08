@@ -113,6 +113,15 @@ the daemon serves `client/dist`, not source. Full docs, knobs, and gotchas:
 [tests/browser/README.md](tests/browser/README.md). Lower-level unit tests live
 in `tests/test_e2e_*.py`.
 
+**Approval surface?** The dangerous-command approval banner (human-in-the-loop
+gate) has its own sibling rig: `python3 tests/browser/drive_approval.py` (ticket
+3e56). It drives a **real Hermes turn** (one real model call — Hermes routes via
+`~/.hermes/config.yaml`) that trips a real dangerous-command guard → asserts the
+`PermissionBanner` renders → clicks Allow → asserts grant 200 + real resolve.
+Unlike `drive_call.py` it's not offline. Note: embedded Hermes only gates when
+`HERMES_INTERACTIVE` is set (the backend sets it on its agent thread) — otherwise
+Hermes auto-approves and never asks.
+
 ## Agent integration modalities
 
 Talky supports two ways an agent (Claude, Pi, etc.) can participate in a voice session. **Background is the default and the preferred mode** — the daemon owns the agent, the browser is the only UI, and the agent is fully interruptible. Foreground is the exception, used when you specifically want the agent's own terminal UI alongside Talky's.

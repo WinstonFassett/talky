@@ -58,6 +58,11 @@ except ImportError:
 _TURN_START = ("start",)
 _TURN_END = ("end",)
 
+# How long the Hermes agent thread blocks waiting for a grant/deny before
+# auto-denying — long enough for a human to answer, short enough to not park
+# the turn forever.
+_APPROVAL_TIMEOUT = 120.0
+
 
 class _HermesThread:
     """Runs AIAgent.run_conversation() in a dedicated OS thread.
@@ -76,6 +81,13 @@ class _HermesThread:
         self._thread: Optional[threading.Thread] = None
         self._turn_active = False
 
+        # Dangerous-command approval state (Hermes CLI-callback path).
+        # The approval callback runs on THIS thread and blocks it until the
+        # asyncio side calls resolve_permission(). See ticket 3e56.
+        self._perm_lock = threading.Lock()
+        self._perm_event: Optional[threading.Event] = None
+        self._perm_allow = False
+
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True, name="hermes-agent")
         self._thread.start()
@@ -93,13 +105,80 @@ class _HermesThread:
 
     def stop(self):
         self._prompt_queue.put(None)
+        self.resolve_permission(allow=False)  # unblock any pending approval so join() doesn't hang
         if self._thread:
             self._thread.join(timeout=5)
 
     def _put_frame(self, item: tuple):
         asyncio.run_coroutine_threadsafe(self._frame_queue.put(item), self._loop)
 
+    # --- Dangerous-command approval (CLI-callback path, ticket 3e56) ---
+
+    def resolve_permission(self, *, allow: bool) -> bool:
+        """Called from the asyncio side to grant/deny a pending approval.
+
+        Returns True if there was a pending approval to resolve, False otherwise.
+        """
+        with self._perm_lock:
+            if self._perm_event is None:
+                return False
+            self._perm_allow = allow
+            self._perm_event.set()
+            return True
+
+    def _approval_callback(self, command: str, description: str, *, allow_permanent: bool = True) -> str:
+        """Hermes calls this synchronously ON THIS THREAD when a command trips a
+        guard. Block until the asyncio side resolves via resolve_permission().
+
+        Signature/return contract is Hermes's: returns 'once' | 'deny'. We only
+        ever return those two (no session/always persistence from a voice turn).
+        """
+        evt = threading.Event()
+        with self._perm_lock:
+            self._perm_event = evt
+            self._perm_allow = False
+
+        # Surface to the browser banner. event_bus.emit is async and we're off the
+        # event loop on this thread, so marshal it onto the loop (the existing _on_*
+        # display callbacks marshal the same way).
+        from talky.server.event_bus import event_bus
+
+        tool_input = {"command": command}
+        if description:
+            tool_input["description"] = description
+        asyncio.run_coroutine_threadsafe(
+            event_bus.emit("permissionRequest", {"tool_name": "bash", "tool_input": tool_input}),
+            self._loop,
+        )
+
+        granted = evt.wait(timeout=_APPROVAL_TIMEOUT)
+        with self._perm_lock:
+            allow = self._perm_allow
+            self._perm_event = None
+        if not granted:
+            logger.warning(f"Hermes approval timed out for {command!r} — denying")
+        return "once" if allow else "deny"
+
     def _run(self):
+        # Make Hermes consult the dangerous-command approval gate. Embedded
+        # talky is neither HERMES_INTERACTIVE (CLI) nor a gateway session, so by
+        # default Hermes AUTO-APPROVES dangerous commands without ever calling
+        # the approval callback (tools/approval.py check_dangerous_command:
+        # `if not is_cli and not is_gateway: return approved`). Declaring
+        # HERMES_INTERACTIVE routes it down the CLI approval path —
+        # prompt_dangerous_approval → our registered callback. (ticket 3e56)
+        os.environ.setdefault("HERMES_INTERACTIVE", "1")
+
+        # Register the approval callback on THIS thread — it's stored in
+        # thread-local state and read on the thread that runs the command.
+        # Registering it from the asyncio side would leave it invisible here
+        # (terminal_tool.py:_callback_tls is threading.local).
+        try:
+            from tools.terminal_tool import set_approval_callback  # type: ignore[import]
+            set_approval_callback(self._approval_callback)
+        except Exception as e:
+            logger.warning(f"Hermes: could not register approval callback: {e}")
+
         history = []
         while True:
             prompt = self._prompt_queue.get()
@@ -211,6 +290,16 @@ class HermesLLMService(LLMService):
     def get_steer_mode(self) -> Literal["steer", "interrupt"]:
         return self._steer_mode
 
+    def resolve_permission(self, *, allow: bool) -> bool:
+        """Grant/deny a pending Hermes dangerous-command approval (ticket 3e56).
+
+        Sync, like claude_code's. Returns True if one was pending. Called by the
+        daemon's /api/permission/grant handler.
+        """
+        if self._bridge is None:
+            return False
+        return self._bridge.resolve_permission(allow=allow)
+
     # --- Callbacks (called from agent thread) ---
 
     def _on_text_delta(self, delta: Optional[str]):
@@ -306,6 +395,10 @@ class HermesLLMService(LLMService):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, InterruptionFrame):
+            # NOTE: deliberately do NOT resolve a pending approval here. A
+            # pending approval is an explicit human-in-the-loop gate; a barge-in
+            # (often the user simply re-speaking) must not silently deny it. The
+            # banner's grant/deny or the _APPROVAL_TIMEOUT bounds the wait. (3e56)
             await self.push_frame(frame, direction)
             return
 

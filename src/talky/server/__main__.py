@@ -938,15 +938,20 @@ def _build_webrtc_routes():
             pass
         allow = bool(body.get("allow", False))
 
-        # Find any backend with a pending permission. Both claude-code and opencode
-        # expose ``resolve_permission(allow=...)`` — but claude-code's is sync and
-        # opencode's is async. Handle both.
+        # Find any backend with a pending permission. claude-code, opencode, and
+        # hermes all expose ``resolve_permission(allow=...)`` — claude-code's and
+        # hermes's are sync, opencode's is async. Handle all three.
         from talky.backends.claude_code import ClaudeCodeLLMService
 
         try:
             from talky.backends.opencode import OpencodeLLMService  # type: ignore
         except ImportError:
             OpencodeLLMService = None  # type: ignore[assignment]
+
+        try:
+            from talky.backends.hermes import HermesLLMService  # type: ignore
+        except ImportError:
+            HermesLLMService = None  # type: ignore[assignment]
 
         resolved = False
         for svc in voice_channel._llm_services.values():  # noqa: SLF001
@@ -956,6 +961,10 @@ def _build_webrtc_routes():
                     break
             if OpencodeLLMService is not None and isinstance(svc, OpencodeLLMService):
                 if await svc.resolve_permission(allow=allow):
+                    resolved = True
+                    break
+            if HermesLLMService is not None and isinstance(svc, HermesLLMService):
+                if svc.resolve_permission(allow=allow):
                     resolved = True
                     break
 

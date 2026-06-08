@@ -42,10 +42,16 @@ function Banner({ request, onResolve }: Props) {
     .join('\n');
 
   return (
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 bg-background border border-border rounded-xl shadow-xl p-4 w-[420px] max-w-[calc(100vw-2rem)]">
+    <div
+      data-testid="permission-banner"
+      className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 bg-background border border-border rounded-xl shadow-xl p-4 w-[420px] max-w-[calc(100vw-2rem)]"
+    >
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold text-foreground">Permission required</span>
-        <span className="ml-auto text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+        <span
+          data-testid="permission-tool-name"
+          className="ml-auto text-xs font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded"
+        >
           {request.tool_name}
         </span>
       </div>
@@ -56,12 +62,14 @@ function Banner({ request, onResolve }: Props) {
       )}
       <div className="flex gap-2 justify-end mt-1">
         <button
+          data-testid="permission-deny"
           onClick={() => onResolve(false)}
           className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors"
         >
           Deny
         </button>
         <button
+          data-testid="permission-allow"
           onClick={() => onResolve(true)}
           className="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
         >

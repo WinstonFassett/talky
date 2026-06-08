@@ -115,9 +115,54 @@ TALKY_VOICE_PROFILE=local-test python3 tests/browser/drive_call.py # local: whis
 - **See the pipeline internals** (STT/VAD/turn) by running the daemon with
   `TALKY_LOG_LEVEL=DEBUG` — STT transcripts and turn events log at DEBUG.
 
+## Approval-loop rig — `drive_approval.py` (ticket 3e56)
+
+Sibling rig that proves the **dangerous-command approval surface** end to end,
+unattended — the human-in-the-loop gate that is *exactly* "the stuff that requires
+me." Unlike `drive_call.py` (deterministic `echo`), this drives a **real, gate-capable
+backend** (Hermes), because the approval event is only emitted by a real agent turn:
+
+```
+WAV (a guarded shell command, as the mic) → STT → REAL Hermes turn
+  → Hermes dangerous-command guard fires → talky's set_approval_callback
+  → permissionRequest (SSE) → PermissionBanner RENDERS (data-testid)
+  → rig clicks Allow → POST /api/permission/grant 200
+  → HermesLLMService.resolve_permission() unblocks the Hermes thread
+```
+
+```bash
+talky daemon
+python3 tests/browser/drive_approval.py     # GREEN: banner rendered + grant 200
+```
+
+Exit 0 = banner rendered (emit→SSE→render half) **and** grant returned 200 (the
+resolve half: server found the pending Hermes request and resolved it). A `409`
+means the gate never fired or the server can't see the backend → RED. Proven to go
+RED by breaking the `permission-banner` testid in the served bundle.
+
+**Knobs:** `TALKY_LLM_PROFILE` (default `hermes` — must be gate-capable),
+`TALKY_VOICE_PROFILE` (`local-test`), `TALKY_APPROVAL_WAV`,
+`TALKY_APPROVAL_DECISION` (`allow`|`deny`).
+
+**Gotchas specific to this rig:**
+- It costs **one real model call per Hermes turn** (Hermes routes via
+  `~/.hermes/config.yaml` — point it at a cheap/free model). Not offline like
+  `drive_call.py`.
+- **Hermes needs `HERMES_INTERACTIVE` to gate at all.** Embedded talky is neither
+  CLI nor gateway, so Hermes would AUTO-APPROVE dangerous commands; the backend
+  sets `HERMES_INTERACTIVE=1` on its agent thread so the approval callback is
+  consulted. (See `src/talky/backends/hermes.py`.)
+- **whisper mis-hears "chmod"** ("mod"/"shmod") on early loops — the looping mic +
+  a generous banner window give repeated shots until a correct transcription lands.
+  This is real-mic nondeterminism (per 0179); fine here since one correct loop is
+  enough.
+
 ## Files
 
-- `drive_call.py` — the rig.
+- `drive_call.py` — the audio/render rig (echo backend).
+- `drive_approval.py` — the approval-loop rig (real Hermes turn → gate → grant).
 - `fixtures/hello.wav` — "Hello, can you hear me?" + trailing silence, as the mic.
+- `fixtures/approval-cmd.wav` — a guarded shell command (`chmod 777 …`) + trailing
+  silence, as the mic, for `drive_approval.py`.
 - `package.json` / `node_modules` — only for the legacy Node experiments; the
   Python rig is the supported one. (`node_modules` is gitignored.)
