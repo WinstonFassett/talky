@@ -72,7 +72,7 @@ from talky.server.bridge import say as daemon_say
 from talky.server.channel import VoiceChannel
 
 logger.remove()
-logger.add(sys.stderr, level="INFO")
+logger.add(sys.stderr, level=os.environ.get("TALKY_LOG_LEVEL", "INFO"))
 
 # Network config precedence (highest → lowest):
 #   1. TALKY_LOCAL_PORT / TALKY_REMOTE_PORT / TALKY_HOST / TALKY_HTTPS_CERT / TALKY_HTTPS_KEY env vars
