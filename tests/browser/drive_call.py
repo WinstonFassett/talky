@@ -33,12 +33,46 @@ CLIENT_URL = os.environ.get("TALKY_URL", "http://127.0.0.1:8765/")
 # Single rolling output dir — overwritten each run, don't hoard audio/video.
 OUT_DIR = Path(os.environ.get("TALKY_TEST_OUT", "/tmp/talky-test-out"))
 
+# The rig sets the daemon to a deterministic, LOCAL-by-default config so a run
+# is reproducible and offline. Override via env to test other configs:
+#   TALKY_LLM_PROFILE   = echo        (deterministic responder)
+#   TALKY_VOICE_PROFILE = local-test  (whisper_local STT + kokoro TTS, no cloud)
+# Set TALKY_VOICE_PROFILE=default to run the cloud config (deepgram+google).
+LLM_PROFILE = os.environ.get("TALKY_LLM_PROFILE", "echo")
+VOICE_PROFILE = os.environ.get("TALKY_VOICE_PROFILE", "local-test")
+
 
 def log(*a: object) -> None:
     print("[rig]", *a, flush=True)
 
 
+def _set_profiles() -> None:
+    """Point the daemon at the deterministic + local test config before driving.
+
+    Idempotent; self-contained so a run doesn't depend on prior manual switches.
+    """
+    import urllib.request
+
+    base = CLIENT_URL.rstrip("/")
+    for path, prof in (
+        ("/api/profiles/switch", LLM_PROFILE),
+        ("/api/voices/switch", VOICE_PROFILE),
+    ):
+        body = json.dumps({"profile": prof}).encode()
+        req = urllib.request.Request(
+            base + path, data=body, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                log(f"set {path.split('/')[-1]} -> {prof}: {r.read().decode()[:80]}")
+        except Exception as e:  # noqa: BLE001
+            log(f"WARN: could not set {prof} via {path}: {e}")
+
+
 def main() -> int:
+    # Point the daemon at the deterministic + local config before driving.
+    _set_profiles()
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
