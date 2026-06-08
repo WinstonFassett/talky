@@ -10,6 +10,17 @@ voice_profiles:
     tts_voice: af_heart
     stt_provider: whisper_local
 
+  # Fully-local, deterministic target for E2E thread testing (ticket 0179):
+  # whisper STT + kokoro TTS, both explicit so neither falls back to a cloud
+  # default a user might set. Used by tests/browser/drive_call.py (default
+  # voice). See tests/browser/README.md.
+  local-test:
+    description: "Local-only test voice (whisper + kokoro)"
+    stt_provider: whisper_local
+    stt_model: mlx-community/whisper-large-v3-turbo
+    tts_provider: kokoro
+    tts_voice: af_heart
+
   # Local Kokoro voices
   kokoro-sky:
     description: "Local Kokoro US Sky"

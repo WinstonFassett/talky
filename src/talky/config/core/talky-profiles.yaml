@@ -2,6 +2,13 @@
 # Users can disable these in their personal ~/.talky/talky-profiles.yaml
 talky_profiles:
 
+  # Echo — deterministic E2E thread test profile (ticket 0179). Background.
+  # Pairs with the `echo` llm_backend and (by convention) the `local-test`
+  # voice profile. Used by tests/browser/drive_call.py — see its README.
+  echo:
+    description: "Echo (E2E test backend)"
+    llm_backend: "echo"
+
   # OpenClaw
   openclaw:
     description: "OpenClaw"

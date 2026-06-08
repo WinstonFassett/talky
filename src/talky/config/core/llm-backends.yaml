@@ -8,6 +8,16 @@
 # connect so the agent generates its own greeting words. Set to "__none__"
 # to disable. Omit either field for the default behavior. Ticket 5d95.
 llm_backends:
+  # Echo — deterministic fake LLM for E2E thread testing (ticket 0179).
+  # Repeats the user's transcript back as the assistant response, so a test
+  # can drive the real pipeline end-to-end (STT -> LLM -> TTS) and assert that
+  # language + audio came out. No inference, no network, no cost. Used by
+  # tests/browser/drive_call.py — see tests/browser/README.md.
+  echo:
+    description: "Echo — deterministic E2E test backend"
+    service_class: "talky.backends.echo.EchoLLMService"
+    config:
+      template: "you said: {text}"
   openclaw:
     description: "OpenClaw - OpenAI-compatible LLM"
     service_class: "talky.backends.openclaw.OpenClawLLMService"

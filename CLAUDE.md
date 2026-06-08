@@ -84,6 +84,25 @@ Ports: `local_port` (8765, always-on HTTP) + optional `remote_port` (HTTPS, cert
 - If you're restarting the daemon from an agent's Bash tool, use `run_in_background=true` with a plain `talky daemon` command. **Do not** try to manually background it with `&` plus a redirect, especially not inside a compound chain like `talky kill && talky daemon > log 2>&1 &`. That shape hangs the Bash tool: `&` backgrounds the whole chain into a subshell, but `> log 2>&1` is scoped only to `talky daemon` — the subshell itself still holds the inherited stdout/stderr pipes open, so the tool never sees EOF and waits forever. The symptom from a voice session is total silence for minutes, because the agent is stuck in the Bash call. If you genuinely need manual backgrounding from one shell line, wrap the group so the redirect covers the subshell too: `(talky kill && sleep 1 && talky daemon) > /tmp/talky_daemon.log 2>&1 &`. But prefer `run_in_background=true`.
 - Check logs first before forming hypotheses.
 
+## Testing voice changes
+
+Changed anything in the voice path (STT, turn detection, LLM switching, TTS,
+barge-in)? Type-checks and unit tests verify code, not feature correctness.
+**To verify the change actually works end-to-end, use the E2E thread rig** —
+don't hand-drive a browser, and never drive the user's real browser:
+
+```bash
+talky daemon
+python3 tests/browser/drive_call.py     # speech in → real pipeline → asserts language+audio out, plays it back
+```
+
+It launches its own isolated headless Chromium, feeds a WAV as the mic through
+the real WebRTC pipeline (deterministic `echo` LLM + local `whisper`+`kokoro`
+by default, no cloud), and asserts language-out + audio-out. Set
+`TALKY_VOICE_PROFILE=default` to test the cloud config. Full docs, knobs, and
+gotchas: [tests/browser/README.md](tests/browser/README.md). Lower-level unit
+tests live in `tests/test_e2e_*.py`.
+
 ## Agent integration modalities
 
 Talky supports two ways an agent (Claude, Pi, etc.) can participate in a voice session. **Background is the default and the preferred mode** — the daemon owns the agent, the browser is the only UI, and the agent is fully interruptible. Foreground is the exception, used when you specifically want the agent's own terminal UI alongside Talky's.
