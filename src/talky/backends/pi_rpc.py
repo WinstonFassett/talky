@@ -91,6 +91,7 @@ class PiRPCLLMService(LLMService):
         self._extra_args = extra_args or []
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._reader_task: Optional[asyncio.Task] = None
+        self._dead = False  # subprocess died mid-session (WIN-199)
 
     def _build_cmd(self) -> list[str]:
         cmd = ["pi", "--mode", "rpc"]
@@ -103,6 +104,7 @@ class PiRPCLLMService(LLMService):
 
     async def start(self, frame: StartFrame):
         await super().start(frame)
+        self._dead = False  # fresh pipeline — reset death flag (WIN-199)
         # Availability gate is now upstream in channel.py's build loop —
         # if we're here, the binary was on PATH at that time.
         cmd = self._build_cmd()
@@ -116,7 +118,20 @@ class PiRPCLLMService(LLMService):
         )
         self._reader_task = asyncio.create_task(self._read_stdout())
         asyncio.create_task(self._log_stderr())
+        asyncio.create_task(self._watchdog())
         logger.info("Pi RPC process started")
+
+    async def _watchdog(self):
+        """Poll the subprocess liveness — catches exits where stdout doesn't
+        close promptly (e.g. child process inherits the pipes). WIN-199."""
+        try:
+            while self._proc and not self._dead:
+                await asyncio.sleep(2)
+                if self._proc and self._proc.returncode is not None:
+                    await self._handle_subprocess_death()
+                    break
+        except asyncio.CancelledError:
+            pass
 
     async def stop(self, frame: EndFrame):
         await super().stop(frame)
@@ -166,6 +181,9 @@ class PiRPCLLMService(LLMService):
             logger.error(f"Pi stderr reader error: {e}")
 
     async def _write(self, msg: dict):
+        if self._dead:
+            logger.warning(f"Pi RPC dead — dropping write: {msg.get('type')}")
+            return
         if self._proc and self._proc.stdin:
             line = json.dumps(msg) + "\n"
             logger.info(f"Pi RPC → stdin: {line.rstrip()}")
@@ -231,10 +249,29 @@ class PiRPCLLMService(LLMService):
                 elif event_type == "response" and not data.get("success", True):
                     logger.warning(f"Pi RPC error: {data.get('error')}")
 
+            # Subprocess stdout closed — pi died mid-session (WIN-199).
+            await self._handle_subprocess_death()
+
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error(f"Pi RPC stdout reader error: {e}", exc_info=True)
+            await self._handle_subprocess_death()
+
+    async def _handle_subprocess_death(self):
+        """Mark the backend as dead and notify the frontend via SSE."""
+        if self._dead:
+            return
+        self._dead = True
+        logger.error("Pi RPC subprocess died mid-session — marking backend dead (WIN-199)")
+        try:
+            from talky.server.event_bus import event_bus
+            await event_bus.emit("backendError", {
+                "profile": "pi",
+                "message": "Pi channel lost — the agent process exited. Reconnect to restart.",
+            })
+        except Exception:
+            pass  # event bus may not be available in all contexts
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)

@@ -63,6 +63,7 @@ export const App = ({
   // releases the stream automatically.
   const wrappedConnect = useCallback(async () => {
     if (!client || !handleConnect) return;
+    setBackendError(null);
     try {
       await client.initDevices();
     } catch (err) {
@@ -173,6 +174,7 @@ export const App = ({
 
   // Track active profile (name + label).
   const [profileLabels, setProfileLabels] = useState<Record<string, string>>({});
+  const [backendError, setBackendError] = useState<string | null>(null);
   useEffect(() => {
     const es = new EventSource('/api/events');
     es.addEventListener('init', (e: MessageEvent) => {
@@ -190,6 +192,12 @@ export const App = ({
       try {
         const data = JSON.parse(e.data);
         if (data.type === 'llm' && data.profile) setActiveProfile(data.profile as string);
+      } catch { /* ignore */ }
+    });
+    es.addEventListener('backendError', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.message) setBackendError(data.message as string);
       } catch { /* ignore */ }
     });
     return () => es.close();
@@ -281,7 +289,21 @@ export const App = ({
 
       <main className="flex-1 overflow-hidden flex flex-col">
         <div className="h-full mx-auto flex flex-col w-full" style={{ maxWidth: 600 }}>
-          {showTranscript ? (
+          {backendError && transportConnected ? (
+            <div className="flex flex-col items-center justify-center h-full gap-4 px-6 text-center">
+              <div className="text-destructive text-sm font-medium">{backendError}</div>
+              <button
+                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+                onClick={() => {
+                  setBackendError(null);
+                  wrappedDisconnect();
+                  setTimeout(() => wrappedConnect(), 500);
+                }}
+              >
+                Reconnect
+              </button>
+            </div>
+          ) : showTranscript ? (
             <ConversationPanelWithReasoning
               activeProfile={activeProfile}
               voiceState={voiceState}
