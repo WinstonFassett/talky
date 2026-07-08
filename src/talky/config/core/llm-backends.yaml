@@ -70,17 +70,14 @@ llm_backends:
       cwd: null
       max_turns: 90
   devin:
-    description: "Devin (cognition.ai) cloud agent — REST + polling"
+    description: "Devin CLI (local terminal agent, subprocess)"
     service_class: "talky.backends.devin.DevinLLMService"
     announcement: "Devin channel."
     config:
-      # org_id and api_key fall back to DEVIN_ORG_ID / DEVIN_API_KEY env vars.
-      org_id: ""
-      api_key: ""
-      base_url: "https://api.devin.ai"
-      snapshot_id: null
-      poll_interval: 1.5
-      session_id: null
+      permission_mode: "accept-edits"
+      model: null
+      cwd: null
+      binary: null
   opencode:
     description: "Opencode (sst/opencode) via HTTP server, streaming + permission asks"
     service_class: "talky.backends.opencode.OpencodeLLMService"
