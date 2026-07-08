@@ -67,6 +67,15 @@ llm_backends:
     config:
       cwd: null
       max_turns: 90
+  devin:
+    description: "Devin CLI (local terminal agent, subprocess)"
+    service_class: "talky.backends.devin.DevinLLMService"
+    announcement: "Devin channel."
+    config:
+      permission_mode: "accept-edits"
+      model: null
+      cwd: null
+      binary: null
   opencode:
     description: "Opencode (sst/opencode) via HTTP server, streaming + permission asks"
     service_class: "talky.backends.opencode.OpencodeLLMService"
