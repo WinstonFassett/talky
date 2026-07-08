@@ -29,6 +29,23 @@ import os
 import shutil
 from typing import TYPE_CHECKING, Optional
 
+# Env vars injected by the Devin desktop app (Windsurf fork) that poison the
+# standalone devin CLI — it detects them, thinks it's running inside Windsurf,
+# and rejects the Windsurf session token as invalid for standalone use.
+_POISON_ENV_KEYS = frozenset({
+    "ACP_BACKEND",
+    "WINDSURF_IDE_TYPE",
+    "WINDSURF_EXT_HOST_PID",
+    "VSCODE_IPC_HOOK",
+    "VSCODE_NLS_CONFIG",
+    "VSCODE_CODE_CACHE_PATH",
+    "VSCODE_DEBUGPY_ADAPTER_ENDPOINTS",
+    "BUNDLED_DEBUGPY_PATH",
+    "PYTHONSTARTUP",
+    "TERM_PROGRAM_VERSION",
+    "__CFBundleIdentifier",
+})
+
 if TYPE_CHECKING:
     from talky.backends import BackendStatus
 
@@ -96,6 +113,14 @@ class DevinLLMService(LLMService):
             args.extend(["--model", self._model])
         return args
 
+    @staticmethod
+    def _clean_env() -> dict[str, str]:
+        """Strip Devin-desktop-app env vars that break the standalone CLI."""
+        env = dict(os.environ)
+        for key in _POISON_ENV_KEYS:
+            env.pop(key, None)
+        return env
+
     async def _process_user_text(self, user_text: str) -> None:
         async with self._turn_lock:
             await self.push_frame(LLMFullResponseStartFrame())
@@ -110,6 +135,7 @@ class DevinLLMService(LLMService):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=self._cwd,
+                    env=self._clean_env(),
                 )
 
                 # Stream stdout lines → TextFrame
