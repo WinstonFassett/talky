@@ -93,7 +93,7 @@ class PiRPCLLMService(LLMService):
         self._reader_task: Optional[asyncio.Task] = None
 
     def _build_cmd(self) -> list[str]:
-        cmd = ["pi", "--mode", "rpc", "--no-extensions"]
+        cmd = ["pi", "--mode", "rpc"]
         if self._provider:
             cmd += ["--provider", self._provider]
         if self._model:

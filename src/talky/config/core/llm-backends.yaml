@@ -50,9 +50,7 @@ llm_backends:
     description: "Pi coding agent (RPC mode, interruptible)"
     service_class: "talky.backends.pi_rpc.PiRPCLLMService"
     announcement: "Pi channel."
-    config:
-      provider: "github-copilot"
-      model: "gpt-4o"
+    config: {}
   claude-code:
     description: "Claude Code via Agent SDK (thread bridge, turn-boundary interrupt)"
     service_class: "talky.backends.claude_code.ClaudeCodeLLMService"
