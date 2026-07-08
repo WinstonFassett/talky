@@ -159,7 +159,7 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
 
     if _startup_bypass_permissions and "permission_mode" in sig:
         config["permission_mode"] = "bypassPermissions"
-        logger.warning("claude-bg: bypass_permissions=true from talky-args.json — skipping all permission checks")
+        logger.warning("claude: bypass_permissions=true from talky-args.json — skipping all permission checks")
 
     if _startup_resume:
         if "resume" in sig:

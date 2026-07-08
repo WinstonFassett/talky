@@ -927,7 +927,7 @@ def _build_webrtc_routes():
         return JSONResponse({"status": "ok", "mode": mode})
 
     async def handle_permission_grant(request: Request):
-        """POST /api/permission/grant — resolve a pending claude-bg permission prompt.
+        """POST /api/permission/grant — resolve a pending claude (background SDK) permission prompt.
 
         Body: {"allow": true|false}
         """

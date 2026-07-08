@@ -40,26 +40,23 @@ talky_profiles:
       extension_arg: "-e"
       extension: "{pkg_dir}/_extensions_pi_voice/extension.ts"
 
-  # Claude — EXCEPTION to the naming convention.
-  # Normally `<agent>` is background and `<agent>-tui` is foreground, but for
-  # Claude the background path uses the Anthropic Agent SDK, which is billed
-  # as separate API usage on top of the Claude Code subscription. To avoid
-  # surprise charges, bare `talky claude` runs the foreground Claude Code CLI
-  # (subscription billing) and tells it to start a voice conversation.
-  # Talky skill auto-installed.
+  # Claude — background via Agent SDK (claude-code-sdk). The SDK wraps the
+  # `claude` CLI and uses the Claude Code subscription OAuth login by default,
+  # so it bills against your Pro/Max/Team subscription — no separate API key
+  # charges. Interruptible, no terminal UI; browser drives the conversation.
   claude:
+    description: "Claude (background, Agent SDK — subscription billing)"
+    llm_backend: "claude-code"
+
+  # Claude — foreground: exec into the Claude Code CLI with the talky skill
+  # loaded. The CLI connects to the daemon via MCP and drives the voice
+  # pipeline through the talky skill. Same subscription billing as `claude`
+  # (the Agent SDK wraps this same CLI). Use this when you want Claude's own
+  # terminal UI alongside the talky browser UI.
+  claude-tui:
     description: "Claude Code — launches the CLI and starts a voice conversation"
     llm_backend: "agent-ext"
     launcher:
       mode: foreground
       command: ["claude"]
       prompt: "I want to have a voice conversation"
-
-  # Claude — background via Agent SDK (the "usual" default shape).
-  # DISABLED by default: billed as separate API usage on top of the
-  # subscription. Uncomment if you want the background/interruptible variant
-  # and accept the extra charges. If you do, you may want to rename the
-  # foreground entry above to `claude-tui` to restore the standard convention.
-  # claude-bg:
-  #   description: "Claude (background, Agent SDK — extra API charges)"
-  #   llm_backend: "claude-code"

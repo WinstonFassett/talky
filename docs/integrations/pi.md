@@ -98,9 +98,10 @@ Extension → daemon:
 
 ## See also
 
-`talky claude` uses a different path — the Claude Code CLI has no plugin
+`talky claude-tui` uses a different path — the Claude Code CLI has no plugin
 loader, so it drives the daemon via MCP tools (see `talky` skill +
-`/api/mcp` server) rather than a `/ws/agent` extension.
+`/api/mcp` server) rather than a `/ws/agent` extension. (`talky claude`
+uses the background Agent SDK instead — no CLI involved.)
 
 ## References
 
