@@ -35,30 +35,19 @@ fn talky_run_dir() -> PathBuf {
     PathBuf::from(home).join(".talky").join("run")
 }
 
+/// The daemon's always-on local HTTP listener (see docs/ports.md). This is
+/// plain HTTP bound to 127.0.0.1 — exactly what the webview wants, no
+/// self-signed-cert friction. The retired `talky-daemon.port` /
+/// `talky-daemon.loopback-port` runfiles no longer exist.
 fn read_port_runfile() -> Option<u16> {
-    fs::read_to_string(talky_run_dir().join("talky-daemon.port"))
+    fs::read_to_string(talky_run_dir().join("talky-daemon.local-port"))
         .ok()
         .and_then(|s| s.trim().parse::<u16>().ok())
 }
 
-/// Loopback HTTP port — only present when the daemon's primary listener
-/// is HTTPS. When present, prefer it so we can speak plain HTTP from the
-/// webview without self-signed-cert friction.
-fn read_loopback_port_runfile() -> Option<u16> {
-    fs::read_to_string(talky_run_dir().join("talky-daemon.loopback-port"))
-        .ok()
-        .and_then(|s| s.trim().parse::<u16>().ok())
-}
-
-/// Webview URL: prefer the loopback HTTP port when TLS is on so we don't
-/// hit self-signed-cert warnings inside WKWebView. When no loopback port
-/// is published, the primary port is plain HTTP and we use it directly.
+/// Webview URL: the local port is already plain HTTP, so use it directly.
 fn webview_url_for(port: u16) -> String {
-    if let Some(loopback) = read_loopback_port_runfile() {
-        format!("http://localhost:{loopback}/?autoconnect=true")
-    } else {
-        format!("http://localhost:{port}/?autoconnect=true")
-    }
+    format!("http://localhost:{port}/?autoconnect=true")
 }
 
 fn daemon_is_ready() -> bool {
@@ -481,8 +470,8 @@ fn clear_stale_runfiles() {
     for name in [
         "talky-daemon.pid",
         "talky-daemon.ready",
-        "talky-daemon.port",
-        "talky-daemon.loopback-port",
+        "talky-daemon.local-port",
+        "talky-daemon.remote-port",
         "talky-daemon.lock",
     ] {
         let _ = fs::remove_file(run_dir.join(name));
