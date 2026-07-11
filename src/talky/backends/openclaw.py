@@ -379,14 +379,15 @@ class OpenClawLLMService(LLMService):
                     self.tokens["gateway"], challenge_nonce, platform_name, device_family
                 )
                 
-                # Send connect request with device auth (v3) - ONLY ONE CONNECT REQUEST
+                # Send connect request with device auth (v3 signature works for v3+v4)
+                # OpenClaw 2026.5.12+ requires protocol v4 clients (#80725)
                 connect_request = {
                     "type": "req",
                     "id": str(self._next_id()),
-                    "method": "connect", 
+                    "method": "connect",
                     "params": {
                         "minProtocol": 3,
-                        "maxProtocol": 3,
+                        "maxProtocol": 4,
                         "client": {
                             "id": self.CLIENT_ID,
                             "version": "1.0.0",
@@ -467,23 +468,40 @@ class OpenClawLLMService(LLMService):
                                     logger.warning("Response queue full")
                                 delattr(self, "_accumulated_response")
 
+                # v4 streaming: chat.deltaText / chat.replace frames (OpenClaw 2026.5.12+ #80725)
+                elif data.get("type") == "event" and data.get("event") == "chat.deltaText":
+                    delta = data.get("payload", {}).get("delta", "") or ""
+                    if delta:
+                        if not hasattr(self, "_accumulated_response"):
+                            self._accumulated_response = ""
+                        self._accumulated_response += delta
+                        logger.debug(f"📝 v4 deltaText: {delta}")
+
+                elif data.get("type") == "event" and data.get("event") == "chat.replace":
+                    text = data.get("payload", {}).get("text", "") or ""
+                    self._accumulated_response = text
+                    logger.debug(f"🔄 v4 replace: {text[:60]}")
+
                 # Handle final chat message
                 elif data.get("type") == "event" and data.get("event") == "chat":
                     payload = data.get("payload", {})
-                    if payload.get("state") == "final" and "message" in payload:
-                        message = payload["message"]
-                        if message.get("role") == "assistant" and "content" in message:
-                            # Get the full response from content
-                            content = message["content"]
-                            full_text = ""
-                            for item in content:
+                    if payload.get("state") == "final":
+                        # v3: message.content[].text is fully materialized on the final frame.
+                        # v4: message.content may be empty; text already streamed via chat.deltaText.
+                        full_text = ""
+                        message = payload.get("message") or {}
+                        if message.get("role") == "assistant":
+                            for item in message.get("content") or []:
                                 if item.get("type") == "text":
                                     full_text += item.get("text", "")
+                        # Fall back to accumulated stream when the final frame carries no text
+                        if not full_text and hasattr(self, "_accumulated_response"):
+                            full_text = self._accumulated_response
 
-                            # Clear streaming accumulator if it exists
-                            if hasattr(self, "_accumulated_response"):
-                                delattr(self, "_accumulated_response")
+                        if hasattr(self, "_accumulated_response"):
+                            delattr(self, "_accumulated_response")
 
+                        if full_text:
                             logger.info(f"✅ Final response: {full_text[:100]}...")
                             try:
                                 self._response_queue.put_nowait(full_text)
