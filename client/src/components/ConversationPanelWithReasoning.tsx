@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useCallback, useState, memo, Fragment } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState, memo, Fragment } from 'react';
 import { usePipecatClient } from '@pipecat-ai/client-react';
 import { ChevronRightIcon, CopyIcon, CheckIcon } from 'lucide-react';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
@@ -12,6 +12,7 @@ import { BotSpeakingBar } from './BotSpeakingBar';
 import { ConverseButton } from './ConverseButton';
 import type { VoiceState } from './useVoiceState';
 import { useUrlParam } from '../fixtures/harness';
+import { useSessions } from '../sessions/SessionsProvider';
 
 export interface ConversationChromeProps {
   voiceState: VoiceState;
@@ -288,15 +289,47 @@ function ConversationMessages({
     voiceStateOverride === 'speaking' ||
     (!voiceStateOverride && connected && voiceState === 'speaking');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { hasOlder, loadOlder } = useSessions();
 
-  const scrollToBottom = useCallback(() => {
+  // Stick to the bottom as messages arrive — except when older history was
+  // prepended (same last message, new first one): then keep the reader's place.
+  const prev = useRef<{ first?: string; last?: string; height: number; top: number }>({ height: 0, top: 0 });
+  useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, []);
+    if (!el) return;
+    const first = messages[0]?.id;
+    const last = messages[messages.length - 1]?.id;
+    const p = prev.current;
+    const prepended = p.last !== undefined && last === p.last && first !== p.first;
+    if (prepended) el.scrollTop = el.scrollHeight - p.height + p.top;
+    else el.scrollTop = el.scrollHeight;
+    prev.current = { first, last, height: el.scrollHeight, top: el.scrollTop };
+  }, [messages]);
 
+  const loadingOlder = useRef(false);
+  const pageOlder = useCallback(async () => {
+    if (loadingOlder.current || !hasOlder) return;
+    const el = scrollRef.current;
+    if (el) prev.current = { ...prev.current, height: el.scrollHeight, top: el.scrollTop };
+    loadingOlder.current = true;
+    try {
+      await loadOlder();
+    } finally {
+      loadingOlder.current = false;
+    }
+  }, [hasOlder, loadOlder]);
+
+  // Page older turns in when the top of the transcript scrolls into view.
+  const sentinelRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, scrollToBottom]);
+    const el = sentinelRef.current;
+    if (!el || !hasOlder) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) void pageOlder();
+    }, { root: scrollRef.current, rootMargin: '200px 0px 0px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasOlder, pageOlder]);
 
   return (
     <div className="relative h-full flex flex-col">
@@ -304,7 +337,22 @@ function ConversationMessages({
         ref={scrollRef}
         className="relative flex-1 overflow-y-auto px-5 pt-2"
         data-testid="transcript-list"
+        onScroll={(e) => {
+          prev.current = { ...prev.current, height: e.currentTarget.scrollHeight, top: e.currentTarget.scrollTop };
+        }}
       >
+        {hasOlder && (
+          <button
+            ref={sentinelRef}
+            type="button"
+            data-testid="transcript-load-older"
+            className="block w-full py-2 text-center text-[12px] hover:underline"
+            style={{ color: 'var(--color-text-mute)' }}
+            onClick={() => void pageOlder()}
+          >
+            Earlier messages…
+          </button>
+        )}
         {messages.map((m) => (
           <MessageRow key={m.id} message={m} />
         ))}

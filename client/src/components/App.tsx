@@ -16,6 +16,7 @@ import { StatusBar } from './StatusBar';
 import { EmptyState } from './EmptyState';
 import { isDevRoute, useUrlParam } from '../fixtures/harness';
 import { useTalkyMessages } from '../messages/useTalkyMessages';
+import { SessionDrawer, SessionRail, SessionsToggle, useRailOpen } from '../sessions/SessionSidebar';
 
 interface TransportWithDataChannel {
   dc?: RTCDataChannel;
@@ -232,9 +233,17 @@ export const App = ({
   const showTranscript =
     transportConnected || transportConnecting || messages.length > 0 || isDevRoute() || !!fixtureName;
   const showHeader = showTranscript;
+  const [railOpen, setRailOpen] = useRailOpen();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const showRail = railOpen && !isNarrow;
+  const toggleSessions = () => (isNarrow ? setDrawerOpen(true) : setRailOpen(!railOpen));
 
   return (
-    <div className="flex flex-col w-full h-full bg-background text-foreground">
+    <div className="flex w-full h-full bg-background text-foreground">
+      {showRail && <SessionRail onCollapse={() => setRailOpen(false)} />}
+      {isNarrow && <SessionDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />}
+    <div className="relative flex flex-col flex-1 min-w-0 h-full">
+      {!showHeader && !showRail && <SessionsToggle onClick={toggleSessions} className="absolute left-2 top-1.5 z-10" />}
       <PermissionBanner />
       {showHeader && (
       <header
@@ -246,7 +255,8 @@ export const App = ({
         }}
       >
         {/* Left: voice status indicator (dot + label) — shown at all widths. */}
-        <div className="flex items-center min-w-0 justify-self-start">
+        <div className="flex items-center gap-1 min-w-0 justify-self-start">
+          {!showRail && <SessionsToggle onClick={toggleSessions} />}
           <StatusBadge state={voiceState} />
         </div>
 
@@ -326,6 +336,7 @@ export const App = ({
           currentLabel={activeProfile ? activeProfileLabel : undefined}
         />
       )}
+    </div>
     </div>
   );
 };

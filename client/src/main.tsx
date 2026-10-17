@@ -14,6 +14,7 @@ import {
 import { App } from './components/App';
 import { BotAudio } from './components/SpeakerMute';
 import { SpeakerMuteProvider } from './components/useSpeakerMute';
+import { SessionsProvider } from './sessions/SessionsProvider';
 import type { TransportType } from './config';
 import {
   AVAILABLE_TRANSPORTS,
@@ -67,6 +68,7 @@ export const Main = () => {
               // suppressed via `noAudioOutput`. SpeakerMuteProvider shares the
               // muted flag between the header button and BotAudio.
               <SpeakerMuteProvider>
+                <SessionsProvider>
                 <App
                   client={client}
                   handleConnect={handleConnect}
@@ -76,6 +78,7 @@ export const Main = () => {
                   availableTransports={AVAILABLE_TRANSPORTS}
                   autoconnect={autoconnect}
                 />
+                </SessionsProvider>
                 <BotAudio />
               </SpeakerMuteProvider>
             );
