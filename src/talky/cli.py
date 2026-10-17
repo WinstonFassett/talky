@@ -747,10 +747,10 @@ def cmd_profile(args):
 def cmd_resume(args):
     """Continue a saved Talky conversation, on its own profile or another (WIN-534).
 
-    Same backend + stored native session id → the backend's own resume
-    (``set_resume`` / ``resume=``). Otherwise the daemon replays the stored
-    transcript into the target backend. Either way new turns append to the
-    same record.
+    The daemon resumes it at the next call: natively (the backend's own session)
+    when the backend is unchanged and has a session id, otherwise by replaying
+    the transcript. A call that's already live gets the transcript replayed.
+    New turns append to the same record.
     """
     from talky.convos import default_store
 
@@ -795,19 +795,14 @@ def cmd_resume(args):
         sys.exit(1)
     live = _live()
 
+    # The daemon owns the resume (native session or replay); we only switch profile.
     plan = _post("/api/convos/resume", {"convo_id": rec.id, "profile": profile})
-    native_id = plan.get("native_session_id")
-    if native_id and not live:
-        # Read by _instantiate_llm_backend at the next pipeline build.
-        _DAEMON_RUN_DIR.mkdir(parents=True, exist_ok=True)
-        _DAEMON_ARGS_PATH.write_text(json.dumps(
-            {"resume": {"backend": plan["backend"], "session_id": native_id}}
-        ))
     _post("/api/profile", {"profile": profile})
-    if native_id and live:
-        _post("/api/resume", {"session_id": native_id})
 
+    native_id = plan.get("native_session_id")
     how = "native resume" if native_id else f"{plan.get('replay_turns', 0)}-turn replay"
+    if live:
+        how += "; replayed into the live call"
     print(f"🔁 convo {rec.id} → profile {profile!r} ({how}, {plan.get('applied')})")
 
     if not live and not getattr(args, "no_open", False):

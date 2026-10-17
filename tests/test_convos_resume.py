@@ -63,12 +63,15 @@ def test_every_real_backend_accepts_history(module, cls):
     assert issubclass(getattr(importlib.import_module(module), cls), HistoryPreambleMixin)
 
 
-def test_hermes_import_disables_its_self_relaunch():
+def test_hermes_import_keeps_talky_importable_and_does_not_leak_env():
     import os
+    import sys
 
+    before = list(sys.path)
     import talky.backends.hermes  # noqa: F401
 
-    assert os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") == "1"
+    assert sys.path[: len(before)] == before, "talky's own sys.path entries stay first"
+    assert "HERMES_DISABLE_LAZY_INSTALLS" not in os.environ
 
 
 def test_echo_set_history_recalls_once():
@@ -216,7 +219,7 @@ def test_apply_replay_seeds_backend():
 # --- CLI: talky resume -----------------------------------------------------
 
 
-def test_cmd_resume_binds_switches_then_resumes_natively(tmp_path, monkeypatch):
+def test_cmd_resume_asks_daemon_then_switches_profile(tmp_path, monkeypatch):
     monkeypatch.setenv("TALKY_CONVOS_DIR", str(tmp_path / "convos"))
     import talky.cli as cli
     from talky.convos import default_store
@@ -253,9 +256,9 @@ def test_cmd_resume_binds_switches_then_resumes_natively(tmp_path, monkeypatch):
     cli.cmd_resume(argparse.Namespace(id=None, profile=None, no_open=False))  # no id = most recent
 
     posts = [(p, b) for p, b in calls if b is not None]
-    assert [p for p, _ in posts] == ["/api/convos/resume", "/api/profile", "/api/resume"]
+    assert [p for p, _ in posts] == ["/api/convos/resume", "/api/profile"]
     assert posts[0][1] == {"convo_id": rec.id, "profile": "claude"}
-    assert posts[2][1] == {"session_id": "sdk-1"}
+    assert not (tmp_path / ".talky" / "run" / "talky-args.json").exists(), "CLI no longer writes startup args"
     assert not any(c[0] == "OPEN" for c in calls), "live call: nothing to open"
 
 
@@ -314,3 +317,125 @@ def test_claude_sdk_skips_unknown_message_types_instead_of_ending_stream():
     import talky.backends.claude_code  # noqa: F401  (applies the patch)
 
     assert sdk_client.parse_message({"type": "rate_limit_event"}) is None
+
+
+# --- review fixes (WIN-534) ----------------------------------------------------
+
+
+def test_backend_change_replaces_native_id(tmp_path):
+    store = ConvoStore(root=tmp_path)
+    rec = store.create(backend="claude-code", profile="claude", native_session_id="claude-sid")
+    session = ConvoSession(store, backend="pi", profile="pi", resume_into=rec.id, native_id_reader=lambda: None)
+    session.append("user", "hi")
+    got = store.get(rec.id)
+    assert (got.backend, got.native_session_id) == ("pi", None)
+
+
+def test_disabled_session_writes_nothing(tmp_path):
+    store = ConvoStore(root=tmp_path)
+    ConvoSession(store, enabled=False, backend="echo", profile="echo").append("user", "hi")
+    assert store.list() == []
+
+
+def test_unplayed_announcement_does_not_swallow_a_later_reply(tmp_path):
+    store = ConvoStore(root=tmp_path)
+    session = ConvoSession(store, backend="claude-code", profile="claude")
+    session.ignore_assistant("Claude here.")  # interrupted, never recorded
+    session.append("user", "say: Claude here.")
+    session.append("assistant", "Claude here.")
+    assert [t.content for t in store.read_transcript(session.record.id)] == ["say: Claude here.", "Claude here."]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_native_id_recheck(tmp_path):
+    store = ConvoStore(root=tmp_path)
+    session = ConvoSession(store, backend="echo", profile="echo")
+    session.append("assistant", "hello")
+    assert session._recheck is not None
+    handle = session._recheck
+    session.shutdown()
+    assert handle.cancelled() and session._recheck is None
+
+
+def test_store_rejects_non_uuid_ids_and_is_private(tmp_path):
+    import stat
+
+    store = ConvoStore(root=tmp_path / "convos")
+    assert store.get("../../etc") is None
+    with pytest.raises(ValueError):
+        store.append_turn("../evil", "user", "x")
+    rec = store.create(backend="echo", profile="echo")
+    store.append_turn(rec.id, "user", "secret")
+    mode = lambda p: stat.S_IMODE(p.stat().st_mode)  # noqa: E731
+    assert mode(tmp_path / "convos") == 0o700
+    assert mode(tmp_path / "convos" / rec.id) == 0o700
+    assert mode(tmp_path / "convos" / rec.id / "transcript.jsonl") == 0o600
+    assert mode(tmp_path / "convos" / rec.id / "convo.json") == 0o600
+
+
+def test_list_skips_record_whose_id_does_not_match_its_dir(tmp_path):
+    import uuid as _uuid
+
+    store = ConvoStore(root=tmp_path)
+    good = store.create(backend="echo", profile="echo")
+    bad_dir = tmp_path / str(_uuid.uuid4())
+    bad_dir.mkdir()
+    (bad_dir / "convo.json").write_text(json.dumps({**good.to_dict(), "id": "/tmp/elsewhere"}))
+    assert [r.id for r in store.list()] == [good.id]
+
+
+def test_pending_resume_expires(channel, monkeypatch):
+    rec = channel._convo_store.create(backend="echo", profile="echo")
+    channel._convo_store.append_turn(rec.id, "user", "hi")
+    channel.resume_convo(rec.id)
+    channel._pending_resume["expires_at"] = 0
+    assert channel._take_pending_resume() is None
+    channel.resume_convo(rec.id)
+    assert channel._take_pending_resume()["convo_id"] == rec.id
+
+
+def test_live_resume_always_replays_even_when_native(channel, monkeypatch):
+    rec = channel._convo_store.create(backend="claude-code", profile="claude", native_session_id="sdk-1")
+    channel._convo_store.append_turn(rec.id, "user", "my code word is kiwi")
+
+    seen = {}
+
+    class Svc:
+        def set_history(self, turns):
+            seen["turns"] = turns
+
+    monkeypatch.setattr(channel, "is_live", lambda: True)
+    channel._llm_services = {"claude-code": Svc()}
+    channel._convo_session = ConvoSession(channel._convo_store, backend="claude-code", profile="claude")
+
+    out = channel.resume_convo(rec.id)
+
+    assert out["applied"] == "live"
+    assert seen["turns"][0]["content"] == "my code word is kiwi"
+    assert channel._convo_session.resume_into == rec.id
+    assert channel._pending_resume["native_session_id"] == "sdk-1", "next build still resumes natively"
+
+
+@pytest.mark.asyncio
+async def test_reconnect_carries_the_convo_to_the_next_build(channel):
+    rec = channel._convo_store.create(backend="claude-code", profile="claude", native_session_id="sdk-1")
+    session = ConvoSession(channel._convo_store, backend="claude-code", profile="claude", resume_into=rec.id)
+    session.append("user", "hi")
+    channel._convo_session = session
+
+    await channel._teardown_locked(preserve_active_profile=True)
+
+    pending = channel._take_pending_resume()
+    assert pending["convo_id"] == rec.id and pending["native_session_id"] == "sdk-1"
+
+
+@pytest.mark.asyncio
+async def test_explicit_detach_does_not_carry_the_convo(channel):
+    rec = channel._convo_store.create(backend="echo", profile="echo")
+    session = ConvoSession(channel._convo_store, backend="echo", profile="echo", resume_into=rec.id)
+    session.append("user", "hi")
+    channel._convo_session = session
+
+    await channel._teardown_locked(preserve_active_profile=False)
+
+    assert channel._take_pending_resume() is None

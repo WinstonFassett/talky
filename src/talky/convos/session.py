@@ -24,18 +24,21 @@ class ConvoSession:
         self,
         store: ConvoStore,
         *,
+        enabled: bool = True,
         backend: str,
         profile: str,
         resume_into: Optional[str] = None,
         native_id_reader: Optional[NativeIdReader] = None,
     ) -> None:
         self._store = store
+        self.enabled = enabled
         self.backend = backend
         self.profile = profile
         self.resume_into = resume_into
         self._native_id_reader = native_id_reader
         self.record: Optional[ConvoRecord] = None
         self._ignored: list[str] = []
+        self._recheck: Optional[asyncio.TimerHandle] = None
 
     def ignore_assistant(self, text: str) -> None:
         """Don't record this exact bot utterance once (system cues like "Claude here.")."""
@@ -58,10 +61,12 @@ class ConvoSession:
         self.record = None
 
     def append(self, role: str, content: str, timestamp: Optional[float] = None) -> None:
-        if not (content or "").strip():
+        if not self.enabled or not (content or "").strip():
             return
         normalized = " ".join(content.split())
-        if role == "assistant" and normalized in self._ignored:
+        if role == "user":
+            self._ignored.clear()  # an announcement that never played back doesn't linger
+        elif normalized in self._ignored:
             self._ignored.remove(normalized)
             return
         try:
@@ -76,10 +81,12 @@ class ConvoSession:
         if role == "assistant":
             # Backends like claude report their session id just after the reply
             # finishes; re-read shortly so a daemon kill right after still has it.
+            if self._recheck is not None:
+                self._recheck.cancel()
             try:
-                asyncio.get_running_loop().call_later(NATIVE_ID_RECHECK_SECS, self.close)
+                self._recheck = asyncio.get_running_loop().call_later(NATIVE_ID_RECHECK_SECS, self.close)
             except RuntimeError:
-                pass
+                self._recheck = None
 
     def close(self) -> None:
         """Final metadata sync — some backends report their session id after the last reply."""
@@ -88,6 +95,13 @@ class ConvoSession:
                 self._sync_meta()
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"ConvoSession.close: {e}")
+
+    def shutdown(self) -> None:
+        """Call teardown: final sync, and no timer may touch the record afterwards."""
+        if self._recheck is not None:
+            self._recheck.cancel()
+            self._recheck = None
+        self.close()
 
     def _open(self) -> None:
         existing = self._store.get(self.resume_into) if self.resume_into else None
@@ -103,11 +117,13 @@ class ConvoSession:
         if rec is None:
             return
         changed = False
+        nsid = self._read_native_id()
         if (rec.backend, rec.profile) != (self.backend, self.profile):
             rec.backend, rec.profile = self.backend, self.profile
+            # A session id only means something to the backend that issued it.
+            rec.native_session_id = nsid
             changed = True
-        nsid = self._read_native_id()
-        if nsid and nsid != rec.native_session_id:
+        elif nsid and nsid != rec.native_session_id:
             rec.native_session_id = nsid
             changed = True
         if changed:

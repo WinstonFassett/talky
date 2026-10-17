@@ -49,11 +49,12 @@ _HERMES_DIR = os.path.expanduser("~/.hermes/hermes-agent")
 _HERMES_CONFIG = os.path.expanduser("~/.hermes/config.yaml")
 
 # Importing Hermes runs its bootstrap, which (a) re-execs the process under
-# Hermes's own venv unless this flag is set — the talky daemon then dies with
-# "No module named 'talky'" — and (b) swaps sys.path to Hermes's site-packages,
-# so talky's own later imports fail. Set the flag, then put talky's path back
-# in front, keeping Hermes's entries after it.
-os.environ.setdefault("HERMES_DISABLE_LAZY_INSTALLS", "1")
+# Hermes's own venv unless HERMES_DISABLE_LAZY_INSTALLS=1 — the talky daemon
+# then dies with "No module named 'talky'" — and (b) swaps sys.path to Hermes's
+# site-packages, so talky's own later imports fail. Force the flag for the
+# import only, then put talky's path back in front, keeping Hermes's after it.
+_HERMES_LAZY_ENV = os.environ.get("HERMES_DISABLE_LAZY_INSTALLS")
+os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
 _SYS_PATH_BEFORE_HERMES = list(sys.path)
 
 try:
@@ -64,6 +65,12 @@ try:
 except ImportError:
     _HERMES_AVAILABLE = False
 finally:
+    # The flag only matters during the bootstrap import; don't leak it to
+    # talky's own children or later Hermes installs.
+    if _HERMES_LAZY_ENV is None:
+        os.environ.pop("HERMES_DISABLE_LAZY_INSTALLS", None)
+    else:
+        os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = _HERMES_LAZY_ENV
     sys.path[:] = _SYS_PATH_BEFORE_HERMES + [
         p for p in dict.fromkeys(sys.path) if p not in _SYS_PATH_BEFORE_HERMES
     ]

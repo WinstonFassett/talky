@@ -126,8 +126,12 @@ def _resolve_backend_adapter_class(pm: Any, backend_name: str) -> Any:
     return getattr(llm_module, class_name)
 
 
-def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
-    """Build a fresh LLM service instance for the named backend."""
+def _instantiate_llm_backend(pm: Any, backend_name: str, resume: Optional[str] = None) -> Any:
+    """Build a fresh LLM service instance for the named backend.
+
+    ``resume`` (a convo's native session id, WIN-534) is passed to backends
+    whose constructor takes ``resume=``; it wins over talky-args.json.
+    """
     import json as _json
     from pathlib import Path as _Path
 
@@ -167,7 +171,9 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
         config["permission_mode"] = "bypassPermissions"
         logger.warning("claude: bypass_permissions=true from talky-args.json — skipping all permission checks")
 
-    if _startup_resume:
+    if resume and "resume" in sig:
+        config["resume"] = resume
+    elif _startup_resume:
         if "resume" in sig:
             config["resume"] = _startup_resume
             if _startup_cwd and "cwd" in sig:
@@ -1199,7 +1205,15 @@ class VoiceChannel:
         if self._assistant_sink is not None:
             self._assistant_sink.flush()
         if self._convo_session is not None:
-            self._convo_session.close()
+            self._convo_session.shutdown()
+            if (
+                preserve_active_profile
+                and self._convo_session.record is not None
+                and self._pending_resume is None  # an explicit resume wins
+            ):
+                # Reload / reconnect: the next pipeline's backends start blank,
+                # so continue this convo there (natively when possible).
+                self._pending_resume = self._resume_plan(self._convo_session.record.id, None)
         self._assistant_sink = None
         self._convo_session = None
         task = self._pipeline_task
@@ -1235,15 +1249,11 @@ class VoiceChannel:
 
     # ── convo resume (WIN-534) ──────────────────────────────────────────────
 
-    def resume_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
-        """Continue a saved convo, optionally on a different profile.
+    # A pending resume left unclaimed this long is dropped, so an unrelated call
+    # hours later starts fresh instead of appending to an old convo.
+    PENDING_RESUME_TTL_SECS = 30 * 60
 
-        Native resume (same backend + a stored native session id) is handled
-        by the existing ``--resume`` / ``set_resume`` path; this method binds
-        the call to the record and, when native resume doesn't apply, replays
-        the transcript via the backend's ``set_history``. The caller switches
-        the profile afterwards.
-        """
+    def _resume_plan(self, convo_id: str, profile: Optional[str]) -> dict:
         rec = self._convo_store.get(convo_id)
         if rec is None:
             raise ValueError(f"convo {convo_id!r} not found")
@@ -1252,33 +1262,58 @@ class VoiceChannel:
         target_profile = profile or rec.profile
         tp = get_profile_manager().get_talky_profile(target_profile)
         target_backend = (tp.llm_backend if tp and tp.llm_backend else None) or target_profile
-        native = bool(rec.native_session_id) and target_backend == rec.backend
-        pending = {
-            "convo_id": rec.id,
-            "backend": target_backend,
-            "replay": not native,
-            "turns": [{"role": t.role, "content": t.content} for t in self._convo_store.read_transcript(rec.id)],
-        }
-        # Also keep it pending: the next pipeline builds fresh backend instances
-        # that remember nothing, and a peer that just left still reads as live
-        # until ICE gives up, so the "live" call may be about to go away.
-        self._pending_resume = pending
-        if self.is_live() and self._convo_session is not None:
-            self._apply_replay(self._llm_services.get(target_backend), pending)
-            self._convo_session.bind(rec.id)
-            when = "live"
-        else:
-            when = "next_call"
-        how = "native" if native else f"replay {len(pending['turns'])} turns"
-        logger.info(f"VoiceChannel: resume convo {rec.id} on {target_profile} ({how}, {when})")
+        native = rec.native_session_id if rec.native_session_id and target_backend == rec.backend else None
         return {
             "convo_id": rec.id,
             "profile": target_profile,
             "backend": target_backend,
-            "native_session_id": rec.native_session_id if native else None,
-            "replay_turns": 0 if native else len(pending["turns"]),
+            "native_session_id": native,
+            "replay": native is None,
+            "turns": [{"role": t.role, "content": t.content} for t in self._convo_store.read_transcript(rec.id)],
+            "expires_at": time.monotonic() + self.PENDING_RESUME_TTL_SECS,
+        }
+
+    def _take_pending_resume(self) -> Optional[dict]:
+        pending, self._pending_resume = self._pending_resume, None
+        if pending is not None and time.monotonic() > pending["expires_at"]:
+            logger.info(f"VoiceChannel: pending resume of {pending['convo_id']} expired — starting fresh")
+            return None
+        return pending
+
+    def resume_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
+        """Continue a saved convo, optionally on a different profile.
+
+        Applied at the next pipeline build: native resume (same backend + a
+        stored native session id) via the backend's ``resume=``, otherwise a
+        transcript replay via ``set_history``. If a call is live, its already-
+        running backend can't switch sessions, so the transcript is replayed
+        into it now; the plan also stays pending for the next build, since a
+        peer that just left still reads as live until ICE gives up. The caller
+        switches the profile afterwards.
+        """
+        plan = self._resume_plan(convo_id, profile)
+        self._pending_resume = plan
+        if self.is_live() and self._convo_session is not None:
+            self._apply_replay(self._llm_services.get(plan["backend"]), {**plan, "replay": True})
+            self._convo_session.bind(plan["convo_id"])
+            when = "live"
+        else:
+            when = "next_call"
+        how = "native" if plan["native_session_id"] else f"replay {len(plan['turns'])} turns"
+        logger.info(f"VoiceChannel: resume convo {plan['convo_id']} on {plan['profile']} ({how}, {when})")
+        return {
+            "convo_id": plan["convo_id"],
+            "profile": plan["profile"],
+            "backend": plan["backend"],
+            "native_session_id": plan["native_session_id"],
+            "replay_turns": 0 if plan["native_session_id"] else len(plan["turns"]),
             "applied": when,
         }
+
+    @staticmethod
+    def _convos_enabled(pm: Any) -> bool:
+        settings = getattr(pm, "settings", None) or {}
+        return bool((settings.get("convos") or {}).get("enabled", True))
 
     @staticmethod
     def _apply_replay(service: Any, pending: dict) -> None:
@@ -1480,6 +1515,8 @@ class VoiceChannel:
             self.MCP_DRIVER_PROFILE: mcp_driver,
         }
 
+        pending = self._take_pending_resume()
+
         for backend_name in pm.list_llm_backends().keys():
             entry = self._backend_status.get(backend_name)
             status_str = entry.get("status") if entry else None
@@ -1491,7 +1528,8 @@ class VoiceChannel:
                 continue
 
             try:
-                svc = _instantiate_llm_backend(pm, backend_name)
+                native = pending.get("native_session_id") if pending and pending["backend"] == backend_name else None
+                svc = _instantiate_llm_backend(pm, backend_name, resume=native)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"VoiceChannel: skipping backend {backend_name!r}: {e}")
                 self._backend_status[backend_name] = {
@@ -1571,11 +1609,11 @@ class VoiceChannel:
         build_profile = self._active_profile or self.MCP_DRIVER_PROFILE
         _tp_build = pm.get_talky_profile(build_profile) if build_profile else None
         build_backend = (_tp_build.llm_backend if _tp_build and _tp_build.llm_backend else None) or build_profile
-        pending, self._pending_resume = self._pending_resume, None
         if pending is not None:
             self._apply_replay(profile_map.get(pending["backend"]), pending)
         session = ConvoSession(
             self._convo_store,
+            enabled=self._convos_enabled(pm),
             backend=build_backend,
             profile=build_profile,
             resume_into=pending["convo_id"] if pending else None,

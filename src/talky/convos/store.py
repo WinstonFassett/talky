@@ -99,15 +99,18 @@ class ConvoStore:
             title=title,
             native_session_id=native_session_id,
         )
-        self._dir(rec.id).mkdir(parents=True, exist_ok=True)
+        self._ensure_dir(rec.id)
         self._write_meta(rec)
         return rec
 
     def get(self, convo_id: str) -> Optional[ConvoRecord]:
+        if not _is_convo_id(convo_id):
+            return None
         meta = self._meta_path(convo_id)
         if not meta.exists():
             return None
-        return ConvoRecord.from_dict(json.loads(meta.read_text()))
+        rec = ConvoRecord.from_dict(json.loads(meta.read_text()))
+        return rec if rec.id == convo_id else None
 
     def list(self) -> list[ConvoRecord]:
         """Newest-first list of every convo on disk."""
@@ -117,13 +120,12 @@ class ConvoStore:
         for sub in self.root.iterdir():
             if not sub.is_dir():
                 continue
-            meta = sub / "convo.json"
-            if not meta.exists():
-                continue
             try:
-                out.append(ConvoRecord.from_dict(json.loads(meta.read_text())))
+                rec = self.get(sub.name)
             except Exception:  # noqa: BLE001
                 continue
+            if rec is not None:
+                out.append(rec)
         out.sort(key=lambda r: r.last_active_at, reverse=True)
         return out
 
@@ -155,8 +157,9 @@ class ConvoStore:
             return
         ts = timestamp if timestamp is not None else time.time()
         turn = TranscriptTurn(role=role, content=content, timestamp=ts)
-        self._dir(convo_id).mkdir(parents=True, exist_ok=True)
-        with self._transcript_path(convo_id).open("a", encoding="utf-8") as f:
+        self._ensure_dir(convo_id)
+        fd = os.open(self._transcript_path(convo_id), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(asdict(turn), ensure_ascii=False) + "\n")
 
         # Touch last_active_at + auto-title if still empty.
@@ -190,7 +193,14 @@ class ConvoStore:
     # --- paths -------------------------------------------------------------
 
     def _dir(self, convo_id: str) -> Path:
+        if not _is_convo_id(convo_id):
+            raise ValueError(f"not a convo id: {convo_id!r}")
         return self.root / convo_id
+
+    def _ensure_dir(self, convo_id: str) -> None:
+        # Transcripts are private: owner-only dirs and files.
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._dir(convo_id).mkdir(mode=0o700, exist_ok=True)
 
     def _meta_path(self, convo_id: str) -> Path:
         return self._dir(convo_id) / "convo.json"
@@ -200,10 +210,22 @@ class ConvoStore:
 
     def _write_meta(self, rec: ConvoRecord) -> None:
         p = self._meta_path(rec.id)
-        p.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_dir(rec.id)
         tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(rec.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(rec.to_dict(), ensure_ascii=False, indent=2))
         tmp.replace(p)
+
+
+def _is_convo_id(value: object) -> bool:
+    """Convo ids are uuid4 strings; anything else could escape the store root."""
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(uuid.UUID(value)) == value
+    except ValueError:
+        return False
 
 
 def _derive_title(first_user_utterance: str, max_len: int = 60) -> str:
