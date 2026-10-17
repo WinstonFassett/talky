@@ -1,0 +1,316 @@
+"""Unit tests for convo resume (WIN-534): sessions, replay, the daemon hook, the CLI."""
+
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import time
+
+import pytest
+
+from talky.backends.echo import EchoLLMService
+from talky.convos.replay import HistoryPreambleMixin, format_history_preamble
+from talky.convos.session import ConvoSession, native_session_id_of
+from talky.convos.store import ConvoStore
+
+TURNS = [
+    {"role": "user", "content": "my code word is pineapple"},
+    {"role": "assistant", "content": "got it"},
+]
+
+
+# --- replay ----------------------------------------------------------------
+
+
+def test_preamble_contains_turns_and_is_one_shot():
+    class Svc(HistoryPreambleMixin):
+        pass
+
+    svc = Svc()
+    svc.set_history(TURNS)
+    first = svc._consume_preamble("what was my code word?")
+    assert "user: my code word is pineapple" in first
+    assert first.endswith("what was my code word?")
+    assert svc._consume_preamble("again") == "again"
+
+
+def test_preamble_drops_oldest_turns_past_the_cap():
+    turns = [{"role": "user", "content": f"turn {i} " + "x" * 50} for i in range(10)]
+    out = format_history_preamble(turns, max_chars=200)
+    assert "turn 9" in out and "turn 0" not in out
+
+
+def test_empty_history_gives_no_preamble():
+    assert format_history_preamble([]) == ""
+
+
+@pytest.mark.parametrize(
+    "module, cls",
+    [
+        ("talky.backends.claude_code", "ClaudeCodeLLMService"),
+        ("talky.backends.hermes", "HermesLLMService"),
+        ("talky.backends.opencode", "OpencodeLLMService"),
+        ("talky.backends.pi_rpc", "PiRPCLLMService"),
+        ("talky.backends.openclaw", "OpenClawLLMService"),
+        ("talky.backends.openclaw", "OpenClawVoiceLLMService"),
+        ("talky.backends.moltis", "MoltisLLMService"),
+    ],
+)
+def test_every_real_backend_accepts_history(module, cls):
+    import importlib
+
+    assert issubclass(getattr(importlib.import_module(module), cls), HistoryPreambleMixin)
+
+
+def test_hermes_import_disables_its_self_relaunch():
+    import os
+
+    import talky.backends.hermes  # noqa: F401
+
+    assert os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") == "1"
+
+
+def test_echo_set_history_recalls_once():
+    svc = EchoLLMService()
+    svc.set_history(TURNS)
+    assert "pineapple" in svc.render("remind me")
+    assert "pineapple" not in svc.render("again")
+
+
+# --- session ---------------------------------------------------------------
+
+
+def test_session_creates_record_only_on_first_turn(tmp_path):
+    store = ConvoStore(root=tmp_path)
+    session = ConvoSession(store, backend="echo", profile="echo")
+    assert store.list() == []
+    session.append("user", "   ")
+    assert store.list() == []
+    session.append("user", "hi")
+    assert [r.id for r in store.list()] == [session.record.id]
+
+
+def test_session_resume_into_appends_to_existing_record(tmp_path):
+    store = ConvoStore(root=tmp_path)
+    old = store.create(backend="echo", profile="echo")
+    store.append_turn(old.id, "user", "first call")
+
+    session = ConvoSession(store, backend="claude-code", profile="claude", resume_into=old.id)
+    session.append("user", "second call")
+
+    assert [r.id for r in store.list()] == [old.id]
+    assert [t.content for t in store.read_transcript(old.id)] == ["first call", "second call"]
+    rec = store.get(old.id)
+    assert (rec.backend, rec.profile) == ("claude-code", "claude")
+
+
+def test_session_captures_native_id_once_backend_has_one(tmp_path):
+    store = ConvoStore(root=tmp_path)
+    box = {"id": None}
+    session = ConvoSession(store, backend="claude-code", profile="claude", native_id_reader=lambda: box["id"])
+    session.append("user", "hi")
+    assert store.get(session.record.id).native_session_id is None
+    session.append("assistant", "hello")
+    box["id"] = "sdk-session-1"  # reported only after the last reply
+    session.close()
+    assert store.get(session.record.id).native_session_id == "sdk-session-1"
+
+
+def test_session_skips_ignored_announcement_once(tmp_path):
+    store = ConvoStore(root=tmp_path)
+    session = ConvoSession(store, backend="claude-code", profile="claude")
+    session.ignore_assistant("Claude here.")
+    session.append("assistant", "Claude  here.")
+    session.append("user", "hi")
+    session.append("assistant", "Claude here.")
+    assert [(t.role, t.content) for t in store.read_transcript(session.record.id)] == [
+        ("user", "hi"),
+        ("assistant", "Claude here."),
+    ]
+
+
+def test_native_session_id_of_reads_known_attributes():
+    class A:
+        _last_session_id = "abc"
+
+    assert native_session_id_of(A()) == "abc"
+    assert native_session_id_of(object()) is None
+
+
+def test_assistant_sink_flush_saves_half_spoken_reply(tmp_path):
+    from pipecat.utils.string import TextPartForConcatenation
+
+    from talky.convos.transcript_sink import ConvoAssistantTranscriptProcessor
+
+    store = ConvoStore(root=tmp_path)
+    session = ConvoSession(store, backend="echo", profile="echo")
+    sink = ConvoAssistantTranscriptProcessor(session)
+    sink._current_assistant_text_parts = [
+        TextPartForConcatenation("earlier you said", includes_inter_part_spaces=False),
+        TextPartForConcatenation("pineapple", includes_inter_part_spaces=False),
+    ]
+    sink.flush()
+    turns = store.read_transcript(session.record.id)
+    assert [(t.role, t.content) for t in turns] == [("assistant", "earlier you said pineapple")]
+    sink.flush()  # nothing left; no duplicate
+    assert len(store.read_transcript(session.record.id)) == 1
+
+
+# --- daemon side: VoiceChannel.resume_convo ---------------------------------
+
+
+@pytest.fixture
+def channel(tmp_path, monkeypatch):
+    monkeypatch.setenv("TALKY_CONVOS_DIR", str(tmp_path))
+
+    class _TP:
+        def __init__(self, backend):
+            self.llm_backend = backend
+
+    class _PM:
+        def get_talky_profile(self, name):
+            return _TP({"claude": "claude-code"}.get(name, name))
+
+    monkeypatch.setattr("talky.shared.profile_manager.get_profile_manager", lambda: _PM())
+    from talky.server.channel import VoiceChannel
+
+    return VoiceChannel()
+
+
+def test_resume_convo_without_live_call_is_pending_replay(channel):
+    rec = channel._convo_store.create(backend="echo", profile="echo")
+    channel._convo_store.append_turn(rec.id, "user", "my code word is pineapple")
+
+    out = channel.resume_convo(rec.id, "claude")
+
+    assert out["applied"] == "next_call"
+    assert out["native_session_id"] is None and out["replay_turns"] == 1
+    assert channel._pending_resume["backend"] == "claude-code"
+    assert channel._pending_resume["convo_id"] == rec.id
+
+
+def test_resume_convo_same_backend_with_native_id_skips_replay(channel):
+    rec = channel._convo_store.create(backend="claude-code", profile="claude", native_session_id="sdk-1")
+    channel._convo_store.append_turn(rec.id, "user", "hi")
+
+    out = channel.resume_convo(rec.id)
+
+    assert out["native_session_id"] == "sdk-1" and out["replay_turns"] == 0
+    assert channel._pending_resume["replay"] is False
+
+
+def test_resume_convo_unknown_id_raises(channel):
+    with pytest.raises(ValueError):
+        channel.resume_convo("nope")
+
+
+def test_apply_replay_seeds_backend():
+    from talky.server.channel import VoiceChannel
+
+    svc = EchoLLMService()
+    VoiceChannel._apply_replay(svc, {"replay": True, "turns": TURNS, "backend": "echo"})
+    assert "pineapple" in svc.render("x")
+
+
+# --- CLI: talky resume -----------------------------------------------------
+
+
+def test_cmd_resume_binds_switches_then_resumes_natively(tmp_path, monkeypatch):
+    monkeypatch.setenv("TALKY_CONVOS_DIR", str(tmp_path / "convos"))
+    import talky.cli as cli
+    from talky.convos import default_store
+
+    rec = default_store().create(backend="claude-code", profile="claude", native_session_id="sdk-1")
+    calls: list = []
+
+    def fake_urlopen(req, timeout=3):  # noqa: ARG001
+        url = req if isinstance(req, str) else req.full_url
+        path = url.split("8765", 1)[-1] if "8765" in url else url
+        body = json.loads(req.data) if not isinstance(req, str) and req.data else None
+        calls.append((path, body))
+        if path.endswith("/status"):
+            payload = {"channel": {"live": True}}
+        elif path.endswith("/api/convos/resume"):
+            payload = {"backend": "claude-code", "native_session_id": "sdk-1", "replay_turns": 0, "applied": "live"}
+        else:
+            payload = {"status": "ok"}
+
+        class _R(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        return _R(json.dumps(payload).encode())
+
+    monkeypatch.setattr(cli, "ensure_daemon", lambda *a, **k: True)
+    monkeypatch.setattr(cli, "daemon_base_url", lambda: "http://127.0.0.1:8765")
+    monkeypatch.setattr(cli, "daemon_urlopen", fake_urlopen)
+    monkeypatch.setattr(cli, "_open_client", lambda url: calls.append(("OPEN", url)))
+
+    cli.cmd_resume(argparse.Namespace(id=None, profile=None, no_open=False))  # no id = most recent
+
+    posts = [(p, b) for p, b in calls if b is not None]
+    assert [p for p, _ in posts] == ["/api/convos/resume", "/api/profile", "/api/resume"]
+    assert posts[0][1] == {"convo_id": rec.id, "profile": "claude"}
+    assert posts[2][1] == {"session_id": "sdk-1"}
+    assert not any(c[0] == "OPEN" for c in calls), "live call: nothing to open"
+
+
+@pytest.mark.asyncio
+async def test_echo_processes_frame_with_seeded_recall():
+    from pipecat.frames.frames import TextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+
+    from talky.server.turn import UserTurnTextFrame
+
+    svc = EchoLLMService()
+    svc.set_history(TURNS)
+    emitted: list = []
+
+    async def _push(frame, direction=None):  # noqa: ANN001
+        emitted.append(frame)
+
+    svc.push_frame = _push  # type: ignore[assignment]
+    await svc.process_frame(UserTurnTextFrame(text="say it", timestamp=time.time()), FrameDirection.DOWNSTREAM)
+    texts = [f.text for f in emitted if isinstance(f, TextFrame)]
+    assert texts and "pineapple" in texts[0]
+
+
+# --- channel races that broke resume ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stale_disconnect_from_replaced_peer_does_not_tear_down(channel, monkeypatch):
+    torn = []
+
+    async def fake_teardown(preserve_active_profile=False):
+        torn.append(preserve_active_profile)
+
+    monkeypatch.setattr(channel, "_teardown_locked", fake_teardown)
+    old_peer, new_peer = object(), object()
+    channel._transport = new_peer
+
+    await channel._disconnect_cleanup(old_peer)
+    assert torn == []
+
+    await channel._disconnect_cleanup(new_peer)
+    assert torn == [True]
+
+
+def test_claude_never_continues_the_cwds_latest_session():
+    from talky.backends.claude_code import ClaudeCodeLLMService
+
+    assert ClaudeCodeLLMService()._build_options().continue_conversation is False
+    opts = ClaudeCodeLLMService(resume="sdk-1")._build_options()
+    assert opts.continue_conversation is False and opts.resume == "sdk-1"
+
+
+def test_claude_sdk_skips_unknown_message_types_instead_of_ending_stream():
+    import claude_code_sdk._internal.client as sdk_client
+
+    import talky.backends.claude_code  # noqa: F401  (applies the patch)
+
+    assert sdk_client.parse_message({"type": "rate_limit_event"}) is None

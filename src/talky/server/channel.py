@@ -100,6 +100,12 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from talky.convos import default_store
+from talky.convos.session import ConvoSession, native_session_id_of
+from talky.convos.transcript_sink import (
+    ConvoAssistantTranscriptProcessor,
+    TalkyUserTranscriptProcessor,
+)
 from talky.server.agent_ext import AgentExtensionLLMService
 from talky.server.mcp_driver import MCPDriverLLMService
 from talky.server.turn import TalkyUserTurnDetector
@@ -229,6 +235,14 @@ class VoiceChannel:
 
         # Speech buffer — written by MCPDriverLLMService, drained by listen()
         self._user_speech_queue: asyncio.Queue[Any] = asyncio.Queue()
+
+        # WIN-534: one ConvoSession per call (pipeline build); its record is
+        # created on the first real turn. _pending_resume is set by
+        # resume_convo() when no call is live and applied at the next build.
+        self._convo_store = default_store()
+        self._convo_session: Optional[ConvoSession] = None
+        self._assistant_sink: Optional[ConvoAssistantTranscriptProcessor] = None
+        self._pending_resume: Optional[dict] = None
 
         # Speech-onset sentinel — set when VAD detects the user started
         # speaking, cleared on pipeline teardown. Used by request_leave
@@ -687,12 +701,21 @@ class VoiceChannel:
         logger.info(f"VoiceChannel: active profile → {profile_name!r}")
         await self._emit_profile_changed(profile_name)
 
+        if self._convo_session is not None:
+            self._convo_session.set_active(
+                backend=service_key,
+                profile=profile_name,
+                native_id_reader=lambda svc=service: native_session_id_of(svc),
+            )
+
         # System announcement on manual picker switches only (tickets 8c9d, e540).
         # Agent-join paths pass announce=False — the agent owns its own greeting
         # via the extension's TTS stream.
         if announce:
             announcement = self._announcement_for_profile(profile_name)
             if announcement:
+                if self._convo_session is not None:
+                    self._convo_session.ignore_assistant(announcement)
                 try:
                     await self.speak(announcement)
                     logger.info(f"VoiceChannel: announced {announcement!r}")
@@ -1094,7 +1117,9 @@ class VoiceChannel:
 
             if self.is_live():
                 logger.info("VoiceChannel.attach: tearing down previous pipeline first")
-                await self._teardown_locked()
+                # A replaced peer (reload, or a new client before ICE noticed the
+                # old one left) keeps the room's profile, same as a disconnect.
+                await self._teardown_locked(preserve_active_profile=True)
 
             # Fresh sentinel + queue per connection so leftover state from
             # the previous session can't leak into this one.
@@ -1135,7 +1160,7 @@ class VoiceChannel:
         async with self._attach_lock:
             await self._teardown_locked(preserve_active_profile=False)
 
-    async def _disconnect_cleanup(self) -> None:
+    async def _disconnect_cleanup(self, transport: Any = None) -> None:
         """Tear down the pipeline but preserve the active profile.
 
         Triggered by the transport's ``on_client_disconnected`` event
@@ -1146,6 +1171,11 @@ class VoiceChannel:
         idle-TTL teardown (ticket 0c5d).
         """
         async with self._attach_lock:
+            if transport is not None and transport is not self._transport:
+                # A replaced peer's disconnect can arrive after the new call is
+                # up; tearing down here would kill the new call.
+                logger.info("VoiceChannel: ignoring disconnect from a replaced peer")
+                return
             await self._teardown_locked(preserve_active_profile=True)
             # Schedule TTL inside the lock so a concurrent attach() that
             # already holds or is waiting on the lock will see the cancel
@@ -1164,6 +1194,14 @@ class VoiceChannel:
         """
         self._disconnected.set()
         self._user_speaking.clear()
+        # The pipeline is cancelled below without a closing frame reaching the
+        # assistant sink, so persist any half-spoken reply now.
+        if self._assistant_sink is not None:
+            self._assistant_sink.flush()
+        if self._convo_session is not None:
+            self._convo_session.close()
+        self._assistant_sink = None
+        self._convo_session = None
         task = self._pipeline_task
         runner_task = self._runner_task
         self._pipeline_task = None
@@ -1194,6 +1232,67 @@ class VoiceChannel:
                 await runner_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+    # ── convo resume (WIN-534) ──────────────────────────────────────────────
+
+    def resume_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
+        """Continue a saved convo, optionally on a different profile.
+
+        Native resume (same backend + a stored native session id) is handled
+        by the existing ``--resume`` / ``set_resume`` path; this method binds
+        the call to the record and, when native resume doesn't apply, replays
+        the transcript via the backend's ``set_history``. The caller switches
+        the profile afterwards.
+        """
+        rec = self._convo_store.get(convo_id)
+        if rec is None:
+            raise ValueError(f"convo {convo_id!r} not found")
+        from talky.shared.profile_manager import get_profile_manager
+
+        target_profile = profile or rec.profile
+        tp = get_profile_manager().get_talky_profile(target_profile)
+        target_backend = (tp.llm_backend if tp and tp.llm_backend else None) or target_profile
+        native = bool(rec.native_session_id) and target_backend == rec.backend
+        pending = {
+            "convo_id": rec.id,
+            "backend": target_backend,
+            "replay": not native,
+            "turns": [{"role": t.role, "content": t.content} for t in self._convo_store.read_transcript(rec.id)],
+        }
+        # Also keep it pending: the next pipeline builds fresh backend instances
+        # that remember nothing, and a peer that just left still reads as live
+        # until ICE gives up, so the "live" call may be about to go away.
+        self._pending_resume = pending
+        if self.is_live() and self._convo_session is not None:
+            self._apply_replay(self._llm_services.get(target_backend), pending)
+            self._convo_session.bind(rec.id)
+            when = "live"
+        else:
+            when = "next_call"
+        how = "native" if native else f"replay {len(pending['turns'])} turns"
+        logger.info(f"VoiceChannel: resume convo {rec.id} on {target_profile} ({how}, {when})")
+        return {
+            "convo_id": rec.id,
+            "profile": target_profile,
+            "backend": target_backend,
+            "native_session_id": rec.native_session_id if native else None,
+            "replay_turns": 0 if native else len(pending["turns"]),
+            "applied": when,
+        }
+
+    @staticmethod
+    def _apply_replay(service: Any, pending: dict) -> None:
+        if not pending.get("replay") or not pending.get("turns"):
+            return
+        if service is None:
+            logger.warning(f"VoiceChannel: {pending['backend']} isn't loaded in this pipeline — replay skipped")
+            return
+        set_history = getattr(service, "set_history", None)
+        if not callable(set_history):
+            logger.warning(f"VoiceChannel: {pending['backend']} has no set_history — replay skipped")
+            return
+        set_history(pending["turns"])
+        logger.info(f"VoiceChannel: replayed {len(pending['turns'])} turns into {pending['backend']}")
 
     # ── speak / listen ──────────────────────────────────────────────────────
 
@@ -1469,16 +1568,35 @@ class VoiceChannel:
             ),
         )
 
-        pipeline = Pipeline(
-            [
-                transport.input(),
-                stt,
-                turn_detector,
-                llm_switcher,
-                tts_switcher,
-                transport.output(),
-            ]
+        build_profile = self._active_profile or self.MCP_DRIVER_PROFILE
+        _tp_build = pm.get_talky_profile(build_profile) if build_profile else None
+        build_backend = (_tp_build.llm_backend if _tp_build and _tp_build.llm_backend else None) or build_profile
+        pending, self._pending_resume = self._pending_resume, None
+        if pending is not None:
+            self._apply_replay(profile_map.get(pending["backend"]), pending)
+        session = ConvoSession(
+            self._convo_store,
+            backend=build_backend,
+            profile=build_profile,
+            resume_into=pending["convo_id"] if pending else None,
+            native_id_reader=lambda svc=profile_map.get(build_backend): native_session_id_of(svc),
         )
+        assistant_sink = ConvoAssistantTranscriptProcessor(session)
+        self._convo_session = session
+        self._assistant_sink = assistant_sink
+
+        pipeline_steps: list = [
+            transport.input(),
+            stt,
+            turn_detector,
+            TalkyUserTranscriptProcessor(session),
+            llm_switcher,
+            tts_switcher,
+            assistant_sink,
+            transport.output(),
+        ]
+
+        pipeline = Pipeline(pipeline_steps)
 
         # 9e7d fix: disable pipecat's default 5-minute idle timeout so the
         # session doesn't self-cancel when the user steps away.
@@ -1537,7 +1655,7 @@ class VoiceChannel:
             # pipeline rebuilds, so the pipeline itself has to be rebuilt
             # — but from the user's perspective, closing and reopening
             # the browser should feel seamless.
-            asyncio.create_task(self._disconnect_cleanup())
+            asyncio.create_task(self._disconnect_cleanup(transport))
 
         # Speech-onset handler — sets _user_speaking when VAD detects
         # the user started talking. Used by request_leave to detect
