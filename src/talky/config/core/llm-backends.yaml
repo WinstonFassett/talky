@@ -70,14 +70,15 @@ llm_backends:
       cwd: null
       max_turns: 90
   devin:
-    description: "Devin CLI (local terminal agent, subprocess)"
-    service_class: "talky.backends.devin.DevinLLMService"
+    description: "Devin CLI via ACP (devin acp, interruptible, resumable)"
+    service_class: "talky.backends.devin.DevinACPLLMService"
     announcement: "Devin channel."
     config:
-      permission_mode: "accept-edits"
+      mode: "accept-edits"
       model: null
       cwd: null
       binary: null
+      cloud: false
   opencode:
     description: "Opencode (sst/opencode) via HTTP server, streaming + permission asks"
     service_class: "talky.backends.opencode.OpencodeLLMService"

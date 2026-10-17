@@ -40,7 +40,7 @@ talky_profiles:
     description: "Opencode"
     llm_backend: "opencode"
 
-  # Devin (cognition.ai) — REST + polling cloud agent
+  # Devin (cognition.ai) — local devin CLI over ACP (devin acp)
   devin:
     description: "Devin"
     llm_backend: "devin"
