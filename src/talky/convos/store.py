@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -49,6 +50,8 @@ class ConvoRecord:
     last_active_at: float
     title: str = ""
     native_session_id: Optional[str] = None  # backend's own session id, when it has one
+    pinned: bool = False
+    archived: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -63,6 +66,8 @@ class ConvoRecord:
             last_active_at=float(d["last_active_at"]),
             title=d.get("title", "") or "",
             native_session_id=d.get("native_session_id") or None,
+            pinned=bool(d.get("pinned", False)),
+            archived=bool(d.get("archived", False)),
         )
 
 
@@ -150,6 +155,71 @@ class ConvoStore:
         rec.last_active_at = time.time()
         self._write_meta(rec)
 
+    def update(
+        self,
+        convo_id: str,
+        *,
+        title: Optional[str] = None,
+        pinned: Optional[bool] = None,
+        archived: Optional[bool] = None,
+    ) -> Optional[ConvoRecord]:
+        """Rename / pin / archive. Leaves last_active_at alone so the list doesn't reorder."""
+        rec = self.get(convo_id)
+        if rec is None:
+            return None
+        if title is not None:
+            rec.title = " ".join(title.split())[:200]
+        if pinned is not None:
+            rec.pinned = bool(pinned)
+        if archived is not None:
+            rec.archived = bool(archived)
+        self._write_meta(rec)
+        return rec
+
+    def delete(self, convo_id: str) -> bool:
+        """Remove a convo's directory; works on a corrupt record too."""
+        if not _is_convo_id(convo_id) or not self._dir(convo_id).is_dir():
+            return False
+        shutil.rmtree(self._dir(convo_id))
+        return True
+
+    def search(self, query: str) -> list[tuple[ConvoRecord, Optional[str]]]:
+        """Newest-first convos whose title or transcript contains ``query`` (case-insensitive).
+
+        Each hit comes with a short snippet of the first matching turn, or None
+        when only the title matched.
+        """
+        q = " ".join((query or "").split()).lower()
+        out: list[tuple[ConvoRecord, Optional[str]]] = []
+        for rec in self.list():
+            if not q:
+                out.append((rec, None))
+                continue
+            snippet = None
+            for turn in self.read_transcript(rec.id):
+                text = " ".join(turn.content.split())
+                i = text.lower().find(q)
+                if i >= 0:
+                    snippet = _snippet(text, i, len(q))
+                    break
+            if snippet is not None or q in rec.title.lower():
+                out.append((rec, snippet))
+        return out
+
+    def read_transcript_page(
+        self, convo_id: str, *, before: Optional[int] = None, limit: int = 200
+    ) -> tuple[list[TranscriptTurn], int, int]:
+        """The ``limit`` turns just before index ``before`` (default: the end).
+
+        Returns ``(turns, start, total)``; ``start`` is the index of the first
+        returned turn, so ``start > 0`` means older turns remain.
+        """
+        turns = self.read_transcript(convo_id)
+        total = len(turns)
+        end = total if before is None else max(0, min(before, total))
+        start = max(0, end - max(1, limit))
+        return turns[start:end], start, total
+
     def append_turn(self, convo_id: str, role: str, content: str, timestamp: Optional[float] = None) -> None:
         """Append one user or assistant utterance to the transcript."""
         content = (content or "").strip()
@@ -233,6 +303,12 @@ def _derive_title(first_user_utterance: str, max_len: int = 60) -> str:
     if len(s) <= max_len:
         return s
     return s[: max_len - 1].rstrip() + "…"
+
+
+def _snippet(text: str, at: int, length: int, context: int = 40) -> str:
+    start = max(0, at - context)
+    end = min(len(text), at + length + context)
+    return ("…" if start > 0 else "") + text[start:end] + ("…" if end < len(text) else "")
 
 
 def default_store() -> ConvoStore:

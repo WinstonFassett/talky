@@ -107,6 +107,7 @@ from talky.convos.transcript_sink import (
     TalkyUserTranscriptProcessor,
 )
 from talky.server.agent_ext import AgentExtensionLLMService
+from talky.server.event_bus import event_bus
 from talky.server.mcp_driver import MCPDriverLLMService
 from talky.server.turn import TalkyUserTurnDetector
 
@@ -249,6 +250,7 @@ class VoiceChannel:
         self._convo_session: Optional[ConvoSession] = None
         self._assistant_sink: Optional[ConvoAssistantTranscriptProcessor] = None
         self._pending_resume: Optional[dict] = None
+        event_bus.add_listener(self._on_bus_event)
 
         # Speech-onset sentinel — set when VAD detects the user started
         # speaking, cleared on pipeline teardown. Used by request_leave
@@ -1299,6 +1301,33 @@ class VoiceChannel:
         if self._convo_session is not None:
             self._convo_session.start_fresh()
         logger.info("VoiceChannel: next turn starts a new convo")
+        self._emit_convo_changed(None, "current", "idle")
+
+    def current_convo(self) -> Optional[dict]:
+        """The convo the next turn lands in: the live call's, else a pending resume's.
+
+        ``None`` means the next turn opens a new record.
+        """
+        session = self._convo_session
+        if session is not None and session.convo_id:
+            return {"id": session.convo_id, "status": session.status, "live": self.is_live()}
+        if session is None and self._pending_resume is not None:
+            if time.monotonic() <= self._pending_resume["expires_at"]:
+                return {"id": self._pending_resume["convo_id"], "status": "idle", "live": False}
+        return None
+
+    def _emit_convo_changed(self, convo_id: Optional[str], reason: str, status: str = "idle") -> None:
+        """SSE ``convoChanged`` so the session list updates by itself (WIN-535)."""
+        cur = self.current_convo()
+        data = {"id": convo_id, "reason": reason, "status": status, "current": cur["id"] if cur else None}
+        try:
+            asyncio.get_running_loop().create_task(event_bus.emit("convoChanged", data))
+        except RuntimeError:
+            pass  # no loop (unit tests): nobody is listening
+
+    def _on_bus_event(self, ev: Any) -> None:
+        if ev.type == "backendError" and self._convo_session is not None:
+            self._convo_session.set_failed()
 
     def resume_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
         """Continue a saved convo, optionally on a different profile.
@@ -1324,6 +1353,7 @@ class VoiceChannel:
             when = "next_call"
         how = "native" if plan["native_session_id"] else f"replay {len(plan['turns'])} turns"
         logger.info(f"VoiceChannel: resume convo {plan['convo_id']} on {plan['profile']} ({how}, {when})")
+        self._emit_convo_changed(plan["convo_id"], "current", "idle")
         return {
             "convo_id": plan["convo_id"],
             "profile": plan["profile"],
@@ -1641,6 +1671,7 @@ class VoiceChannel:
             profile=build_profile,
             resume_into=pending["convo_id"] if pending else None,
             native_id_reader=lambda svc=profile_map.get(build_backend): native_session_id_of(svc),
+            on_change=self._emit_convo_changed,
         )
         assistant_sink = ConvoAssistantTranscriptProcessor(session)
         self._convo_session = session

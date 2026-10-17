@@ -916,6 +916,96 @@ def _build_webrtc_routes():
         voice_channel.new_convo()
         return JSONResponse({"status": "ok"})
 
+    # ── convo browsing (WIN-535) ─────────────────────────────────────────
+    # The app's session sidebar reads these; the CLI reads the store directly.
+
+    def _convo_row(rec, snippet=None) -> dict:  # noqa: ANN001
+        row = rec.to_dict()
+        row["snippet"] = snippet
+        return row
+
+    def _emit_convo(convo_id: str, reason: str) -> None:
+        voice_channel._emit_convo_changed(convo_id, reason)  # noqa: SLF001
+
+    async def handle_list_convos(request: Request):
+        """GET /api/convos?q=&archived=0|1|all — newest-first convos plus the current one.
+
+        ``q`` matches titles and transcript text. Pinned convos sort first.
+        """
+        q = request.query_params.get("q", "")
+        archived = request.query_params.get("archived", "0")
+        hits = await asyncio.to_thread(voice_channel._convo_store.search, q)  # noqa: SLF001
+        if archived != "all":
+            want = archived == "1"
+            hits = [(r, s) for r, s in hits if r.archived == want]
+        hits.sort(key=lambda h: (not h[0].pinned, -h[0].last_active_at))
+        return JSONResponse({
+            "convos": [_convo_row(r, s) for r, s in hits],
+            "current": voice_channel.current_convo(),
+        })
+
+    async def handle_get_convo(request: Request):
+        """GET /api/convos/{id}?before=&limit= — a convo and a page of its transcript.
+
+        Without ``before`` it returns the newest ``limit`` turns; pass the
+        returned ``start`` as ``before`` to page in older ones.
+        """
+        convo_id = request.path_params["convo_id"]
+        store = voice_channel._convo_store  # noqa: SLF001
+        try:
+            rec = store.get(convo_id)
+        except Exception as e:  # noqa: BLE001 — corrupt convo.json
+            return JSONResponse({"error": f"could not read {convo_id!r}: {e}"}, status_code=500)
+        if rec is None:
+            return JSONResponse({"error": f"convo {convo_id!r} not found"}, status_code=404)
+        try:
+            before = int(request.query_params["before"]) if "before" in request.query_params else None
+            limit = int(request.query_params.get("limit", "200"))
+        except ValueError:
+            return JSONResponse({"error": "before/limit must be integers"}, status_code=400)
+        turns, start, total = await asyncio.to_thread(store.read_transcript_page, convo_id, before=before, limit=limit)
+        return JSONResponse({
+            "convo": _convo_row(rec),
+            "turns": [
+                {"index": start + i, "role": t.role, "content": t.content, "timestamp": t.timestamp}
+                for i, t in enumerate(turns)
+            ],
+            "start": start,
+            "total": total,
+        })
+
+    async def handle_patch_convo(request: Request):
+        """PATCH /api/convos/{id} — JSON ``{title?, pinned?, archived?}``."""
+        convo_id = request.path_params["convo_id"]
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+        fields = {k: body[k] for k in ("title", "pinned", "archived") if k in body}
+        if "title" in fields and not isinstance(fields["title"], str):
+            return JSONResponse({"error": "title must be a string"}, status_code=400)
+        for k in ("pinned", "archived"):
+            if k in fields and not isinstance(fields[k], bool):
+                return JSONResponse({"error": f"{k} must be a boolean"}, status_code=400)
+        rec = voice_channel._convo_store.update(convo_id, **fields)  # noqa: SLF001
+        if rec is None:
+            return JSONResponse({"error": f"convo {convo_id!r} not found"}, status_code=404)
+        _emit_convo(convo_id, "updated")
+        return JSONResponse({"status": "ok", "convo": _convo_row(rec)})
+
+    async def handle_delete_convo(request: Request):
+        """DELETE /api/convos/{id}. Deleting the current convo makes the next turn start fresh."""
+        convo_id = request.path_params["convo_id"]
+        cur = voice_channel.current_convo()
+        if cur and cur["id"] == convo_id:
+            voice_channel.new_convo()
+        if not voice_channel._convo_store.delete(convo_id):  # noqa: SLF001
+            return JSONResponse({"error": f"convo {convo_id!r} not found"}, status_code=404)
+        _emit_convo(convo_id, "deleted")
+        return JSONResponse({"status": "ok"})
+
     async def handle_get_steer_mode(request: Request):  # noqa: ARG001
         """GET /api/steer-mode — return active steer mode for hermes backend."""
         from talky.backends.hermes import HermesLLMService
@@ -1204,6 +1294,10 @@ def _build_webrtc_routes():
         Route("/api/resume", handle_set_resume, methods=["POST"]),
         Route("/api/convos/resume", handle_resume_convo, methods=["POST"]),
         Route("/api/convos/new", handle_new_convo, methods=["POST"]),
+        Route("/api/convos", handle_list_convos, methods=["GET"]),
+        Route("/api/convos/{convo_id}", handle_get_convo, methods=["GET"]),
+        Route("/api/convos/{convo_id}", handle_patch_convo, methods=["PATCH"]),
+        Route("/api/convos/{convo_id}", handle_delete_convo, methods=["DELETE"]),
         Route("/api/steer-mode", handle_get_steer_mode, methods=["GET"]),
         Route("/api/steer-mode", handle_set_steer_mode, methods=["POST"]),
         Route("/api/permission/grant", handle_permission_grant, methods=["POST"]),
