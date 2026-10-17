@@ -23,6 +23,11 @@ talky_profiles:
     description: "Pi"
     llm_backend: "pi"
 
+  # Pi coding agent — durable sessions (resumable across daemon restarts). WIN-533.
+  pi-durable:
+    description: "Pi (durable sessions)"
+    llm_backend: "pi-durable"
+
   # Claude — background (Agent SDK) and foreground (CLI) variants are defined
   # in the defaults template, following the standard `<agent>` / `<agent>-tui`
   # naming convention. The Agent SDK (claude-code-sdk) wraps the `claude` CLI

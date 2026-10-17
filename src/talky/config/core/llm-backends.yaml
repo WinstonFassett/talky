@@ -51,6 +51,11 @@ llm_backends:
     service_class: "talky.backends.pi_rpc.PiRPCLLMService"
     announcement: "Pi channel."
     config: {}
+  pi-durable:
+    description: "Pi coding agent (RPC mode, durable session — survives daemon restart)"
+    service_class: "talky.backends.pi_durable.PiDurableLLMService"
+    announcement: "Pi durable channel."
+    config: {}
   claude-code:
     description: "Claude Code via Agent SDK (thread bridge, turn-boundary interrupt)"
     service_class: "talky.backends.claude_code.ClaudeCodeLLMService"

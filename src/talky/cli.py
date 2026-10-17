@@ -744,6 +744,29 @@ def cmd_profile(args):
         _open_client(client_url)
 
 
+def cmd_convos(args):
+    """List resumable pi-durable sessions (WIN-533).
+
+    Resume one with: talky profile pi-durable --resume <id>
+    """
+    from talky.backends.pi_durable import list_convos
+    import datetime as _dt
+
+    rows = list_convos()
+    if getattr(args, "json", False):
+        print(json.dumps(rows, indent=2))
+        return
+    if not rows:
+        print("no pi-durable convos yet — switch to `talky pi-durable` to start one")
+        return
+    print(f"{'ID':<40}  {'LAST ACTIVE':<20}  SIZE")
+    for r in rows:
+        when = _dt.datetime.fromtimestamp(r["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{r['id']:<40}  {when:<20}  {r['size']}")
+    print()
+    print("resume: talky profile pi-durable --resume <id>")
+
+
 def cmd_voice(args):
     """Show or switch the active voice profile in the running talky server."""
     if not ensure_daemon():
@@ -1172,7 +1195,7 @@ def main():
     # Shortcut: treat first non-option, non-command arg as a profile name.
     # `talky openclaw` → `talky profile openclaw`. `cmd_profile` ensures
     # the daemon is up.
-    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch", "certs"}
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch", "certs", "convos"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         candidate = sys.argv[1]
         # If the profile carries a ``launcher:`` block, route through the
@@ -1302,6 +1325,14 @@ def main():
     # === ls subcommand ===
     ls_parser = subparsers.add_parser("ls", help="List profiles")
     ls_parser.set_defaults(func=lambda args: cmd_list_profiles(args))
+
+    # === convos subcommand (WIN-533, pi-durable sessions) ===
+    convos_parser = subparsers.add_parser(
+        "convos",
+        help="List resumable pi-durable conversations (newest first)",
+    )
+    convos_parser.add_argument("--json", action="store_true", help="Emit JSON")
+    convos_parser.set_defaults(func=cmd_convos)
 
     # === launch subcommand (generic agent launcher, ticket 5d95) ===
     launch_parser = subparsers.add_parser(
