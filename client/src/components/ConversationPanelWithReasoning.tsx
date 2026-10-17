@@ -221,6 +221,7 @@ function MessageRow({ message }: { message: TalkyMessage }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       data-testid="transcript-message"
+      data-message-id={message.id}
     >
       <div className="flex items-center gap-2 mb-1 min-h-[22px]">
         <span
