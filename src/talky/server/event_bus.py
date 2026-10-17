@@ -11,7 +11,7 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass
@@ -30,10 +30,20 @@ class EventBus:
     def __init__(self) -> None:
         self._subscribers: list[asyncio.Queue[Event]] = []
         self._lock = asyncio.Lock()
+        self._listeners: list[Callable[[Event], None]] = []
+
+    def add_listener(self, fn: Callable[[Event], None]) -> None:
+        """In-process observer called synchronously on every emit (e.g. to mark a convo failed)."""
+        self._listeners.append(fn)
 
     async def emit(self, event_type: str, data: dict[str, Any]) -> None:
         """Push an event to every active subscriber."""
         ev = Event(type=event_type, data=data)
+        for fn in list(self._listeners):
+            try:
+                fn(ev)
+            except Exception:  # noqa: BLE001 — an observer must never break emit
+                pass
         async with self._lock:
             for q in self._subscribers:
                 try:

@@ -15,6 +15,8 @@ from loguru import logger
 from talky.convos.store import ConvoRecord, ConvoStore
 
 NativeIdReader = Callable[[], Optional[str]]
+# (convo_id, reason, status): reason is "created" | "turn" | "status".
+ChangeListener = Callable[[str, str, str], None]
 
 NATIVE_ID_RECHECK_SECS = 2.0
 
@@ -29,6 +31,7 @@ class ConvoSession:
         profile: str,
         resume_into: Optional[str] = None,
         native_id_reader: Optional[NativeIdReader] = None,
+        on_change: Optional[ChangeListener] = None,
     ) -> None:
         self._store = store
         self.enabled = enabled
@@ -39,6 +42,9 @@ class ConvoSession:
         self.record: Optional[ConvoRecord] = None
         self._ignored: list[str] = []
         self._recheck: Optional[asyncio.TimerHandle] = None
+        self._on_change = on_change
+        # "idle" | "working" (user spoke, reply pending) | "failed" (backend error).
+        self.status = "idle"
 
     def ignore_assistant(self, text: str) -> None:
         """Don't record this exact bot utterance once (system cues like "Claude here.")."""
@@ -60,11 +66,13 @@ class ConvoSession:
         self.shutdown()
         self.resume_into = None
         self.record = None
+        self.status = "idle"
 
     def bind(self, convo_id: str) -> None:
         """Point this call at an existing record (live resume)."""
         self.resume_into = convo_id
         self.record = None
+        self.status = "idle"
 
     def append(self, role: str, content: str, timestamp: Optional[float] = None) -> None:
         if not self.enabled or not (content or "").strip():
@@ -76,6 +84,7 @@ class ConvoSession:
             self._ignored.remove(normalized)
             return
         try:
+            created = self.record is None and not self._resumes_existing()
             if self.record is None:
                 self._open()
             assert self.record is not None
@@ -84,6 +93,8 @@ class ConvoSession:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"ConvoSession: failed to persist {role} turn: {e}")
             return
+        self.status = "working" if role == "user" else "idle"
+        self._notify("created" if created else "turn")
         if role == "assistant":
             # Backends like claude report their session id just after the reply
             # finishes; re-read shortly so a daemon kill right after still has it.
@@ -93,6 +104,23 @@ class ConvoSession:
                 self._recheck = asyncio.get_running_loop().call_later(NATIVE_ID_RECHECK_SECS, self.close)
             except RuntimeError:
                 self._recheck = None
+
+    def set_failed(self) -> None:
+        """The backend errored mid-turn; the list shows the row as failed until the next turn."""
+        self.status = "failed"
+        self._notify("status")
+
+    def _notify(self, reason: str) -> None:
+        cid = self.convo_id
+        if self._on_change is None or not cid:
+            return
+        try:
+            self._on_change(cid, reason, self.status)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"ConvoSession: change listener failed: {e}")
+
+    def _resumes_existing(self) -> bool:
+        return bool(self.resume_into) and self._store.get(self.resume_into) is not None
 
     def close(self) -> None:
         """Final metadata sync — some backends report their session id after the last reply."""

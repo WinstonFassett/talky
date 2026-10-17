@@ -22,12 +22,12 @@ export const SessionSheet = ({ currentLabel }: { currentLabel?: string }) => {
       <Drawer.Trigger asChild>
         <button
           type="button"
-          aria-label="Session settings"
-          title="Session settings"
+          aria-label="Settings"
+          title="Settings"
           className="flex items-center gap-1.5 px-2.5 h-9 w-full min-w-0 text-[13px] font-medium text-foreground bg-transparent transition-colors disabled:opacity-50 cursor-pointer rounded-md"
           style={{ border: '1px solid var(--color-border)' }}
         >
-          <span className="truncate flex-1 text-left">{currentLabel || 'Session'}</span>
+          <span className="truncate flex-1 text-left">{currentLabel || 'Settings'}</span>
           <SlidersHorizontalIcon
             size={13}
             style={{ color: 'var(--color-text-mute)' }}
@@ -56,7 +56,7 @@ export const SessionSheet = ({ currentLabel }: { currentLabel?: string }) => {
               borderBottom: '1px solid var(--color-border-soft)',
             }}
           >
-            Session
+            Settings
           </Drawer.Title>
           <Drawer.Description className="sr-only">
             Configure the assistant and voice for this session.
