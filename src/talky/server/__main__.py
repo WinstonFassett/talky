@@ -989,7 +989,10 @@ def _build_webrtc_routes():
         for k in ("pinned", "archived"):
             if k in fields and not isinstance(fields[k], bool):
                 return JSONResponse({"error": f"{k} must be a boolean"}, status_code=400)
-        rec = voice_channel._convo_store.update(convo_id, **fields)  # noqa: SLF001
+        try:
+            rec = voice_channel._convo_store.update(convo_id, **fields)  # noqa: SLF001
+        except Exception as e:  # noqa: BLE001 — corrupt convo.json
+            return JSONResponse({"error": f"could not update {convo_id!r}: {e}"}, status_code=500)
         if rec is None:
             return JSONResponse({"error": f"convo {convo_id!r} not found"}, status_code=404)
         _emit_convo(convo_id, "updated")

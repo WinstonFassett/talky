@@ -93,6 +93,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [current, setCurrent] = useState<CurrentConvo>(null);
+  const liveEmptyRef = useRef(true);
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [openId, setOpenIdState] = useState<string | null>(null);
   const openIdRef = useRef<string | null>(null);
@@ -160,6 +161,18 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     setLiveMark(liveLenRef.current);
   }, [setOpenId]);
 
+  /** Make `id` the daemon's current convo (resume + profile switch); no LLM call. */
+  const bind = useCallback(async (id: string, profile?: string) => {
+    try {
+      const plan = await convosApi.resume(id, profile);
+      if (plan.profile && plan.profile !== activeProfileRef.current) {
+        await convosApi.switchProfile(plan.profile);
+      }
+    } catch (e) {
+      setError(`Couldn't continue session: ${e instanceof Error ? e.message : e}`);
+    }
+  }, []);
+
   /** Show a session's transcript. With `bind`, also make it the daemon's current convo. */
   const show = useCallback(
     async (id: string, opts: { bind: boolean; profile?: string }) => {
@@ -169,19 +182,10 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       setHistory([]);
       setHistoryStart(0);
       const loading = loadHistory(id).catch((e) => setError(`Couldn't load session: ${e.message ?? e}`));
-      if (opts.bind) {
-        try {
-          const plan = await convosApi.resume(id, opts.profile);
-          if (plan.profile && plan.profile !== activeProfileRef.current) {
-            await convosApi.switchProfile(plan.profile);
-          }
-        } catch (e) {
-          setError(`Couldn't continue session: ${e instanceof Error ? e.message : e}`);
-        }
-      }
+      if (opts.bind) await bind(id, opts.profile);
       await loading;
     },
-    [loadHistory, setOpenId],
+    [bind, loadHistory, setOpenId],
   );
 
   const open = useCallback(
@@ -192,8 +196,10 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const loadOlder = useCallback(async () => {
     const id = openIdRef.current;
     if (!id || historyStart <= 0) return;
+    const seq = loadSeq.current;
     const page = await convosApi.get(id, { before: historyStart, limit: PAGE });
-    if (openIdRef.current !== id) return;
+    // A reconnect or another open reloaded the history meanwhile: this page no longer fits.
+    if (openIdRef.current !== id || seq !== loadSeq.current) return;
     setHistory((h) => [...page.turns.map((t) => turnToMessage(id, t)), ...h]);
     setHistoryStart(page.start);
   }, [historyStart]);
@@ -308,8 +314,10 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         clearView();
       } else if (d.current && d.current !== openNow) {
         if (d.reason === 'created' && !openNow) {
-          // A fresh call just got its record: the live messages are its turns.
+          // A fresh call just got its record: the live messages are its turns —
+          // unless this tab isn't in the call, then read them from disk.
           setOpenId(d.current);
+          if (liveEmptyRef.current) void loadHistory(d.current).catch(() => {});
         } else {
           // Someone else (the CLI, another tab) switched the daemon's session.
           void show(d.current, { bind: false });
@@ -320,7 +328,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       scheduleRefresh(d.reason === 'turn' || d.reason === 'status' ? 400 : 0);
     });
     return () => es.close();
-  }, [clearView, scheduleRefresh, setOpenId, show]);
+  }, [clearView, loadHistory, scheduleRefresh, setOpenId, show]);
 
   // A (re)connect clears voice-ui-kit's store, so the previous call's turns
   // vanish from the live list; re-read them from disk.
@@ -329,10 +337,20 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     useCallback(() => {
       setLiveMark(0);
       const id = openIdRef.current;
-      if (id) void loadHistory(id).catch(() => {});
-    }, [loadHistory]),
+      if (!id) return;
+      void loadHistory(id).catch(() => {});
+      // If the daemon lost the binding (e.g. a queued resume expired while the
+      // tab sat idle), bind the session on screen again before the first turn.
+      void convosApi
+        .list('', false)
+        .then((out) => {
+          if (openIdRef.current === id && out.current?.id !== id) return bind(id);
+        })
+        .catch(() => {});
+    }, [bind, loadHistory]),
   );
 
+  liveEmptyRef.current = liveMessages.length === 0;
   const mark = liveMark > liveMessages.length ? 0 : liveMark;
   const messages = useMemo(
     () => (history.length ? [...history, ...liveMessages.slice(mark)] : liveMessages.slice(mark)),

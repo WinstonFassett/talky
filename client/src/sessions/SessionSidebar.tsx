@@ -210,14 +210,14 @@ function SessionRow({
       }}
       onClick={() => {
         if (editing) return;
-        if (!isOpen) void open(row.id);
+        if (!isOpen || !isCurrent) void open(row.id);
         onPicked?.();
       }}
       onKeyDown={(e) => {
         if (editing) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          if (!isOpen) void open(row.id);
+          if (!isOpen || !isCurrent) void open(row.id);
           onPicked?.();
         }
       }}

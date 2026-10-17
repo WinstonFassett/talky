@@ -231,3 +231,47 @@ def test_backend_error_marks_the_live_convo_failed(daemon):
     channel._on_bus_event(Event(type="backendError", data={"message": "boom"}))
     assert session.status == "failed"
     channel._convo_session = None
+
+
+# --- review fixes (WIN-535) ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reload_before_speaking_still_carries_the_opened_convo(daemon):
+    """A session opened in the UI but not spoken in yet survives a reload."""
+    _, store, channel = daemon
+    rec = _convo(store, ("user", "earlier"))
+    session = ConvoSession(store, backend="echo", profile="echo", resume_into=rec.id)
+    channel._convo_session = session
+    channel._active_profile = "echo"
+
+    await channel._teardown_locked(preserve_active_profile=True)
+
+    assert channel.current_convo()["id"] == rec.id
+    assert channel._take_pending_resume()["convo_id"] == rec.id
+
+
+@pytest.mark.asyncio
+async def test_rename_keeps_the_current_rows_status(daemon):
+    import asyncio
+
+    from talky.server.event_bus import event_bus
+
+    _, store, channel = daemon
+    rec = _convo(store, ("user", "hi"))
+    session = ConvoSession(store, backend="echo", profile="echo", resume_into=rec.id)
+    channel._convo_session = session
+    async with event_bus.subscribe() as q:
+        session.append("user", "busy")  # no listener wired: just sets status
+        channel._emit_convo_changed(rec.id, "updated")
+        ev = await asyncio.wait_for(q.get(), 2)
+    channel._convo_session = None
+    assert ev.type == "convoChanged" and ev.data["status"] == "working"
+
+
+def test_patch_on_corrupt_record_is_a_clean_500(daemon):
+    client, store, _ = daemon
+    rec = _convo(store, ("user", "x"))
+    (store.root / rec.id / "convo.json").write_text("{nope")
+    r = client.patch(f"/api/convos/{rec.id}", json={"title": "y"})
+    assert r.status_code == 500 and "could not update" in r.json()["error"]

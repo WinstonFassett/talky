@@ -1210,14 +1210,14 @@ class VoiceChannel:
             self._convo_session.shutdown()
             if (
                 preserve_active_profile
-                and self._convo_session.record is not None
+                and self._convo_session.convo_id  # a record, or one bound but not yet spoken in
                 and self._pending_resume is None  # an explicit resume wins
             ):
                 # Reload / reconnect: the next pipeline's backends start blank,
                 # so continue this convo there (natively when possible).
                 # Target is resolved at the next build: the profile may change in between.
                 self._pending_resume = {
-                    "convo_id": self._convo_session.record.id,
+                    "convo_id": self._convo_session.convo_id,
                     "follow_active": True,
                     "expires_at": time.monotonic() + self.PENDING_RESUME_TTL_SECS,
                 }
@@ -1319,6 +1319,8 @@ class VoiceChannel:
     def _emit_convo_changed(self, convo_id: Optional[str], reason: str, status: str = "idle") -> None:
         """SSE ``convoChanged`` so the session list updates by itself (WIN-535)."""
         cur = self.current_convo()
+        if cur and convo_id == cur["id"] and reason in ("updated", "current"):
+            status = cur["status"]  # a rename doesn't make a working convo idle
         data = {"id": convo_id, "reason": reason, "status": status, "current": cur["id"] if cur else None}
         try:
             asyncio.get_running_loop().create_task(event_bus.emit("convoChanged", data))
