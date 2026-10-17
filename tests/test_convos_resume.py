@@ -439,3 +439,17 @@ async def test_explicit_detach_does_not_carry_the_convo(channel):
     await channel._teardown_locked(preserve_active_profile=False)
 
     assert channel._take_pending_resume() is None
+
+
+@pytest.mark.asyncio
+async def test_reconnect_after_profile_switch_replays_into_the_new_backend(channel):
+    rec = channel._convo_store.create(backend="claude-code", profile="claude", native_session_id="sdk-1")
+    session = ConvoSession(channel._convo_store, backend="claude-code", profile="claude", resume_into=rec.id)
+    session.append("user", "my code word is heron")
+    channel._convo_session = session
+    channel._active_profile = "pi"
+
+    await channel._teardown_locked(preserve_active_profile=True)
+
+    pending = channel._take_pending_resume()
+    assert pending["backend"] == "pi" and pending["native_session_id"] is None and pending["replay"]

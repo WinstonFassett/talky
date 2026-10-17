@@ -1213,7 +1213,7 @@ class VoiceChannel:
             ):
                 # Reload / reconnect: the next pipeline's backends start blank,
                 # so continue this convo there (natively when possible).
-                self._pending_resume = self._resume_plan(self._convo_session.record.id, None)
+                self._pending_resume = self._resume_plan(self._convo_session.record.id, self._active_profile)
         self._assistant_sink = None
         self._convo_session = None
         task = self._pipeline_task
