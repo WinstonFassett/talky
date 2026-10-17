@@ -24,7 +24,7 @@ import {
 } from 'react';
 import type { AggregationMetadata } from '@pipecat-ai/voice-ui-kit';
 import { usePipecatConversation } from '@pipecat-ai/voice-ui-kit';
-import { useRTVIClientEvent } from '@pipecat-ai/client-react';
+import { usePipecatClientTransportState, useRTVIClientEvent } from '@pipecat-ai/client-react';
 import { RTVIEvent } from '@pipecat-ai/client-js';
 
 import { adaptMessages } from '../messages/adapter';
@@ -93,7 +93,9 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [current, setCurrent] = useState<CurrentConvo>(null);
-  const liveEmptyRef = useRef(true);
+  const inCallRef = useRef(false);
+  const transportState = usePipecatClientTransportState();
+  inCallRef.current = transportState === 'connected' || transportState === 'ready';
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [openId, setOpenIdState] = useState<string | null>(null);
   const openIdRef = useRef<string | null>(null);
@@ -164,8 +166,11 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   /** Make `id` the daemon's current convo (resume + profile switch); no LLM call. */
   const bind = useCallback(async (id: string, profile?: string) => {
     try {
-      const plan = await convosApi.resume(id, profile);
-      if (plan.profile && plan.profile !== activeProfileRef.current) {
+      const [plan, now] = await Promise.all([convosApi.resume(id, profile), convosApi.profiles()]);
+      // Read the active profile fresh: the cached one is stale after a daemon restart.
+      const active = now.profiles.find((p) => p.active)?.name ?? '';
+      activeProfileRef.current = active;
+      if (plan.profile && plan.profile !== active) {
         await convosApi.switchProfile(plan.profile);
       }
     } catch (e) {
@@ -317,7 +322,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           // A fresh call just got its record: the live messages are its turns —
           // unless this tab isn't in the call, then read them from disk.
           setOpenId(d.current);
-          if (liveEmptyRef.current) void loadHistory(d.current).catch(() => {});
+          if (!inCallRef.current) void loadHistory(d.current).catch(() => {});
         } else {
           // Someone else (the CLI, another tab) switched the daemon's session.
           void show(d.current, { bind: false });
@@ -344,13 +349,15 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       void convosApi
         .list('', false)
         .then((out) => {
-          if (openIdRef.current === id && out.current?.id !== id) return bind(id);
+          // Only when the daemon has nothing bound: another convo (CLI, other tab) wins.
+          // It continues on its own profile — after a daemon restart the "active"
+          // profile is just the config default, not the user's choice.
+          if (openIdRef.current === id && !out.current) return bind(id);
         })
         .catch(() => {});
     }, [bind, loadHistory]),
   );
 
-  liveEmptyRef.current = liveMessages.length === 0;
   const mark = liveMark > liveMessages.length ? 0 : liveMark;
   const messages = useMemo(
     () => (history.length ? [...history, ...liveMessages.slice(mark)] : liveMessages.slice(mark)),
