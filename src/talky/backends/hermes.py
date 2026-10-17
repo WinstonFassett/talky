@@ -42,10 +42,20 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
+from talky.convos.replay import HistoryPreambleMixin
 from talky.server.turn import UserTurnTextFrame
 
 _HERMES_DIR = os.path.expanduser("~/.hermes/hermes-agent")
 _HERMES_CONFIG = os.path.expanduser("~/.hermes/config.yaml")
+
+# Importing Hermes runs its bootstrap, which (a) re-execs the process under
+# Hermes's own venv unless HERMES_DISABLE_LAZY_INSTALLS=1 — the talky daemon
+# then dies with "No module named 'talky'" — and (b) swaps sys.path to Hermes's
+# site-packages, so talky's own later imports fail. Force the flag for the
+# import only, then put talky's path back in front, keeping Hermes's after it.
+_HERMES_LAZY_ENV = os.environ.get("HERMES_DISABLE_LAZY_INSTALLS")
+os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+_SYS_PATH_BEFORE_HERMES = list(sys.path)
 
 try:
     if _HERMES_DIR not in sys.path:
@@ -54,6 +64,16 @@ try:
     _HERMES_AVAILABLE = True
 except ImportError:
     _HERMES_AVAILABLE = False
+finally:
+    # The flag only matters during the bootstrap import; don't leak it to
+    # talky's own children or later Hermes installs.
+    if _HERMES_LAZY_ENV is None:
+        os.environ.pop("HERMES_DISABLE_LAZY_INSTALLS", None)
+    else:
+        os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = _HERMES_LAZY_ENV
+    sys.path[:] = _SYS_PATH_BEFORE_HERMES + [
+        p for p in dict.fromkeys(sys.path) if p not in _SYS_PATH_BEFORE_HERMES
+    ]
 
 _TURN_START = ("start",)
 _TURN_END = ("end",)
@@ -197,7 +217,7 @@ class _HermesThread:
                 self._put_frame(_TURN_END)
 
 
-class HermesLLMService(LLMService):
+class HermesLLMService(HistoryPreambleMixin, LLMService):
     """Hermes-agent (NousResearch) as a Pipecat LLM backend.
 
     Config keys (from llm-backends.yaml):
@@ -289,6 +309,11 @@ class HermesLLMService(LLMService):
 
     def get_steer_mode(self) -> Literal["steer", "interrupt"]:
         return self._steer_mode
+
+    @property
+    def session_id(self) -> Optional[str]:
+        agent = getattr(self._bridge, "_agent", None)
+        return getattr(agent, "session_id", None) or self._resume
 
     def resolve_permission(self, *, allow: bool) -> bool:
         """Grant/deny a pending Hermes dangerous-command approval (ticket 3e56).
@@ -404,7 +429,7 @@ class HermesLLMService(LLMService):
 
         if isinstance(frame, UserTurnTextFrame):
             if self._bridge:
-                self._bridge.send_prompt(frame.text, steer_mode=self._steer_mode)
+                self._bridge.send_prompt(self._consume_preamble(frame.text), steer_mode=self._steer_mode)
             return
 
         await self.push_frame(frame, direction)

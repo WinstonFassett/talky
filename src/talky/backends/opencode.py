@@ -63,6 +63,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
+from talky.convos.replay import HistoryPreambleMixin
 from talky.server.turn import UserTurnTextFrame
 
 
@@ -74,7 +75,7 @@ def _port_open(host: str, port: int, timeout: float = 0.3) -> bool:
         return False
 
 
-class OpencodeLLMService(LLMService):
+class OpencodeLLMService(HistoryPreambleMixin, LLMService):
     """Opencode HTTP backend.
 
     Config keys (from llm-backends.yaml):
@@ -424,7 +425,7 @@ class OpencodeLLMService(LLMService):
                 logger.warning("opencode backend not started — dropping turn")
                 return
             logger.info(f"opencode ← user: {frame.text[:80]}")
-            await self._send_prompt(frame.text)
+            await self._send_prompt(self._consume_preamble(frame.text))
             return
 
         await self.push_frame(frame, direction)

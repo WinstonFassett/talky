@@ -888,6 +888,34 @@ def _build_webrtc_routes():
             svc._cwd = cwd  # noqa: SLF001
         return JSONResponse({"status": "ok", "session_id": session_id, "backend": backend_name})
 
+    async def handle_resume_convo(request: Request):
+        """POST /api/convos/resume — continue a saved convo (WIN-534).
+
+        JSON ``{"convo_id": str, "profile": str | null}``. Binds the live call
+        (or the next one) to that record and replays its transcript when the
+        target backend can't natively resume. Does not switch profile.
+        """
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        convo_id = body.get("convo_id")
+        if not convo_id:
+            return JSONResponse({"error": "missing 'convo_id'"}, status_code=400)
+        try:
+            result = voice_channel.resume_convo(convo_id, body.get("profile"))
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:  # noqa: BLE001 — e.g. a corrupt convo.json
+            logger.warning(f"/api/convos/resume failed for {convo_id!r}: {e}")
+            return JSONResponse({"error": f"could not resume {convo_id!r}: {e}"}, status_code=500)
+        return JSONResponse({"status": "ok", **result})
+
+    async def handle_new_convo(request: Request):  # noqa: ARG001
+        """POST /api/convos/new — the next turn starts a fresh convo (WIN-534)."""
+        voice_channel.new_convo()
+        return JSONResponse({"status": "ok"})
+
     async def handle_get_steer_mode(request: Request):  # noqa: ARG001
         """GET /api/steer-mode — return active steer mode for hermes backend."""
         from talky.backends.hermes import HermesLLMService
@@ -1174,6 +1202,8 @@ def _build_webrtc_routes():
         Route("/api/voices", handle_get_voices, methods=["GET"]),
         Route("/api/voices/switch", handle_switch_voice, methods=["POST"]),
         Route("/api/resume", handle_set_resume, methods=["POST"]),
+        Route("/api/convos/resume", handle_resume_convo, methods=["POST"]),
+        Route("/api/convos/new", handle_new_convo, methods=["POST"]),
         Route("/api/steer-mode", handle_get_steer_mode, methods=["GET"]),
         Route("/api/steer-mode", handle_set_steer_mode, methods=["POST"]),
         Route("/api/permission/grant", handle_permission_grant, methods=["POST"]),

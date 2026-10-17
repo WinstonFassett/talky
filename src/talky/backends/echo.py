@@ -78,12 +78,41 @@ class EchoLLMService(LLMService):
         super().__init__(**kwargs)
         self._template = template
         self._echo_name = name
+        # WIN-534 slice 3: cross-backend replay. ``set_history`` seeds this
+        # list; the first user turn after construction prepends a one-shot
+        # recall line that references the stored turns, so a drive_call.py
+        # test can assert the backend "recalls" something said earlier.
+        self._history: list[dict] = []
+        self._recall_once: str | None = None
 
     def __repr__(self) -> str:  # noqa: D401
         return f"EchoLLMService({self._echo_name})"
 
+    def set_history(self, turns: list[dict]) -> None:
+        """Seed starting context (WIN-534 slice 3).
+
+        For echo this is proof-of-wiring: we remember the turns and ensure
+        the next response quotes the most recent user line, so a test can
+        verify the replay actually reached the backend.
+        """
+        self._history = [t for t in (turns or []) if isinstance(t, dict)]
+        last_user = next(
+            (t.get("content", "") for t in reversed(self._history) if t.get("role") == "user"),
+            "",
+        )
+        if last_user:
+            self._recall_once = f"earlier you said: {last_user}"
+        logger.info(
+            f"{self!r}: seeded history ({len(self._history)} turns, "
+            f"recall={'yes' if self._recall_once else 'no'})"
+        )
+
     def render(self, text: str) -> str:
         """Render the response for a given user turn. Override for variants."""
+        if self._recall_once:
+            prefix = self._recall_once
+            self._recall_once = None
+            return f"{prefix}. {self._template.format(text=text)}"
         return self._template.format(text=text)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:

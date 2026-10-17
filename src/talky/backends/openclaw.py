@@ -28,6 +28,7 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
 from talky.config.voice_prompts import format_voice_message
+from talky.convos.replay import HistoryPreambleMixin
 from talky.server.turn import UserTurnTextFrame
 
 
@@ -238,7 +239,7 @@ def build_device_auth_v3(
     }
 
 
-class OpenClawLLMService(LLMService):
+class OpenClawLLMService(HistoryPreambleMixin, LLMService):
     """OpenClaw LLM service - simplified WebSocket-based implementation"""
 
     # OpenClaw protocol constants
@@ -547,7 +548,7 @@ class OpenClawLLMService(LLMService):
                 await self.push_frame(LLMFullResponseEndFrame())
                 return
 
-            last_user_message = user_text
+            last_user_message = self._consume_preamble(user_text)
 
             # Format message with voice conversation guidance
             full_message = format_voice_message(last_user_message)
@@ -729,7 +730,7 @@ class OpenClawVoiceLLMService(OpenClawLLMService):
             await self.push_frame(LLMFullResponseStartFrame())
 
             # Format with voice guidance
-            formatted = format_voice_message(frame.text)
+            formatted = format_voice_message(self._consume_preamble(frame.text))
             logger.info(f"🗣️ User (Talk): {frame.text[:80]}...")
 
             # Send as appendMessage (we do our own STT)

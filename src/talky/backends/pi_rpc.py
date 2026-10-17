@@ -24,6 +24,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
+from talky.convos.replay import HistoryPreambleMixin
 from talky.server.turn import UserTurnTextFrame
 
 
@@ -57,7 +58,10 @@ def _format_tool_end(data: dict) -> str:
     return f"✓ {name}{suffix}"
 
 
-class PiRPCLLMService(LLMService):
+_STDOUT_LINE_LIMIT = 32 * 1024 * 1024
+
+
+class PiRPCLLMService(HistoryPreambleMixin, LLMService):
     """Pi coding agent via --mode rpc. Interruptible: sends {"type":"abort"} on InterruptionFrame."""
 
     @staticmethod
@@ -115,6 +119,9 @@ class PiRPCLLMService(LLMService):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self._cwd,
+            # Pi emits one JSON event per line, and some (message_end with a
+            # long history) exceed asyncio's 64 KiB default line limit.
+            limit=_STDOUT_LINE_LIMIT,
         )
         self._reader_task = asyncio.create_task(self._read_stdout())
         asyncio.create_task(self._log_stderr())
@@ -282,7 +289,7 @@ class PiRPCLLMService(LLMService):
             return
 
         if isinstance(frame, UserTurnTextFrame):
-            await self._write({"type": "prompt", "message": frame.text})
+            await self._write({"type": "prompt", "message": self._consume_preamble(frame.text)})
             return
 
         if isinstance(frame, LLMMessagesAppendFrame) and frame.run_llm:
@@ -290,7 +297,7 @@ class PiRPCLLMService(LLMService):
                 if msg.get("role") == "user":
                     content = msg.get("content", "")
                     if isinstance(content, str) and content:
-                        await self._write({"type": "prompt", "message": content})
+                        await self._write({"type": "prompt", "message": self._consume_preamble(content)})
             return
 
         await self.push_frame(frame, direction)

@@ -744,6 +744,154 @@ def cmd_profile(args):
         _open_client(client_url)
 
 
+def cmd_resume(args):
+    """Continue a saved Talky conversation, on its own profile or another (WIN-534).
+
+    The daemon resumes it at the next call: natively (the backend's own session)
+    when the backend is unchanged and has a session id, otherwise by replaying
+    the transcript. A call that's already live gets the transcript replayed.
+    New turns append to the same record.
+    """
+    from talky.convos import default_store
+
+    store = default_store()
+    if args.id:
+        rec = store.get(args.id)
+    else:
+        recent = store.list()
+        rec = recent[0] if recent else None
+    if rec is None:
+        what = repr(args.id) if args.id else "to resume"
+        print(f"❌ no convo {what} at {store.root}", file=sys.stderr)
+        sys.exit(2)
+    if not args.id:
+        print(f"   most recent: {rec.id}  {rec.title or ''}")
+    profile = args.profile or rec.profile
+
+    def _post(path: str, payload: dict) -> dict:
+        req = urllib.request.Request(
+            f"{daemon_base_url()}{path}", data=json.dumps(payload).encode("utf-8"),
+            method="POST", headers={"content-type": "application/json"},
+        )
+        try:
+            with daemon_urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read().decode("utf-8")).get("error", e.reason)
+            except Exception:  # noqa: BLE001
+                msg = f"HTTP {e.code}"
+            print(f"❌ {path}: {msg}", file=sys.stderr)
+            sys.exit(1)
+
+    def _live() -> bool:
+        try:
+            with daemon_urlopen(f"{daemon_base_url()}/status", timeout=2) as r:
+                return bool(json.loads(r.read()).get("channel", {}).get("live", False))
+        except Exception:  # noqa: BLE001
+            return False
+
+    if not ensure_daemon():
+        sys.exit(1)
+    live = _live()
+
+    # The daemon owns the resume (native session or replay); we only switch profile.
+    plan = _post("/api/convos/resume", {"convo_id": rec.id, "profile": profile})
+    _post("/api/profile", {"profile": profile})
+
+    native_id = plan.get("native_session_id")
+    how = "native resume" if native_id else f"{plan.get('replay_turns', 0)}-turn replay"
+    if live:
+        how += "; replayed into the live call"
+    print(f"🔁 convo {rec.id} → profile {profile!r} ({how}, {plan.get('applied')})")
+
+    if not live and not getattr(args, "no_open", False):
+        client_url = f"{daemon_base_url()}?autoconnect=true"
+        print("   no live call — opening the client")
+        _open_client(client_url)
+
+
+def cmd_convos(args):
+    """List saved Talky conversations (``~/.talky/convos/<id>/``) across every backend.
+
+    Reads disk directly, so it works while the daemon is down.
+    """
+    import datetime as _dt
+
+    from talky.convos import default_store
+
+    store = default_store()
+    sub = getattr(args, "convos_cmd", None) or "list"
+
+    if sub == "new":
+        if not talky_daemon_is_running():
+            print("no daemon running — the next call starts a new convo anyway")
+            return
+        req = urllib.request.Request(
+            f"{daemon_base_url()}/api/convos/new", data=b"{}", method="POST",
+            headers={"content-type": "application/json"},
+        )
+        with daemon_urlopen(req, timeout=5) as resp:
+            resp.read()
+        print("✅ the next turn starts a new convo")
+        return
+
+    if sub == "show":
+        rec = store.get(args.id)
+        if rec is None:
+            print(f"convo {args.id!r} not found at {store.root}", file=sys.stderr)
+            sys.exit(2)
+        print(f"id:                {rec.id}")
+        print(f"backend:           {rec.backend}")
+        print(f"profile:           {rec.profile}")
+        print(f"native_session_id: {rec.native_session_id or '-'}")
+        print(f"started:           {_dt.datetime.fromtimestamp(rec.started_at).strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"last_active:       {_dt.datetime.fromtimestamp(rec.last_active_at).strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"title:             {rec.title or '-'}")
+        print("--- transcript ---")
+        for turn in store.read_transcript(rec.id):
+            ts = _dt.datetime.fromtimestamp(turn.timestamp).strftime("%H:%M:%S")
+            print(f"[{ts}] {turn.role}: {turn.content}")
+        return
+
+    # list
+    records = store.list()
+
+    if getattr(args, "json", False):
+        import json as _json
+
+        payload = {
+            "records": [
+                {
+                    "id": r.id,
+                    "backend": r.backend,
+                    "profile": r.profile,
+                    "native_session_id": r.native_session_id,
+                    "started_at": r.started_at,
+                    "last_active_at": r.last_active_at,
+                    "title": r.title,
+                }
+                for r in records
+            ],
+        }
+        print(_json.dumps(payload, indent=2))
+        return
+
+    if not records:
+        print(f"(no convos at {store.root})")
+        return
+
+    header = f"{'ID':<36}  {'BACKEND':<12}  {'PROFILE':<12}  {'LAST ACTIVE':<19}  TITLE"
+    print(header)
+    print("-" * len(header))
+    for r in records:
+        last = _dt.datetime.fromtimestamp(r.last_active_at).strftime("%Y-%m-%d %H:%M:%S")
+        title = (r.title or "")[:40]
+        print(f"{r.id:<36}  {r.backend:<12}  {r.profile:<12}  {last:<19}  {title}")
+    print()
+    print("resume: talky resume [<id>] [--profile <other>]   (no id = most recent)")
+
+
 def cmd_voice(args):
     """Show or switch the active voice profile in the running talky server."""
     if not ensure_daemon():
@@ -1172,7 +1320,7 @@ def main():
     # Shortcut: treat first non-option, non-command arg as a profile name.
     # `talky openclaw` → `talky profile openclaw`. `cmd_profile` ensures
     # the daemon is up.
-    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch", "certs"}
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch", "certs", "convos", "resume"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         candidate = sys.argv[1]
         # If the profile carries a ``launcher:`` block, route through the
@@ -1274,6 +1422,35 @@ def main():
     profile_parser.add_argument("--cwd", "-d", metavar="DIR", help="Working directory for the agent session")
     profile_parser.add_argument("--bypass-permissions", action="store_true", help="Skip all Claude permission checks (dangerous)")
     profile_parser.set_defaults(func=cmd_profile)
+
+    # === resume subcommand (WIN-534 slices 2 + 3) ===
+    resume_parser = subparsers.add_parser(
+        "resume",
+        help="Resume a saved Talky conversation by id (same or different profile)",
+    )
+    resume_parser.add_argument("id", nargs="?", help="Convo id from `talky convos` (default: the most recent)")
+    resume_parser.add_argument(
+        "--profile", "-p",
+        help="Resume on this profile instead of the convo's original one",
+    )
+    resume_parser.add_argument(
+        "--no-open", action="store_true",
+        help="Don't open the Talky app/browser when no call is live",
+    )
+    resume_parser.set_defaults(func=cmd_resume)
+
+    # === convos subcommand (WIN-534) ===
+    convos_parser = subparsers.add_parser(
+        "convos",
+        help="List saved Talky conversations across all backends",
+    )
+    convos_parser.add_argument("--json", action="store_true", help="Emit JSON")
+    convos_sub = convos_parser.add_subparsers(dest="convos_cmd")
+    convos_sub.add_parser("list", help="Newest-first list (default)")
+    convos_sub.add_parser("new", help="Start a new convo on the next turn instead of continuing the last one")
+    show_p = convos_sub.add_parser("show", help="Print the transcript of one convo")
+    show_p.add_argument("id", help="Convo id")
+    convos_parser.set_defaults(func=cmd_convos)
 
     # === voice subcommand ===
     voice_parser = subparsers.add_parser(

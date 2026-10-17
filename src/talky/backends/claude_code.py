@@ -49,6 +49,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
+from talky.convos.replay import HistoryPreambleMixin
 from talky.server.turn import UserTurnTextFrame
 
 try:
@@ -57,6 +58,7 @@ try:
         AssistantMessage,
         ClaudeCodeOptions,
         ResultMessage,
+        SystemMessage,
         TextBlock,
         ThinkingBlock,
         ToolUseBlock,
@@ -74,6 +76,36 @@ except ImportError:
 
     class MessageParseError(Exception):  # type: ignore[no-redef]
         pass
+
+
+def _tolerate_unknown_sdk_messages() -> None:
+    """Skip message types this SDK version doesn't know instead of ending the stream.
+
+    claude-code-sdk 0.0.25 raises inside its own generator on unknown types
+    (the CLI now sends ``rate_limit_event``, sometimes before the reply), which
+    finishes the stream and silently drops the assistant's answer.
+    """
+    import claude_code_sdk._internal.client as sdk_client
+
+    original = sdk_client.parse_message
+    if getattr(original, "_talky_tolerant", False):
+        return
+
+    def parse_message(data):  # noqa: ANN001, ANN202
+        try:
+            return original(data)
+        except MessageParseError as e:
+            if "Unknown message type" in str(e):
+                logger.debug(f"Claude SDK: skipping {e}")
+                return None
+            raise
+
+    parse_message._talky_tolerant = True  # type: ignore[attr-defined]
+    sdk_client.parse_message = parse_message
+
+
+if _SDK_AVAILABLE:
+    _tolerate_unknown_sdk_messages()
 
 
 # Frame tuple sentinels passed through the asyncio queue
@@ -171,6 +203,8 @@ class _ClaudeSDKThread:
             self._interrupt_event.clear()
             self._put_frame(_TURN_START)
 
+            if self._last_session_id:
+                self._options.resume = self._last_session_id
             try:
                 aiter = query(prompt=self._make_prompt(prompt), options=self._options)
                 while True:
@@ -188,7 +222,8 @@ class _ClaudeSDKThread:
                         logger.error(f"Claude SDK parse error: {e}", exc_info=True)
                         self._put_frame(("error", str(e)))
                         break
-                    self._route_message(msg)
+                    if msg is not None:
+                        self._route_message(msg)
             except Exception as e:
                 logger.error(f"Claude SDK error: {e}", exc_info=True)
                 self._put_frame(("error", str(e)))
@@ -225,6 +260,12 @@ class _ClaudeSDKThread:
         elif isinstance(msg, ResultMessage):
             if msg.session_id:
                 self._last_session_id = msg.session_id
+        elif isinstance(msg, SystemMessage) and msg.subtype == "init":  # type: ignore[possibly-unbound]
+            # ResultMessage can be lost: this SDK version raises on the CLI's
+            # rate_limit_event, which ends the stream before the result arrives.
+            sid = (msg.data or {}).get("session_id")
+            if sid:
+                self._last_session_id = sid
 
     def _permission_callback_sync(self, tool_name: str, tool_input: dict[str, Any]) -> bool:
         """Block the SDK thread until asyncio side resolves the permission. Returns True=allow."""
@@ -245,7 +286,7 @@ class _ClaudeSDKThread:
         return result
 
 
-class ClaudeCodeLLMService(LLMService):
+class ClaudeCodeLLMService(HistoryPreambleMixin, LLMService):
     """Claude Code backend via Agent SDK thread bridge.
 
     permission_mode options:
@@ -293,7 +334,10 @@ class ClaudeCodeLLMService(LLMService):
             permission_mode=self._permission_mode,
             max_turns=self._max_turns,
             include_partial_messages=True,  # enables text_delta streaming
-            continue_conversation=not self._resume,  # skip if explicit resume given
+            # Never continue_conversation: that picks the newest Claude session in
+            # the cwd, which in a project checkout is the user's own CLI session.
+            # Each talky call gets its own session; turns chain via resume=.
+            continue_conversation=False,
         )
         if self._resume:
             opts.resume = self._resume
@@ -319,6 +363,10 @@ class ClaudeCodeLLMService(LLMService):
             return PermissionResultDeny(message="User denied via chat UI")  # type: ignore[possibly-unbound]
 
         opts.can_use_tool = can_use_tool
+
+    @property
+    def session_id(self) -> Optional[str]:
+        return self._bridge._last_session_id if self._bridge else None
 
     def set_resume(self, session_id: Optional[str]) -> None:
         """Set a session ID to resume on the next pipeline start. One-shot: clears after use."""
@@ -418,7 +466,7 @@ class ClaudeCodeLLMService(LLMService):
                 logger.warning("Claude bridge not started — ignoring turn")
                 return
             logger.info(f"Claude ← user: {frame.text[:80]}...")
-            self._bridge.send_prompt(frame.text)
+            self._bridge.send_prompt(self._consume_preamble(frame.text))
             return
 
         await self.push_frame(frame, direction)

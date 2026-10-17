@@ -100,6 +100,12 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from talky.convos import default_store
+from talky.convos.session import ConvoSession, native_session_id_of
+from talky.convos.transcript_sink import (
+    ConvoAssistantTranscriptProcessor,
+    TalkyUserTranscriptProcessor,
+)
 from talky.server.agent_ext import AgentExtensionLLMService
 from talky.server.mcp_driver import MCPDriverLLMService
 from talky.server.turn import TalkyUserTurnDetector
@@ -120,8 +126,12 @@ def _resolve_backend_adapter_class(pm: Any, backend_name: str) -> Any:
     return getattr(llm_module, class_name)
 
 
-def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
-    """Build a fresh LLM service instance for the named backend."""
+def _instantiate_llm_backend(pm: Any, backend_name: str, resume: Optional[str] = None) -> Any:
+    """Build a fresh LLM service instance for the named backend.
+
+    ``resume`` (a convo's native session id, WIN-534) is passed to backends
+    whose constructor takes ``resume=``; it wins over talky-args.json.
+    """
     import json as _json
     from pathlib import Path as _Path
 
@@ -161,7 +171,9 @@ def _instantiate_llm_backend(pm: Any, backend_name: str) -> Any:
         config["permission_mode"] = "bypassPermissions"
         logger.warning("claude: bypass_permissions=true from talky-args.json — skipping all permission checks")
 
-    if _startup_resume:
+    if resume and "resume" in sig:
+        config["resume"] = resume
+    elif _startup_resume:
         if "resume" in sig:
             config["resume"] = _startup_resume
             if _startup_cwd and "cwd" in sig:
@@ -229,6 +241,14 @@ class VoiceChannel:
 
         # Speech buffer — written by MCPDriverLLMService, drained by listen()
         self._user_speech_queue: asyncio.Queue[Any] = asyncio.Queue()
+
+        # WIN-534: one ConvoSession per call (pipeline build); its record is
+        # created on the first real turn. _pending_resume is set by
+        # resume_convo() when no call is live and applied at the next build.
+        self._convo_store = default_store()
+        self._convo_session: Optional[ConvoSession] = None
+        self._assistant_sink: Optional[ConvoAssistantTranscriptProcessor] = None
+        self._pending_resume: Optional[dict] = None
 
         # Speech-onset sentinel — set when VAD detects the user started
         # speaking, cleared on pipeline teardown. Used by request_leave
@@ -687,12 +707,21 @@ class VoiceChannel:
         logger.info(f"VoiceChannel: active profile → {profile_name!r}")
         await self._emit_profile_changed(profile_name)
 
+        if self._convo_session is not None:
+            self._convo_session.set_active(
+                backend=service_key,
+                profile=profile_name,
+                native_id_reader=lambda svc=service: native_session_id_of(svc),
+            )
+
         # System announcement on manual picker switches only (tickets 8c9d, e540).
         # Agent-join paths pass announce=False — the agent owns its own greeting
         # via the extension's TTS stream.
         if announce:
             announcement = self._announcement_for_profile(profile_name)
             if announcement:
+                if self._convo_session is not None:
+                    self._convo_session.ignore_assistant(announcement)
                 try:
                     await self.speak(announcement)
                     logger.info(f"VoiceChannel: announced {announcement!r}")
@@ -1094,7 +1123,9 @@ class VoiceChannel:
 
             if self.is_live():
                 logger.info("VoiceChannel.attach: tearing down previous pipeline first")
-                await self._teardown_locked()
+                # A replaced peer (reload, or a new client before ICE noticed the
+                # old one left) keeps the room's profile, same as a disconnect.
+                await self._teardown_locked(preserve_active_profile=True)
 
             # Fresh sentinel + queue per connection so leftover state from
             # the previous session can't leak into this one.
@@ -1135,7 +1166,7 @@ class VoiceChannel:
         async with self._attach_lock:
             await self._teardown_locked(preserve_active_profile=False)
 
-    async def _disconnect_cleanup(self) -> None:
+    async def _disconnect_cleanup(self, transport: Any = None) -> None:
         """Tear down the pipeline but preserve the active profile.
 
         Triggered by the transport's ``on_client_disconnected`` event
@@ -1146,6 +1177,11 @@ class VoiceChannel:
         idle-TTL teardown (ticket 0c5d).
         """
         async with self._attach_lock:
+            if transport is not None and transport is not self._transport:
+                # A replaced peer's disconnect can arrive after the new call is
+                # up; tearing down here would kill the new call.
+                logger.info("VoiceChannel: ignoring disconnect from a replaced peer")
+                return
             await self._teardown_locked(preserve_active_profile=True)
             # Schedule TTL inside the lock so a concurrent attach() that
             # already holds or is waiting on the lock will see the cancel
@@ -1164,6 +1200,27 @@ class VoiceChannel:
         """
         self._disconnected.set()
         self._user_speaking.clear()
+        # The pipeline is cancelled below without a closing frame reaching the
+        # assistant sink, so persist any half-spoken reply now.
+        if self._assistant_sink is not None:
+            self._assistant_sink.flush()
+        if self._convo_session is not None:
+            self._convo_session.shutdown()
+            if (
+                preserve_active_profile
+                and self._convo_session.record is not None
+                and self._pending_resume is None  # an explicit resume wins
+            ):
+                # Reload / reconnect: the next pipeline's backends start blank,
+                # so continue this convo there (natively when possible).
+                # Target is resolved at the next build: the profile may change in between.
+                self._pending_resume = {
+                    "convo_id": self._convo_session.record.id,
+                    "follow_active": True,
+                    "expires_at": time.monotonic() + self.PENDING_RESUME_TTL_SECS,
+                }
+        self._assistant_sink = None
+        self._convo_session = None
         task = self._pipeline_task
         runner_task = self._runner_task
         self._pipeline_task = None
@@ -1194,6 +1251,106 @@ class VoiceChannel:
                 await runner_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+    # ── convo resume (WIN-534) ──────────────────────────────────────────────
+
+    # A pending resume left unclaimed this long is dropped, so an unrelated call
+    # hours later starts fresh instead of appending to an old convo.
+    PENDING_RESUME_TTL_SECS = 30 * 60
+
+    def _resume_plan(self, convo_id: str, profile: Optional[str]) -> dict:
+        rec = self._convo_store.get(convo_id)
+        if rec is None:
+            raise ValueError(f"convo {convo_id!r} not found")
+        from talky.shared.profile_manager import get_profile_manager
+
+        target_profile = profile or rec.profile
+        tp = get_profile_manager().get_talky_profile(target_profile)
+        target_backend = (tp.llm_backend if tp and tp.llm_backend else None) or target_profile
+        native = rec.native_session_id if rec.native_session_id and target_backend == rec.backend else None
+        return {
+            "convo_id": rec.id,
+            "profile": target_profile,
+            "backend": target_backend,
+            "native_session_id": native,
+            "replay": native is None,
+            "turns": [{"role": t.role, "content": t.content} for t in self._convo_store.read_transcript(rec.id)],
+            "expires_at": time.monotonic() + self.PENDING_RESUME_TTL_SECS,
+        }
+
+    def _take_pending_resume(self) -> Optional[dict]:
+        pending, self._pending_resume = self._pending_resume, None
+        if pending is None:
+            return None
+        if time.monotonic() > pending["expires_at"]:
+            logger.info(f"VoiceChannel: pending resume of {pending['convo_id']} expired — starting fresh")
+            return None
+        if pending.get("follow_active"):
+            try:
+                return self._resume_plan(pending["convo_id"], self._active_profile or self.MCP_DRIVER_PROFILE)
+            except Exception as e:  # noqa: BLE001 — never block a browser from connecting
+                logger.warning(f"VoiceChannel: dropping pending resume of {pending['convo_id']}: {e}")
+                return None
+        return pending
+
+    def new_convo(self) -> None:
+        """Make the next turn start a fresh convo instead of continuing one."""
+        self._pending_resume = None
+        if self._convo_session is not None:
+            self._convo_session.start_fresh()
+        logger.info("VoiceChannel: next turn starts a new convo")
+
+    def resume_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
+        """Continue a saved convo, optionally on a different profile.
+
+        Applied at the next pipeline build: native resume (same backend + a
+        stored native session id) via the backend's ``resume=``, otherwise a
+        transcript replay via ``set_history``. If a call is live, its already-
+        running backend can't switch sessions, so the transcript is replayed
+        into it now; the plan also stays pending for the next build, since a
+        peer that just left still reads as live until ICE gives up. The caller
+        switches the profile afterwards.
+        """
+        plan = self._resume_plan(convo_id, profile)
+        if self.is_live() and self._convo_session is not None:
+            self._apply_replay(self._llm_services.get(plan["backend"]), {**plan, "replay": True})
+            self._convo_session.bind(plan["convo_id"])
+            # Not a snapshot: the live call keeps adding turns (and may get a new
+            # native id), so the next build re-reads the record.
+            self._pending_resume = {"convo_id": plan["convo_id"], "follow_active": True, "expires_at": plan["expires_at"]}
+            when = "live"
+        else:
+            self._pending_resume = plan
+            when = "next_call"
+        how = "native" if plan["native_session_id"] else f"replay {len(plan['turns'])} turns"
+        logger.info(f"VoiceChannel: resume convo {plan['convo_id']} on {plan['profile']} ({how}, {when})")
+        return {
+            "convo_id": plan["convo_id"],
+            "profile": plan["profile"],
+            "backend": plan["backend"],
+            "native_session_id": plan["native_session_id"],
+            "replay_turns": 0 if plan["native_session_id"] else len(plan["turns"]),
+            "applied": when,
+        }
+
+    @staticmethod
+    def _convos_enabled(pm: Any) -> bool:
+        settings = getattr(pm, "settings", None) or {}
+        return bool((settings.get("convos") or {}).get("enabled", True))
+
+    @staticmethod
+    def _apply_replay(service: Any, pending: dict) -> None:
+        if not pending.get("replay") or not pending.get("turns"):
+            return
+        if service is None:
+            logger.warning(f"VoiceChannel: {pending['backend']} isn't loaded in this pipeline — replay skipped")
+            return
+        set_history = getattr(service, "set_history", None)
+        if not callable(set_history):
+            logger.warning(f"VoiceChannel: {pending['backend']} has no set_history — replay skipped")
+            return
+        set_history(pending["turns"])
+        logger.info(f"VoiceChannel: replayed {len(pending['turns'])} turns into {pending['backend']}")
 
     # ── speak / listen ──────────────────────────────────────────────────────
 
@@ -1381,6 +1538,8 @@ class VoiceChannel:
             self.MCP_DRIVER_PROFILE: mcp_driver,
         }
 
+        pending = self._take_pending_resume()
+
         for backend_name in pm.list_llm_backends().keys():
             entry = self._backend_status.get(backend_name)
             status_str = entry.get("status") if entry else None
@@ -1392,7 +1551,8 @@ class VoiceChannel:
                 continue
 
             try:
-                svc = _instantiate_llm_backend(pm, backend_name)
+                native = pending.get("native_session_id") if pending and pending["backend"] == backend_name else None
+                svc = _instantiate_llm_backend(pm, backend_name, resume=native)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"VoiceChannel: skipping backend {backend_name!r}: {e}")
                 self._backend_status[backend_name] = {
@@ -1469,16 +1629,35 @@ class VoiceChannel:
             ),
         )
 
-        pipeline = Pipeline(
-            [
-                transport.input(),
-                stt,
-                turn_detector,
-                llm_switcher,
-                tts_switcher,
-                transport.output(),
-            ]
+        build_profile = self._active_profile or self.MCP_DRIVER_PROFILE
+        _tp_build = pm.get_talky_profile(build_profile) if build_profile else None
+        build_backend = (_tp_build.llm_backend if _tp_build and _tp_build.llm_backend else None) or build_profile
+        if pending is not None:
+            self._apply_replay(profile_map.get(pending["backend"]), pending)
+        session = ConvoSession(
+            self._convo_store,
+            enabled=self._convos_enabled(pm),
+            backend=build_backend,
+            profile=build_profile,
+            resume_into=pending["convo_id"] if pending else None,
+            native_id_reader=lambda svc=profile_map.get(build_backend): native_session_id_of(svc),
         )
+        assistant_sink = ConvoAssistantTranscriptProcessor(session)
+        self._convo_session = session
+        self._assistant_sink = assistant_sink
+
+        pipeline_steps: list = [
+            transport.input(),
+            stt,
+            turn_detector,
+            TalkyUserTranscriptProcessor(session),
+            llm_switcher,
+            tts_switcher,
+            assistant_sink,
+            transport.output(),
+        ]
+
+        pipeline = Pipeline(pipeline_steps)
 
         # 9e7d fix: disable pipecat's default 5-minute idle timeout so the
         # session doesn't self-cancel when the user steps away.
@@ -1537,7 +1716,7 @@ class VoiceChannel:
             # pipeline rebuilds, so the pipeline itself has to be rebuilt
             # — but from the user's perspective, closing and reopening
             # the browser should feel seamless.
-            asyncio.create_task(self._disconnect_cleanup())
+            asyncio.create_task(self._disconnect_cleanup(transport))
 
         # Speech-onset handler — sets _user_speaking when VAD detects
         # the user started talking. Used by request_leave to detect

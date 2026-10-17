@@ -25,10 +25,11 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
 from talky.config.voice_prompts import format_voice_message
+from talky.convos.replay import HistoryPreambleMixin
 from talky.server.turn import UserTurnTextFrame
 
 
-class MoltisLLMService(LLMService):
+class MoltisLLMService(HistoryPreambleMixin, LLMService):
     """Moltis LLM service - simple WebSocket-based implementation"""
 
     @staticmethod
@@ -244,6 +245,8 @@ class MoltisLLMService(LLMService):
                 logger.warning("No user message text")
                 await self.push_frame(LLMFullResponseEndFrame())
                 return
+
+            user_text = self._consume_preamble(user_text)
 
             # Format message with voice conversation guidance
             full_message = format_voice_message(user_text)
