@@ -906,6 +906,9 @@ def _build_webrtc_routes():
             result = voice_channel.resume_convo(convo_id, body.get("profile"))
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:  # noqa: BLE001 — e.g. a corrupt convo.json
+            logger.warning(f"/api/convos/resume failed for {convo_id!r}: {e}")
+            return JSONResponse({"error": f"could not resume {convo_id!r}: {e}"}, status_code=500)
         return JSONResponse({"status": "ok", **result})
 
     async def handle_new_convo(request: Request):  # noqa: ARG001

@@ -413,7 +413,8 @@ def test_live_resume_always_replays_even_when_native(channel, monkeypatch):
     assert out["applied"] == "live"
     assert seen["turns"][0]["content"] == "my code word is kiwi"
     assert channel._convo_session.resume_into == rec.id
-    assert channel._pending_resume["native_session_id"] == "sdk-1", "next build still resumes natively"
+    channel._active_profile = "claude"
+    assert channel._take_pending_resume()["native_session_id"] == "sdk-1", "next build still resumes natively"
 
 
 @pytest.mark.asyncio
@@ -470,3 +471,29 @@ def test_new_convo_drops_pending_and_starts_a_fresh_record(channel):
     assert channel._take_pending_resume() is None
     assert session.record.id != rec.id
     assert [t.content for t in channel._convo_store.read_transcript(rec.id)] == ["old"]
+
+
+def test_live_resume_then_more_turns_then_reconnect_sees_the_new_turns(channel, monkeypatch):
+    rec = channel._convo_store.create(backend="echo", profile="echo")
+    channel._convo_store.append_turn(rec.id, "user", "first")
+
+    class Svc:
+        def set_history(self, turns):
+            pass
+
+    monkeypatch.setattr(channel, "is_live", lambda: True)
+    channel._llm_services = {"pi": Svc()}
+    channel._convo_session = ConvoSession(channel._convo_store, backend="pi", profile="pi")
+    channel.resume_convo(rec.id, "pi")
+    channel._convo_session.append("user", "said after the resume")
+
+    channel._active_profile = "pi"
+    plan = channel._take_pending_resume()
+    assert [t["content"] for t in plan["turns"]] == ["first", "said after the resume"]
+
+
+def test_corrupt_record_does_not_block_the_next_build(channel, tmp_path):
+    rec = channel._convo_store.create(backend="echo", profile="echo")
+    (channel._convo_store.root / rec.id / "convo.json").write_text("{not json")
+    channel._pending_resume = {"convo_id": rec.id, "follow_active": True, "expires_at": 1e18}
+    assert channel._take_pending_resume() is None

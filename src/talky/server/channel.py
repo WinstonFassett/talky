@@ -1288,8 +1288,9 @@ class VoiceChannel:
         if pending.get("follow_active"):
             try:
                 return self._resume_plan(pending["convo_id"], self._active_profile or self.MCP_DRIVER_PROFILE)
-            except ValueError:
-                return None  # record deleted in the meantime
+            except Exception as e:  # noqa: BLE001 — never block a browser from connecting
+                logger.warning(f"VoiceChannel: dropping pending resume of {pending['convo_id']}: {e}")
+                return None
         return pending
 
     def new_convo(self) -> None:
@@ -1311,12 +1312,15 @@ class VoiceChannel:
         switches the profile afterwards.
         """
         plan = self._resume_plan(convo_id, profile)
-        self._pending_resume = plan
         if self.is_live() and self._convo_session is not None:
             self._apply_replay(self._llm_services.get(plan["backend"]), {**plan, "replay": True})
             self._convo_session.bind(plan["convo_id"])
+            # Not a snapshot: the live call keeps adding turns (and may get a new
+            # native id), so the next build re-reads the record.
+            self._pending_resume = {"convo_id": plan["convo_id"], "follow_active": True, "expires_at": plan["expires_at"]}
             when = "live"
         else:
+            self._pending_resume = plan
             when = "next_call"
         how = "native" if plan["native_session_id"] else f"replay {len(plan['turns'])} turns"
         logger.info(f"VoiceChannel: resume convo {plan['convo_id']} on {plan['profile']} ({how}, {when})")

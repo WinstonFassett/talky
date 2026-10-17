@@ -78,9 +78,7 @@ class MoltisLLMService(HistoryPreambleMixin, LLMService):
         self._request_id_counter = int(time.time() * 1000)
         self._message_handler_task = None
 
-
         logger.info(f"✅ MoltisLLMService initialized (session: {self.session_key})")
-
 
     def _generate_session_key(self) -> str:
         """Generate session key based on strategy"""

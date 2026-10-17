@@ -312,9 +312,7 @@ class OpenClawLLMService(HistoryPreambleMixin, LLMService):
         self._request_id_counter = int(time.time() * 1000)
         self._message_handler_task = None
 
-
         logger.info(f"✅ OpenClawLLMService initialized (agent: {self.agent_id})")
-
 
     def _next_id(self) -> int:
         self._request_id_counter += 1
@@ -550,9 +548,7 @@ class OpenClawLLMService(HistoryPreambleMixin, LLMService):
                 await self.push_frame(LLMFullResponseEndFrame())
                 return
 
-            last_user_message = user_text
-
-            last_user_message = self._consume_preamble(last_user_message)
+            last_user_message = self._consume_preamble(user_text)
 
             # Format message with voice conversation guidance
             full_message = format_voice_message(last_user_message)
