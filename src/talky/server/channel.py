@@ -1213,7 +1213,12 @@ class VoiceChannel:
             ):
                 # Reload / reconnect: the next pipeline's backends start blank,
                 # so continue this convo there (natively when possible).
-                self._pending_resume = self._resume_plan(self._convo_session.record.id, self._active_profile)
+                # Target is resolved at the next build: the profile may change in between.
+                self._pending_resume = {
+                    "convo_id": self._convo_session.record.id,
+                    "follow_active": True,
+                    "expires_at": time.monotonic() + self.PENDING_RESUME_TTL_SECS,
+                }
         self._assistant_sink = None
         self._convo_session = None
         task = self._pipeline_task
@@ -1275,10 +1280,24 @@ class VoiceChannel:
 
     def _take_pending_resume(self) -> Optional[dict]:
         pending, self._pending_resume = self._pending_resume, None
-        if pending is not None and time.monotonic() > pending["expires_at"]:
+        if pending is None:
+            return None
+        if time.monotonic() > pending["expires_at"]:
             logger.info(f"VoiceChannel: pending resume of {pending['convo_id']} expired — starting fresh")
             return None
+        if pending.get("follow_active"):
+            try:
+                return self._resume_plan(pending["convo_id"], self._active_profile or self.MCP_DRIVER_PROFILE)
+            except ValueError:
+                return None  # record deleted in the meantime
         return pending
+
+    def new_convo(self) -> None:
+        """Make the next turn start a fresh convo instead of continuing one."""
+        self._pending_resume = None
+        if self._convo_session is not None:
+            self._convo_session.start_fresh()
+        logger.info("VoiceChannel: next turn starts a new convo")
 
     def resume_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
         """Continue a saved convo, optionally on a different profile.

@@ -908,6 +908,11 @@ def _build_webrtc_routes():
             return JSONResponse({"error": str(e)}, status_code=404)
         return JSONResponse({"status": "ok", **result})
 
+    async def handle_new_convo(request: Request):  # noqa: ARG001
+        """POST /api/convos/new — the next turn starts a fresh convo (WIN-534)."""
+        voice_channel.new_convo()
+        return JSONResponse({"status": "ok"})
+
     async def handle_get_steer_mode(request: Request):  # noqa: ARG001
         """GET /api/steer-mode — return active steer mode for hermes backend."""
         from talky.backends.hermes import HermesLLMService
@@ -1195,6 +1200,7 @@ def _build_webrtc_routes():
         Route("/api/voices/switch", handle_switch_voice, methods=["POST"]),
         Route("/api/resume", handle_set_resume, methods=["POST"]),
         Route("/api/convos/resume", handle_resume_convo, methods=["POST"]),
+        Route("/api/convos/new", handle_new_convo, methods=["POST"]),
         Route("/api/steer-mode", handle_get_steer_mode, methods=["GET"]),
         Route("/api/steer-mode", handle_set_steer_mode, methods=["POST"]),
         Route("/api/permission/grant", handle_permission_grant, methods=["POST"]),

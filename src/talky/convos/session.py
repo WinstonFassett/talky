@@ -55,6 +55,12 @@ class ConvoSession:
         if self.record is not None:
             self._sync_meta()
 
+    def start_fresh(self) -> None:
+        """Next turn opens a new record."""
+        self.shutdown()
+        self.resume_into = None
+        self.record = None
+
     def bind(self, convo_id: str) -> None:
         """Point this call at an existing record (live resume)."""
         self.resume_into = convo_id

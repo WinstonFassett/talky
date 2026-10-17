@@ -823,6 +823,19 @@ def cmd_convos(args):
     store = default_store()
     sub = getattr(args, "convos_cmd", None) or "list"
 
+    if sub == "new":
+        if not talky_daemon_is_running():
+            print("no daemon running — the next call starts a new convo anyway")
+            return
+        req = urllib.request.Request(
+            f"{daemon_base_url()}/api/convos/new", data=b"{}", method="POST",
+            headers={"content-type": "application/json"},
+        )
+        with daemon_urlopen(req, timeout=5) as resp:
+            resp.read()
+        print("✅ the next turn starts a new convo")
+        return
+
     if sub == "show":
         rec = store.get(args.id)
         if rec is None:
@@ -1434,6 +1447,7 @@ def main():
     convos_parser.add_argument("--json", action="store_true", help="Emit JSON")
     convos_sub = convos_parser.add_subparsers(dest="convos_cmd")
     convos_sub.add_parser("list", help="Newest-first list (default)")
+    convos_sub.add_parser("new", help="Start a new convo on the next turn instead of continuing the last one")
     show_p = convos_sub.add_parser("show", help="Print the transcript of one convo")
     show_p.add_argument("id", help="Convo id")
     convos_parser.set_defaults(func=cmd_convos)

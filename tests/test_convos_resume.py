@@ -422,6 +422,7 @@ async def test_reconnect_carries_the_convo_to_the_next_build(channel):
     session = ConvoSession(channel._convo_store, backend="claude-code", profile="claude", resume_into=rec.id)
     session.append("user", "hi")
     channel._convo_session = session
+    channel._active_profile = "claude"
 
     await channel._teardown_locked(preserve_active_profile=True)
 
@@ -447,9 +448,25 @@ async def test_reconnect_after_profile_switch_replays_into_the_new_backend(chann
     session = ConvoSession(channel._convo_store, backend="claude-code", profile="claude", resume_into=rec.id)
     session.append("user", "my code word is heron")
     channel._convo_session = session
-    channel._active_profile = "pi"
+    channel._active_profile = "claude"
 
     await channel._teardown_locked(preserve_active_profile=True)
 
+    channel._active_profile = "pi"  # switched between calls; resolved at the next build
     pending = channel._take_pending_resume()
     assert pending["backend"] == "pi" and pending["native_session_id"] is None and pending["replay"]
+
+
+def test_new_convo_drops_pending_and_starts_a_fresh_record(channel):
+    rec = channel._convo_store.create(backend="echo", profile="echo")
+    session = ConvoSession(channel._convo_store, backend="echo", profile="echo", resume_into=rec.id)
+    session.append("user", "old")
+    channel._convo_session = session
+    channel._pending_resume = {"convo_id": rec.id, "follow_active": True, "expires_at": 1e18}
+
+    channel.new_convo()
+    session.append("user", "new")
+
+    assert channel._take_pending_resume() is None
+    assert session.record.id != rec.id
+    assert [t.content for t in channel._convo_store.read_transcript(rec.id)] == ["old"]
