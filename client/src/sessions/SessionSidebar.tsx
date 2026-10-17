@@ -330,7 +330,8 @@ function SessionList({ onPicked, onCollapse }: { onPicked?: () => void; onCollap
           <SearchIcon size={13} style={{ color: 'var(--color-text-mute)' }} className="shrink-0" />
           <input
             data-testid="session-search"
-            type="search"
+            type="text"
+            aria-label="Search sessions"
             placeholder="Search sessions"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
