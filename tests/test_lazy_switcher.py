@@ -52,9 +52,10 @@ async def test_added_llm_starts_once_and_replies():
     try:
         assert later.starts == 0, "a backend nobody switched to must not start"
 
-        # Called right away: waits for the pipeline to start, then for later's start().
+        # Called right away: waits for the pipeline to start, then queues later's start.
         assert await switcher.add_llm(later) is True
-        assert later.starts == 1, "add_llm returns only once the backend has started"
+        assert await switcher.wait_started(later) is True
+        assert later.starts == 1
         assert await switcher.add_llm(later) is True  # idempotent
         await task.queue_frames([ManuallySwitchServiceFrame(service=later), UserTurnTextFrame(text="hi")])
         await asyncio.wait_for(sink.got.wait(), timeout=5)
@@ -78,3 +79,23 @@ async def test_no_add_once_the_pipeline_is_ending():
     late = _CountingEcho("late")
     assert await switcher.add_llm(late) is False
     assert late.starts == 0
+
+
+class _HangingStart(_CountingEcho):
+    async def start(self, frame: StartFrame):
+        await asyncio.sleep(3600)
+
+
+@pytest.mark.asyncio
+async def test_wait_started_ends_with_the_pipeline():
+    """A backend stuck in start() doesn't hold its waiter past the pipeline's end."""
+    switcher = LazyLLMSwitcher(llms=[_CountingEcho("first")], strategy_type=ServiceSwitcherStrategyManual)
+    task = PipelineTask(Pipeline([switcher]), idle_timeout_secs=None, cancel_on_idle_timeout=False)
+    runner = asyncio.create_task(PipelineRunner(handle_sigint=False).run(task))
+    hanging = _HangingStart("hanging")
+    assert await switcher.add_llm(hanging) is True
+    waiter = asyncio.create_task(switcher.wait_started(hanging))
+    await asyncio.sleep(0.2)
+    await task.cancel()
+    assert await asyncio.wait_for(waiter, timeout=5) is False
+    runner.cancel()

@@ -784,15 +784,24 @@ class VoiceChannel:
             }
             return None
 
-    async def _ensure_backend(self, backend_name: str) -> Any:
+    async def _ensure_backend(self, backend_name: str, *, wait_started: bool = False) -> Any:
         """Return the live pipeline's service for ``backend_name``, starting it if needed.
 
         Only the active profile's backend is built with the pipeline; any
         other is built and added to the running switcher here, the first time
         it's needed, and then stays for the rest of the call (WIN-556).
         Returns None if the backend isn't configured, isn't Ready, or no
-        pipeline is live.
+        pipeline is live. Frames routed through the switcher queue behind the
+        backend's start, so a profile switch doesn't wait for it (an agent
+        spawn can outlast the CLI's HTTP timeout); ``wait_started`` is for
+        callers that hand the service frames directly.
         """
+        svc = await self._ensure_backend_added(backend_name)
+        if svc is not None and wait_started and isinstance(self._llm_switcher, LazyLLMSwitcher):
+            await self._llm_switcher.wait_started(svc)
+        return svc
+
+    async def _ensure_backend_added(self, backend_name: str) -> Any:
         svc = self._llm_services.get(backend_name)
         if svc is not None:
             return svc
@@ -1490,7 +1499,7 @@ class VoiceChannel:
     async def _resume_interrupted_turn(self, replay: dict) -> None:
         """Tell the client the turn is being resumed, then re-run it on its backend."""
         logger.info(f"VoiceChannel: resuming interrupted turn {replay['convo_id']} on {replay['backend']}")
-        svc = await self._ensure_backend(replay["backend"])
+        svc = await self._ensure_backend(replay["backend"], wait_started=True)
         if svc is None:
             logger.warning(f"VoiceChannel: {replay['backend']} not loaded — interrupted turn not replayed")
             return
