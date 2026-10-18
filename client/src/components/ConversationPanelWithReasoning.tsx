@@ -5,6 +5,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useId,
   useRef,
   useState,
   memo,
@@ -73,29 +74,59 @@ function useCodePlugin(): StreamdownPlugins | undefined {
 // ─── CODE BLOCKS ───────────────────────────────────────────────────────
 // Streamdown's own copy control is an unlabeled icon; ours says "Copy" and
 // "Copied" for a moment after a click.
+// The flash is keyed by the block's text, not component state: the lazy
+// highlighter swaps the code subtree out once it loads, remounting this
+// button — a state-only flag would die with the old instance.
+const copyFlash = new Map<string, number>();
+
 function CodeCopy() {
   const ref = useRef<HTMLButtonElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copied, setCopied] = useState(false);
-  const copy = () => {
+  // A stable accessible name, independent of the Copied flash: the visible
+  // text toggles but the control is still "the copy button".
+  const labelId = useId();
+
+  const codeText = () => {
     const block = ref.current?.closest('.talky-code');
     const code = block?.querySelector('pre code') ?? block?.querySelector('code');
-    const text = (code?.textContent ?? '').replace(/\n$/, '');
-    void navigator.clipboard.writeText(text).then(() => {
+    // innerText keeps the line breaks between the highlighter's line spans;
+    // textContent flattens them.
+    return ((code instanceof HTMLElement ? code.innerText : code?.textContent) ?? '').replace(/\n$/, '');
+  };
+
+  // A remount after the highlighter upgrade: pick the flash back up.
+  useLayoutEffect(() => {
+    const until = copyFlash.get(codeText());
+    if (until && until > Date.now()) {
       setCopied(true);
-      setTimeout(() => setCopied(false), 1000);
-    });
+      timer.current = setTimeout(() => setCopied(false), until - Date.now());
+    }
+  }, []);
+
+  const copy = () => {
+    const text = codeText();
+    copyFlash.set(text, Date.now() + 1000);
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1000);
+    void navigator.clipboard.writeText(text).catch(() => setCopied(false));
   };
   return (
-    <button
-      ref={ref}
-      type="button"
-      onClick={copy}
-      data-testid="code-copy"
-      className="absolute right-1.5 top-1.5 z-10 rounded px-1.5 py-0.5 font-mono text-[11px] transition-colors hover:bg-[var(--color-panel-3)]"
-      style={{ color: copied ? 'var(--color-success)' : 'var(--color-text-dim)' }}
-    >
-      {copied ? 'Copied' : 'Copy'}
-    </button>
+    <>
+      <span id={labelId} className="sr-only">Copy code</span>
+      <button
+        ref={ref}
+        type="button"
+        onClick={copy}
+        aria-labelledby={labelId}
+        data-testid="code-copy"
+        className="absolute right-1.5 top-1.5 z-10 rounded px-1.5 py-0.5 font-mono text-[11px] transition-colors hover:bg-[var(--color-panel-3)]"
+        style={{ color: copied ? 'var(--color-success)' : 'var(--color-text-dim)' }}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </>
   );
 }
 
@@ -585,19 +616,24 @@ function ConversationMessages({
   const following = useRef(true);
   const [awayFromBottom, setAwayFromBottom] = useState(false);
   const [unread, setUnread] = useState(0);
-  const seen = useRef(messages.length);
+  const seen = useRef<{ len: number; key: string }>({ len: messages.length, key: '' });
 
   const pin = useCallback(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, []);
 
+  // Content version of a message: identity + how much it holds. A reply
+  // streams into the same message, so length alone can't tell it grew.
+  const keyOfMessage = (m: TalkyMessage | undefined) =>
+    m ? `${m.id}:${m.parts.length}:${m.parts.reduce((n, p) => n + (p.kind === 'text' ? p.spoken.length + p.unspoken.length : 1), 0)}` : '';
+
   const follow = useCallback(() => {
     following.current = true;
-    seen.current = messages.length;
+    seen.current = { len: messages.length, key: keyOfMessage(messages.at(-1)) };
     setUnread(0);
     setAwayFromBottom(false);
-  }, [messages.length]);
+  }, [messages]);
 
   // A different session opened: land at its bottom.
   useLayoutEffect(() => {
@@ -621,11 +657,15 @@ function ConversationMessages({
       el.scrollTop = el.scrollHeight - p.height + p.top;
     } else if (following.current) {
       el.scrollTop = el.scrollHeight;
-      seen.current = messages.length;
+      seen.current = { len: messages.length, key: keyOfMessage(lastMsg) };
       setUnread(0);
       setAwayFromBottom(false);
-    } else if (messages.length > seen.current) {
-      setUnread(messages.length - seen.current);
+    } else {
+      // A reply streams into a message that existed when we scrolled up, so
+      // "unread" is new messages OR the tail message that grew meanwhile.
+      let n = Math.max(0, messages.length - seen.current.len);
+      if (n === 0 && keyOfMessage(lastMsg) !== seen.current.key) n = 1;
+      setUnread((u) => (u === n ? u : n));
     }
     prev.current = { first, last, height: el.scrollHeight, top: el.scrollTop };
   }, [messages, turn.notices]);

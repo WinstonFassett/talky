@@ -119,7 +119,12 @@ const openSeeded = async (page, base, convo) => {
 	await noLeftoverDraft(page);
 	await open(page, base);
 	await page.click(`${sel.row}[data-convo-id="${convo.id}"]`, { timeout: 10000 });
-	await page.waitForFunction(({ list, text }) => document.querySelector(list)?.innerText.includes(text), { list: sel.list, text: convo.last.slice(0, 30) }, { timeout: 10000 });
+	// Match on plain words: the transcript renders markdown, so literal
+	// `**` / backticks / link syntax never appear in innerText. Normalise both
+	// sides the same way so "greet(name):" still lines up.
+	const strip = /[*_`[\]()#>~|\\-]+/g;
+	const plain = convo.last.replace(strip, " ").replace(/\s+/g, " ").trim().slice(0, 24).trimEnd();
+	await page.waitForFunction(({ list, text, re }) => (document.querySelector(list)?.innerText ?? "").replace(new RegExp(re, "g"), " ").replace(/\s+/g, " ").includes(text), { list: sel.list, text: plain, re: strip.source }, { timeout: 10000 });
 };
 
 const isConnected = (voice) => /Voice status: (IDLE|LISTENING|THINKING|SPEAKING)/.test(document.querySelector(voice)?.getAttribute("aria-label") ?? "");
@@ -318,10 +323,12 @@ export default {
 		"A way back to the newest message": async ({ page, base }) => {
 			await openSeeded(page, base, seed());
 			await connect(page);
+			const before = await page.locator(sel.message).count();
 			await send(page, "[[sleep 3]] [[say Here is the newest reply.]]");
 			await wheelUp(page, 900);
 			await page.waitForSelector(sel.jump, { timeout: 3000 });
-			await page.waitForFunction((list) => document.querySelector(list)?.innerText.includes("Here is the newest reply"), sel.list, { timeout: 30000 });
+			// The reply's own message (message N+2 — the user's turn at N+1 holds the same words in its [[say]] script).
+			await page.waitForFunction(({ m, n }) => document.querySelectorAll(m).length > n + 1 && [...document.querySelectorAll(m)].at(-1).innerText.includes("Here is the newest reply"), { m: sel.message, n: before }, { timeout: 30000 });
 			const unread = await page.$eval(sel.jump, (el) => Number(el.getAttribute("data-unread")));
 			const label = await page.$eval(sel.jump, (el) => el.getAttribute("aria-label") ?? el.textContent);
 			if (!(unread >= 1)) fail(`the button shows ${unread} unread after a reply arrived`);
@@ -373,7 +380,8 @@ export default {
 				}).observe(document, { childList: true, subtree: true });
 			}, sel.empty);
 			await page.goto(`${base}/?session=${convo.id}`, { waitUntil: "load" });
-			await page.waitForFunction((list) => document.querySelector(list)?.innerText.includes(convo.last.slice(0, 20)), sel.list, { timeout: 10000 }).catch(() => fail(`/?session=${convo.id} did not show that conversation`));
+			const needle = convo.last.slice(0, 20);
+			await page.waitForFunction(({ list, text }) => document.querySelector(list)?.innerText.includes(text), { list: sel.list, text: needle }, { timeout: 10000 }).catch(() => fail(`/?session=${convo.id} did not show that conversation`));
 			const seen = await page.evaluate(() => globalThis.__basicFlash);
 			if (seen.empty) fail(`the empty state appeared ${seen.empty} times while the conversation loaded`);
 			if (!seen.loading) fail("no loading state was shown before the messages");
@@ -633,11 +641,15 @@ export default {
 			await openFresh(page, base);
 			await connect(page);
 			await send(page, "[[think weighing the options carefully]] [[sleep 2]] [[say the answer.]]");
-			const trigger = page.getByRole("button", { name: /Thinking|Thought/ }).last();
+			// Scoped to the last message: the ConverseButton also reads
+			// "Thinking…" while a turn runs, and the user's own turn holds the
+			// same words in its [[think]] directive.
+			const lastMsg = page.locator(sel.message).last();
+			const trigger = lastMsg.getByRole("button", { name: /Thinking|Thought/ }).last();
 			await trigger.waitFor({ timeout: 10000 });
 			const check = async (when) => {
 				if ((await trigger.getAttribute("aria-expanded")) !== "false") fail(`the reasoning is open ${when}`);
-				if (await page.getByText("weighing the options carefully").isVisible()) fail(`the reasoning text is visible ${when}`);
+				if (await lastMsg.getByText("weighing the options carefully").isVisible()) fail(`the reasoning text is visible ${when}`);
 			};
 			await check("while streaming");
 			await waitTurnDone(page);
@@ -650,7 +662,7 @@ export default {
 			});
 			if (!order) fail("the reasoning is not above the answer");
 			await trigger.click();
-			if (!(await page.getByText("weighing the options carefully").isVisible())) fail("opening the disclosure does not show the reasoning");
+			if (!(await lastMsg.getByText("weighing the options carefully").isVisible())) fail("opening the disclosure does not show the reasoning");
 		},
 
 		// ─── 4. The conversation list tells me what needs me ────────────────
@@ -746,7 +758,7 @@ export default {
 			const code = 'def greet(name):\n    return f"hello, {name}"';
 			const convo = seed({ content: [{ role: "user", content: "code please" }, { role: "assistant", content: "Sure:\n\n```python\n" + code + "\n```" }] });
 			await openSeeded(page, base, convo);
-			const button = page.locator(sel.message).last().getByRole("button", { name: /^copy/i }).first();
+			const button = page.locator(sel.message).last().getByRole("button", { name: /^copy( code)?$/i }).first();
 			const name = (b) => b.evaluate((el) => (el.getAttribute("aria-label") || el.textContent || "").trim().toLowerCase());
 			if (!/^copy( code)?$/.test(await name(button))) fail(`the code button is named "${await name(button)}"`);
 			await button.click();
@@ -806,7 +818,13 @@ export default {
 				return { raw: m.innerText.includes("```"), markdown: !!m.querySelector("p, pre, code") };
 			});
 			if (firstRender.raw || !firstRender.markdown) fail(`the first render is ${JSON.stringify(firstRender)}`);
-			await page.waitForFunction((list) => [...document.querySelectorAll(`${list} pre span`)].some((s) => s.getAttribute("style")?.includes("color")), sel.list, { timeout: 15000 }).catch(() => fail("the code block was never highlighted"));
+			// Highlighted = token spans carry different colours (shiki sets them as
+			// --sdm-c / --shiki-dark custom properties or inline color).
+			await page.waitForFunction((list) => {
+				const spans = [...document.querySelectorAll(`${list} pre span`)];
+				if (spans.some((s) => /--sdm-c|--shiki-dark|color\s*:/.test(s.getAttribute("style") ?? ""))) return true;
+				return new Set(spans.map((s) => getComputedStyle(s).color)).size > 1;
+			}, sel.list, { timeout: 15000 }).catch(() => fail("the code block was never highlighted"));
 			await waitTurnDone(page);
 			return `markdown on the first render; highlighter fetched lazily (${loadedEarly ? "preloaded" : "after load"}), then the block upgraded`;
 		},

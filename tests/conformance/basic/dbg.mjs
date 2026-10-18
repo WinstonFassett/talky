@@ -24,7 +24,8 @@ try {
 } catch (e) {
 	console.log("FAIL", String(e?.message ?? e).split("\n")[0]);
 	await page.screenshot({ path: `dbg-${title.replace(/[^\w]+/g, "-")}.png` }).catch(() => {});
-	console.log("body:", (await page.evaluate(() => document.body.innerText.slice(0, 1500))).replace(/\n+/g, " | "));
+	console.log("transcript:", JSON.stringify(await page.evaluate(() => document.querySelector('[data-testid="transcript-list"]')?.innerText.slice(0, 400) ?? null)));
+	console.log("msgs:", await page.locator('[data-testid="transcript-message"]').count(), "| loading:", await page.locator('[data-testid="transcript-loading"]').count(), "| empty:", await page.locator('[data-testid="empty-state"]').count(), "| alert:", JSON.stringify(await page.evaluate(() => [...document.querySelectorAll("[role=alert]")].map((e) => e.innerText).join(" | ").slice(0, 200))));
 	console.log("url:", page.url());
 }
 await browser.close();
