@@ -194,3 +194,33 @@ async def test_replay_turn_is_not_resent_to_the_user_processor(tmp_path):
     assert len(store.read_transcript(session.record.id)) == 1
     await sink.process_frame(UserTurnTextFrame(text="first send", replay=True), FrameDirection.DOWNSTREAM)
     assert len(store.read_transcript(session.record.id)) == 1  # not duplicated
+
+
+def test_only_a_recent_interrupted_turn_is_resumed(tmp_path):
+    """A turn cut off long ago is cleared at startup, not replayed (WIN-536)."""
+    from talky.server.channel import INTERRUPTED_TURN_MAX_AGE_SECS, VoiceChannel
+
+    store = ConvoStore(tmp_path)
+    old = store.create(backend="echo", profile="echo")
+    store.append_turn(old.id, "user", "from last week")
+    store.set_in_progress(old.id, True)
+    rec = store.get(old.id)
+    rec.last_active_at -= INTERRUPTED_TURN_MAX_AGE_SECS + 60
+    store.save(rec)
+    fresh = store.create(backend="echo", profile="echo")
+    store.append_turn(fresh.id, "user", "just now")
+    store.set_in_progress(fresh.id, True)
+
+    ch = VoiceChannel()
+    ch._convo_store = store
+    ch._detect_interrupted_turn()
+    assert ch._interrupted_replay["convo_id"] == fresh.id
+    assert ch._interrupted_replay["text"] == "just now"
+    assert store.get(old.id).in_progress is False
+
+    store.set_in_progress(fresh.id, False)
+    ch2 = VoiceChannel()
+    ch2._convo_store = store
+    ch2._interrupted_replay = None
+    ch2._detect_interrupted_turn()
+    assert ch2._interrupted_replay is None

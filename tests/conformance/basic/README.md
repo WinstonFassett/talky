@@ -1,10 +1,23 @@
 # Basic conformance (talky adapter)
 
 Vendored from [acoyfellow/basic](https://github.com/acoyfellow/basic) at
-commit `8997271c` (no LICENSE upstream — recorded in the vendoring commit
-`20e4c6f`). `contract/chat.feature` has the 70-scenario agent-chat contract
-(56 `@must`); `run.mjs` is the Chromium runner; `diagram.mjs` colours the
-contract map by result. Our side lives in `adapters/talky.mjs`.
+commit `8997271c9684d1a2adf290677803f3cce49baed`. **Upstream has no LICENSE
+file** at that commit, so this copy is for our own testing only; don't
+redistribute it. `contract/chat.feature` has the 70-scenario agent-chat
+contract (56 `@must`; upstream's README says 57); `run.mjs` is the Chromium
+runner; `diagram.mjs` colours the contract map by result. Our side lives in
+`adapters/talky.mjs`.
+
+### Local changes to the vendored runner
+
+`contract/` and `diagram.mjs` are byte-for-byte upstream. `run.mjs` is not;
+it differs only in how the browser is set up, never in what counts as a pass:
+
+- it launches the installed Google Chrome (`channel: "chrome"`), headless;
+- it passes Chrome's fake-media flags plus a silent WAV as the mic, the same
+  setup as `tests/browser/drive_text.py` (headless Chrome has no mic);
+- each check gets a fresh browser context, so one check's drafts, storage
+  and half-closed connections can't leak into the next.
 
 ## What it drives
 
@@ -40,14 +53,23 @@ npm run floor          # = node run.mjs --floor --app=talky
 # 4. Coloured contract map:
 npm run diagram        # = node diagram.mjs --app=talky  → diagrams/talky.svg
 
+#    BASIC_SHOTS=<dir> also saves a screenshot as each check passes
+#    (the runner itself only screenshots failures, into reports/shots/).
+
 # 5. One scenario, with a screenshot on failure:
 TALKY_HOME=… BASE=http://127.0.0.1:8785 node dbg.mjs "<Scenario title>"
 ```
 
-Requires `npm install` (playwright) in this directory and Chromium
-(`npx playwright install chromium`).
+Requires `npm install` (playwright) in this directory and Google Chrome
+installed. Everything runs headless: no browser windows open, and nothing
+signs in anywhere.
 
 ## Rules of the road
+
+- `talky-daemon.sh` starts the daemon with `TALKY_ONLY_BACKENDS=echo,script`.
+  The daemon builds **every** configured LLM backend on each call, so without
+  it every check would also start real devin / hermes / pi / opencode
+  sessions on your logins (a run before this fix started 102 devin sessions).
 
 - The restart scenarios (`A turn interrupted by a restart resumes`, the
   reconnect rules) stop/start the daemon through `talky-daemon.sh`

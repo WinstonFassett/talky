@@ -75,6 +75,11 @@ import time
 from typing import Any, Optional
 
 from loguru import logger
+
+# Only a turn interrupted this recently is resumed after a restart (WIN-536).
+INTERRUPTED_TURN_MAX_AGE_SECS = 30 * 60
+# A browser that left mid-turn ends that turn this long after, unless the daemon is stopping.
+PEER_LEFT_CLEAR_DELAY_SECS = 5.0
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     InterruptionFrame,
@@ -228,6 +233,9 @@ class VoiceChannel:
         # Active pipeline state (populated by attach(), cleared by detach())
         self._transport: Optional[SmallWebRTCTransport] = None
         self._pipeline_task: Optional[PipelineTask] = None
+        # Set when the daemon itself is stopping: only then is a turn left
+        # mid-way "interrupted by a restart" and resumed on the next start.
+        self._shutting_down = False
         self._runner: Optional[PipelineRunner] = None
         self._runner_task: Optional[asyncio.Task] = None
         self._voice_switcher: Optional[Any] = None  # VoiceProfileSwitcher
@@ -1293,6 +1301,19 @@ class VoiceChannel:
                 # up; tearing down here would kill the new call.
                 logger.info("VoiceChannel: ignoring disconnect from a replaced peer")
                 return
+            if not self._shutting_down and self._convo_session is not None:
+                # The browser left mid-turn while the daemon keeps running: the
+                # turn ends with this call. It wasn't interrupted by a restart,
+                # so the next daemon start must not resume it (WIN-536). Cleared
+                # a moment later: a daemon that is itself stopping (the peer
+                # drops during its shutdown) never gets there, keeping the marker.
+                session = self._convo_session
+
+                def _clear() -> None:
+                    if not self._shutting_down:
+                        session.mark_turn_complete()
+
+                asyncio.get_running_loop().call_later(PEER_LEFT_CLEAR_DELAY_SECS, _clear)
             await self._teardown_locked(preserve_active_profile=True)
             # Schedule TTL inside the lock so a concurrent attach() that
             # already holds or is waiting on the lock will see the cancel
@@ -1456,6 +1477,16 @@ class VoiceChannel:
         except Exception as e:  # noqa: BLE001 — a corrupt store must not block startup
             logger.warning(f"VoiceChannel: interrupted-turn scan failed: {e}")
             return
+        # A turn cut off long ago (the browser closed mid-turn, then the daemon
+        # restarted hours later) is not one to resume: replaying it whenever
+        # that session is next opened would surprise the user.
+        cutoff = time.time() - INTERRUPTED_TURN_MAX_AGE_SECS
+        for rec in [r for r in interrupted if r.last_active_at < cutoff]:
+            try:
+                self._convo_store.set_in_progress(rec.id, False)
+            except Exception:  # noqa: BLE001
+                pass
+        interrupted = [r for r in interrupted if r.last_active_at >= cutoff]
         if not interrupted:
             return
         for rec in interrupted[1:]:
@@ -1515,6 +1546,15 @@ class VoiceChannel:
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"VoiceChannel: interrupted-turn profile switch failed: {e}")
         # Only claim the turn is resuming once the replay can actually run.
+        # Over the call itself (ordered with the replayed frames; the browser's
+        # SSE stream may still be reconnecting after the restart), and on the
+        # bus for anything else listening.
+        if self._pipeline_task is not None:
+            from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
+
+            await self._pipeline_task.queue_frames(
+                [RTVIServerMessageFrame(data={"type": "turnResumed", "convo_id": replay["convo_id"]})]
+            )
         await event_bus.emit("turnResumed", {"convo_id": replay["convo_id"]})
         try:
             # A replay is a user turn re-run: the user processor skips it (replay=True),
@@ -1691,6 +1731,7 @@ class VoiceChannel:
 
     async def shutdown(self) -> None:
         """Lifespan-shutdown hook. Tears down any active pipeline."""
+        self._shutting_down = True
         await self.detach()
         logger.info("VoiceChannel shutdown complete")
 

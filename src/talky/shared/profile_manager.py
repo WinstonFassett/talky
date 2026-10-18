@@ -1,5 +1,6 @@
 """Profile Manager — loads all config from ~/.talky/ with auto-copy of bundled defaults."""
 
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,6 +129,7 @@ class ProfileManager:
         self._load_voice_backends()
         self._load_voice_profiles()
         self._load_talky_profiles()
+        self._apply_backend_allowlist()
         logger.info(
             f"Loaded {len(self.llm_backends)} LLM backends, "
             f"{len(self.voice_profiles)} voice profiles, "
@@ -140,6 +142,25 @@ class ProfileManager:
             raise FileNotFoundError(f"Config not found: {path}")
         with open(path) as f:
             return yaml.safe_load(f) or {}
+
+    def _apply_backend_allowlist(self):
+        """``TALKY_ONLY_BACKENDS=echo,script`` keeps just those LLM backends (WIN-536).
+
+        Every call builds every configured backend, so a test daemon would
+        otherwise start real agent sessions (devin, hermes, pi, opencode) on each
+        connect. Talky profiles on a dropped backend are dropped with it.
+        """
+        raw = os.environ.get("TALKY_ONLY_BACKENDS", "").strip()
+        if not raw:
+            return
+        keep = {n.strip() for n in raw.split(",") if n.strip()}
+        dropped = sorted(n for n in self.llm_backends if n not in keep)
+        self.llm_backends = {n: b for n, b in self.llm_backends.items() if n in keep}
+        self.talky_profiles = {
+            n: p for n, p in self.talky_profiles.items()
+            if not getattr(p, "llm_backend", None) or p.llm_backend in keep
+        }
+        logger.info(f"TALKY_ONLY_BACKENDS={raw}: dropped LLM backends {dropped}")
 
     def _load_llm_backends(self):
         """Load LLM backends by merging core + defaults + user extensions."""

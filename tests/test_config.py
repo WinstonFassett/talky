@@ -277,3 +277,25 @@ def test_service_factory_raises_on_missing_provider(tmp_path):
             create_tts_service_from_config("nonexistent_provider")
     finally:
         pm_mod._instance = old
+
+
+def test_only_backends_allowlist_drops_other_backends(tmp_path, monkeypatch):
+    """TALKY_ONLY_BACKENDS keeps a test daemon from starting real agents (WIN-536)."""
+    from talky.shared.profile_manager import ProfileManager
+
+    _write_all_yamls(tmp_path)
+    monkeypatch.setenv("TALKY_ONLY_BACKENDS", "echo,script")
+    pm = ProfileManager(config_dir=tmp_path)
+    assert set(pm.llm_backends) == {"echo", "script"}
+    assert "devin" not in pm.llm_backends
+    assert all(p.llm_backend in (None, "echo", "script") for p in pm.talky_profiles.values())
+    assert "script" in pm.talky_profiles
+
+
+def test_no_allowlist_keeps_every_backend(tmp_path, monkeypatch):
+    from talky.shared.profile_manager import ProfileManager
+
+    _write_all_yamls(tmp_path)
+    monkeypatch.delenv("TALKY_ONLY_BACKENDS", raising=False)
+    pm = ProfileManager(config_dir=tmp_path)
+    assert {"echo", "script", "devin"} <= set(pm.llm_backends)

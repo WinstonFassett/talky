@@ -77,20 +77,38 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   const turn = useTurn();
   const { openId, ready } = useSessions();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const [text, setTextState] = useState('');
+  // The draft is on screen at first paint: the address names the session
+  // (no address = a new chat), so it needn't wait for the session list.
+  const urlSession = useRef<string | null>(
+    typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('session'),
+  );
+  const [text, setTextState] = useState(() => readDraft(urlSession.current));
   const [error, setError] = useState<string | null>(null);
   const [queued, setQueued] = useState<{ text: string; fromDraft: boolean } | null>(null);
 
   // Drafts follow the session on screen.
-  const openRef = useRef<string | null>(openId);
+  const openRef = useRef<string | null>(openId ?? urlSession.current);
   const loaded = useRef(false);
+  const touched = useRef(false);
   useEffect(() => {
     if (!ready) return;
     const prev = openRef.current;
     openRef.current = openId;
     if (!loaded.current) {
       loaded.current = true;
-      setTextState(readDraft(openId));
+      // The session that actually opened isn't the one guessed at first paint
+      // (e.g. the daemon's current one): show its draft, unless typing began.
+      if (openId !== urlSession.current) {
+        if (!touched.current) setTextState(readDraft(openId));
+        else {
+          // Typed before the session was known: the draft belongs to the one that opened.
+          setTextState((t) => {
+            writeDraft(urlSession.current, '');
+            writeDraft(openId, t);
+            return t;
+          });
+        }
+      }
       return;
     }
     // A brand-new chat getting its id keeps whatever is being typed.
@@ -103,9 +121,10 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   }, [openId, ready]);
 
   const setText = useCallback((t: string) => {
+    touched.current = true;
     setTextState(t);
     setError(null);
-    if (loaded.current) writeDraft(openRef.current, t);
+    writeDraft(openRef.current, t);
   }, []);
 
   const focus = useCallback(() => {
