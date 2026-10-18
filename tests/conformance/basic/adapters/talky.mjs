@@ -146,13 +146,17 @@ const connect = async (page) => {
 	// Headless WebRTC occasionally leaves the client stuck "connecting" (the
 	// offer never reaches the daemon); a fresh attempt disconnects and retries.
 	for (let attempt = 1; attempt <= 3; attempt++) {
-		const start = page.getByRole("button", { name: /^(Start call|Converse)$/ }).first();
-		await start.click({ timeout: 5000 });
-		const ok = await page
-			.waitForFunction(isConnected, sel.voice, { timeout: 30000 })
-			.then(() => true)
-			.catch(() => false);
-		if (ok) return;
+		try {
+			const start = page.getByRole("button", { name: /^(Start call|Converse)$/ }).first();
+			await start.click({ timeout: 5000 });
+			const ok = await page
+				.waitForFunction(isConnected, sel.voice, { timeout: 30000 })
+				.then(() => true)
+				.catch(() => false);
+			if (ok) return;
+		} catch {
+			// click could not land (covered / mid-transition): retry after a beat
+		}
 		if (attempt < 3) await page.waitForTimeout(500);
 	}
 	fail("the call did not connect after three attempts");
