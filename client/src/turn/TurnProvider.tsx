@@ -189,13 +189,18 @@ export function TurnProvider({ children }: { children: ReactNode }) {
   useRTVIClientEvent(RTVIEvent.BotStoppedSpeaking, useCallback(() => set(speaking, false), [settle])); // eslint-disable-line react-hooks/exhaustive-deps
   // The first token: bot-llm-text arrives as the model produces text, before
   // TTS; bot-output covers backends that only send text through TTS.
-  const firstOutput = useCallback((data: { text?: string }) => {
+  // Only rendered output (bot-output) counts against the "nothing visible" notice.
+  const firstToken = useCallback((data: { text?: string }) => {
+    if (!runningRef.current || !data?.text?.trim()) return;
+    setWaiting(false);
+  }, []);
+  const rendered = useCallback((data: { text?: string }) => {
     if (!runningRef.current || !data?.text?.trim()) return;
     sawOutput.current = true;
     setWaiting(false);
   }, []);
-  useRTVIClientEvent(RTVIEvent.BotLlmText, firstOutput);
-  useRTVIClientEvent(RTVIEvent.BotOutput, firstOutput);
+  useRTVIClientEvent(RTVIEvent.BotLlmText, firstToken);
+  useRTVIClientEvent(RTVIEvent.BotOutput, rendered);
   // The call ended mid-turn: nothing more will arrive.
   useRTVIClientEvent(
     RTVIEvent.Disconnected,

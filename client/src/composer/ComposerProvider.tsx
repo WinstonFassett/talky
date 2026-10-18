@@ -98,7 +98,17 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       loaded.current = true;
       // The session that actually opened isn't the one guessed at first paint
       // (e.g. the daemon's current one): show its draft, unless typing began.
-      if (!touched.current && openId !== urlSession.current) setTextState(readDraft(openId));
+      if (openId !== urlSession.current) {
+        if (!touched.current) setTextState(readDraft(openId));
+        else {
+          // Typed before the session was known: the draft belongs to the one that opened.
+          setTextState((t) => {
+            writeDraft(urlSession.current, '');
+            writeDraft(openId, t);
+            return t;
+          });
+        }
+      }
       return;
     }
     // A brand-new chat getting its id keeps whatever is being typed.

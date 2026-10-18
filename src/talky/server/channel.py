@@ -77,7 +77,9 @@ from typing import Any, Optional
 from loguru import logger
 
 # Only a turn interrupted this recently is resumed after a restart (WIN-536).
-INTERRUPTED_TURN_MAX_AGE_SECS = 10 * 60
+INTERRUPTED_TURN_MAX_AGE_SECS = 30 * 60
+# A browser that left mid-turn ends that turn this long after, unless the daemon is stopping.
+PEER_LEFT_CLEAR_DELAY_SECS = 5.0
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     InterruptionFrame,
@@ -1302,8 +1304,16 @@ class VoiceChannel:
             if not self._shutting_down and self._convo_session is not None:
                 # The browser left mid-turn while the daemon keeps running: the
                 # turn ends with this call. It wasn't interrupted by a restart,
-                # so the next daemon start must not resume it (WIN-536).
-                self._convo_session.mark_turn_complete()
+                # so the next daemon start must not resume it (WIN-536). Cleared
+                # a moment later: a daemon that is itself stopping (the peer
+                # drops during its shutdown) never gets there, keeping the marker.
+                session = self._convo_session
+
+                def _clear() -> None:
+                    if not self._shutting_down:
+                        session.mark_turn_complete()
+
+                asyncio.get_running_loop().call_later(PEER_LEFT_CLEAR_DELAY_SECS, _clear)
             await self._teardown_locked(preserve_active_profile=True)
             # Schedule TTL inside the lock so a concurrent attach() that
             # already holds or is waiting on the lock will see the cancel
