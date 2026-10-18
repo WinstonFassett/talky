@@ -302,6 +302,7 @@ async def test_stale_disconnect_from_replaced_peer_does_not_tear_down(channel, m
 
 
 def test_claude_never_continues_the_cwds_latest_session():
+    pytest.importorskip("claude_agent_sdk")
     from talky.backends.claude_code import ClaudeCodeLLMService
 
     assert ClaudeCodeLLMService()._build_options().continue_conversation is False
