@@ -1,6 +1,6 @@
-"""Claude Code backend for Talky — wraps the Agent SDK via a thread bridge.
+"""Claude Code backend for Talky — wraps the Claude Agent SDK via a thread bridge.
 
-The Agent SDK (claude-code-sdk) uses anyio task groups internally. Pipecat
+The Agent SDK (claude-agent-sdk) uses anyio task groups internally. Pipecat
 dispatches process_frame across different asyncio task contexts. Mixing these
 causes receive_response() to deadlock (anyio memory channel cross-task issue).
 
@@ -17,8 +17,10 @@ Limitation: Claude has no `--mode rpc` equivalent. Interrupt is turn-boundary on
 not mid-token. Pi's RPC abort is still the gold standard; this is the best available
 for Claude.
 
-Session resume: uses continue_conversation=True (last session) rather than explicit
-session_id to avoid the $1+/turn uncached token replay cost.
+Session resume: each talky call gets its own session (continue_conversation=False,
+never the cwd's newest Claude session); turns chain by passing resume=<last session id>
+into the next query. The session id is read from the `init` SystemMessage, with
+AssistantMessage/ResultMessage fallbacks.
 
 Permission prompts: when permission_mode="default", can_use_tool callback is wired.
 The SDK thread blocks on a threading.Event; the asyncio side emits an SSE event so
@@ -54,58 +56,22 @@ from talky.server.turn import UserTurnTextFrame
 
 try:
     import anyio
-    from claude_code_sdk import (
+    from claude_agent_sdk import (
         AssistantMessage,
-        ClaudeCodeOptions,
+        ClaudeAgentOptions,
+        PermissionResultAllow,
+        PermissionResultDeny,
         ResultMessage,
         SystemMessage,
         TextBlock,
         ThinkingBlock,
+        ToolPermissionContext,
         ToolUseBlock,
         query,
-    )
-    from claude_code_sdk._errors import MessageParseError
-    from claude_code_sdk.types import (
-        PermissionResultAllow,
-        PermissionResultDeny,
-        ToolPermissionContext,
     )
     _SDK_AVAILABLE = True
 except ImportError:
     _SDK_AVAILABLE = False
-
-    class MessageParseError(Exception):  # type: ignore[no-redef]
-        pass
-
-
-def _tolerate_unknown_sdk_messages() -> None:
-    """Skip message types this SDK version doesn't know instead of ending the stream.
-
-    claude-code-sdk 0.0.25 raises inside its own generator on unknown types
-    (the CLI now sends ``rate_limit_event``, sometimes before the reply), which
-    finishes the stream and silently drops the assistant's answer.
-    """
-    import claude_code_sdk._internal.client as sdk_client
-
-    original = sdk_client.parse_message
-    if getattr(original, "_talky_tolerant", False):
-        return
-
-    def parse_message(data):  # noqa: ANN001, ANN202
-        try:
-            return original(data)
-        except MessageParseError as e:
-            if "Unknown message type" in str(e):
-                logger.debug(f"Claude SDK: skipping {e}")
-                return None
-            raise
-
-    parse_message._talky_tolerant = True  # type: ignore[attr-defined]
-    sdk_client.parse_message = parse_message
-
-
-if _SDK_AVAILABLE:
-    _tolerate_unknown_sdk_messages()
 
 
 # Frame tuple sentinels passed through the asyncio queue
@@ -126,7 +92,7 @@ class _ClaudeSDKThread:
     - _perm_event / _perm_allow: permission handshake (SDK thread blocks; asyncio side resolves)
     """
 
-    def __init__(self, options: "ClaudeCodeOptions", loop: asyncio.AbstractEventLoop, frame_queue: asyncio.Queue):
+    def __init__(self, options: "ClaudeAgentOptions", loop: asyncio.AbstractEventLoop, frame_queue: asyncio.Queue):
         self._options = options
         self._loop = loop
         self._frame_queue = frame_queue
@@ -215,13 +181,8 @@ class _ClaudeSDKThread:
                         msg = await aiter.__anext__()
                     except StopAsyncIteration:
                         break
-                    except MessageParseError as e:  # type: ignore[possibly-unbound]
-                        if "Unknown message type" in str(e):
-                            logger.debug(f"Claude SDK: skipping unknown message type: {e}")
-                            continue
-                        logger.error(f"Claude SDK parse error: {e}", exc_info=True)
-                        self._put_frame(("error", str(e)))
-                        break
+                    # claude-agent-sdk skips unknown message types itself
+                    # (e.g. rate_limit_event), so the stream survives them.
                     if msg is not None:
                         self._route_message(msg)
             except Exception as e:
@@ -250,6 +211,8 @@ class _ClaudeSDKThread:
         if not _SDK_AVAILABLE:
             return
         if isinstance(msg, AssistantMessage):  # type: ignore[possibly-unbound]
+            if msg.session_id:
+                self._last_session_id = msg.session_id
             for block in msg.content:
                 if isinstance(block, TextBlock) and block.text:
                     self._put_frame(("text", block.text))
@@ -257,12 +220,12 @@ class _ClaudeSDKThread:
                     self._put_frame(("thinking", block.thinking))
                 elif isinstance(block, ToolUseBlock):
                     self._put_frame(("tool_start", block.name))
-        elif isinstance(msg, ResultMessage):
+        elif isinstance(msg, ResultMessage):  # type: ignore[possibly-unbound]
             if msg.session_id:
                 self._last_session_id = msg.session_id
         elif isinstance(msg, SystemMessage) and msg.subtype == "init":  # type: ignore[possibly-unbound]
-            # ResultMessage can be lost: this SDK version raises on the CLI's
-            # rate_limit_event, which ends the stream before the result arrives.
+            # The init SystemMessage is the earliest reliable session id; the
+            # AssistantMessage/ResultMessage fields above are fallbacks.
             sid = (msg.data or {}).get("session_id")
             if sid:
                 self._last_session_id = sid
@@ -300,13 +263,13 @@ class ClaudeCodeLLMService(HistoryPreambleMixin, LLMService):
     def status() -> tuple["BackendStatus", str]:
         """Backend Status — see UBIQUITOUS_LANGUAGE.md.
 
-        Cheap pre-construction check: is claude-code-sdk importable? If not,
+        Cheap pre-construction check: is claude-agent-sdk importable? If not,
         the backend declares ``extra: claude-code`` so the picker can offer
         an install affordance — hence Installable rather than Misconfigured.
         """
         from talky.backends import BackendStatus
         if not _SDK_AVAILABLE:
-            return BackendStatus.INSTALLABLE, "claude-code-sdk not installed (extra: claude-code)"
+            return BackendStatus.INSTALLABLE, "claude-agent-sdk not installed (extra: claude-code)"
         return BackendStatus.READY, ""
 
     def __init__(
@@ -329,8 +292,8 @@ class ClaudeCodeLLMService(HistoryPreambleMixin, LLMService):
         self._frame_queue: asyncio.Queue = asyncio.Queue()
         self._reader_task: Optional[asyncio.Task] = None
 
-    def _build_options(self) -> "ClaudeCodeOptions":
-        opts = ClaudeCodeOptions(
+    def _build_options(self) -> "ClaudeAgentOptions":
+        opts = ClaudeAgentOptions(
             permission_mode=self._permission_mode,
             max_turns=self._max_turns,
             include_partial_messages=True,  # enables text_delta streaming
@@ -338,6 +301,9 @@ class ClaudeCodeLLMService(HistoryPreambleMixin, LLMService):
             # the cwd, which in a project checkout is the user's own CLI session.
             # Each talky call gets its own session; turns chain via resume=.
             continue_conversation=False,
+            # claude-agent-sdk v0.1+ no longer defaults to Claude Code's system
+            # prompt. Restore the pre-migration persona explicitly.
+            system_prompt={"type": "preset", "preset": "claude_code"},
         )
         if self._resume:
             opts.resume = self._resume
@@ -347,7 +313,7 @@ class ClaudeCodeLLMService(HistoryPreambleMixin, LLMService):
             opts.cwd = self._cwd
         return opts
 
-    def _attach_permission_callback(self, opts: "ClaudeCodeOptions", bridge: "_ClaudeSDKThread") -> None:
+    def _attach_permission_callback(self, opts: "ClaudeAgentOptions", bridge: "_ClaudeSDKThread") -> None:
         """Wire can_use_tool only when permission_mode="default" (interactive mode)."""
         if self._permission_mode != "default":
             return

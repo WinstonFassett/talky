@@ -139,7 +139,7 @@ Naming convention:
 
 There are no `--foreground` / `--background` flags. Mode is selected by which profile name you invoke.
 
-**Claude naming.** `claude` runs the background Agent SDK (`claude-code-sdk`), which wraps the `claude` CLI and uses the Claude Code subscription OAuth login by default — bills against your Pro/Max/Team subscription, no separate API key charges. `claude-tui` execs into the foreground Claude Code CLI (MCP + talky skill). Both use the same subscription; `claude-tui` gives you Claude's own terminal UI alongside the talky browser UI.
+**Claude naming.** `claude` runs the background Agent SDK (`claude-agent-sdk`), which wraps the `claude` CLI and uses the Claude Code subscription OAuth login by default — bills against your Pro/Max/Team subscription, no separate API key charges. `claude-tui` execs into the foreground Claude Code CLI (MCP + talky skill). Both use the same subscription; `claude-tui` gives you Claude's own terminal UI alongside the talky browser UI.
 
 ### Config layer relationships
 
