@@ -18,6 +18,14 @@ llm_backends:
     service_class: "talky.backends.echo.EchoLLMService"
     config:
       template: "you said: {text}"
+  # Script — echo's sibling for UI conformance tests (WIN-536). Plays the
+  # [[directive]] script written in the user's turn: streamed tokens, tool
+  # calls, reasoning, code, empty replies, failures. See backends/script.py.
+  script:
+    description: "Script — deterministic UI test backend"
+    service_class: "talky.backends.script.ScriptLLMService"
+    config:
+      token_delay_s: 0.08
   openclaw:
     description: "OpenClaw - OpenAI-compatible LLM"
     service_class: "talky.backends.openclaw.OpenClawLLMService"

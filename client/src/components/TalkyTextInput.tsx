@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { usePipecatClient } from '@pipecat-ai/client-react';
-import { useConversationContext } from '@pipecat-ai/voice-ui-kit';
-import { SendIcon } from 'lucide-react';
+import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { SendIcon, SquareIcon } from 'lucide-react';
+
+import { useComposer } from '../composer/ComposerProvider';
+import { useTurn } from '../turn/TurnProvider';
 
 type SlashCommand = {
   cmd: string;
@@ -17,19 +18,20 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: '/mute', desc: 'Toggle mic' },
 ];
 
-interface Props {
-  /** Show palette / accept commands only when connected (else disabled placeholder). */
-  connected: boolean;
-}
+const MAX_HEIGHT = 160;
 
-export const TalkyTextInput = ({ connected }: Props) => {
-  const client = usePipecatClient();
-  const { injectMessage } = useConversationContext();
-  const [text, setText] = useState('');
+// A touch keyboard has no Shift+Enter: Return is a newline and only Send sends.
+const isTouch = () =>
+  typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+
+export const TalkyTextInput = () => {
+  const { text, setText, send, sending, error, inputRef } = useComposer();
+  const turn = useTurn();
   const [paletteIdx, setPaletteIdx] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const composing = useRef(false);
+  const [touch] = useState(isTouch);
 
-  const showPalette = connected && text.startsWith('/');
+  const showPalette = text.startsWith('/') && !text.includes('\n');
 
   const matches = useMemo(() => {
     if (!showPalette) return [];
@@ -37,38 +39,22 @@ export const TalkyTextInput = ({ connected }: Props) => {
     return SLASH_COMMANDS.filter((c) => c.cmd.startsWith(q)).slice(0, 6);
   }, [text, showPalette]);
 
-  const submit = async () => {
-    const value = text.trim();
-    if (!value || !connected || !client) return;
-    // Optimistically render the typed message as a user turn (ticket 9e9b /
-    // 5bc6). The daemon has no RTVI processor that echoes sendText back as a
-    // user-transcription, so without this the typed message is invisible in
-    // the transcript even though the LLM receives it. Mirrors stock
-    // voice-ui-kit's TextInput. This fix was lost in the chrome redesign and
-    // restored from commit 8a57b23.
-    injectMessage({
-      role: 'user',
-      parts: [{ text: value, final: true, createdAt: new Date().toISOString() }],
-    });
-    // run_immediately ends the current user turn so each typed message is a
-    // discrete turn rather than concatenating onto an in-flight (voice or
-    // prior typed) aggregation.
-    // Slash commands intentionally don't yet route — they pass through verbatim
-    // so the daemon (or a future client handler) can pick them up.
-    try {
-      await client.sendText(value, { run_immediately: true });
-      setText('');
-    } catch (err) {
-      console.warn('sendText failed', err);
-    }
-  };
+  // Grow with the text up to MAX_HEIGHT, then scroll inside.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const h = Math.min(el.scrollHeight, MAX_HEIGHT);
+    el.style.height = `${h}px`;
+    el.style.overflowY = el.scrollHeight > MAX_HEIGHT ? 'auto' : 'hidden';
+  }, [text, inputRef]);
 
   const pickCommand = (cmd: string) => {
     setText(cmd + ' ');
     inputRef.current?.focus();
   };
 
-  const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
+  const handleKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (showPalette && matches.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -91,14 +77,19 @@ export const TalkyTextInput = ({ connected }: Props) => {
         return;
       }
     }
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      submit();
-    }
+    if (e.key !== 'Enter') return;
+    // Enter that confirms an IME candidate is not a send.
+    if (composing.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (e.shiftKey || touch) return;
+    e.preventDefault();
+    send();
   };
 
+  const hasText = !!text.trim();
+  const busy = turn.running;
+
   return (
-    <div className="relative flex-1">
+    <div className="relative flex-1 min-w-0">
       {showPalette && matches.length > 0 && (
         <div
           className="absolute left-0 right-0 overflow-hidden z-50"
@@ -149,8 +140,14 @@ export const TalkyTextInput = ({ connected }: Props) => {
         </div>
       )}
 
+      {error && (
+        <div role="alert" data-testid="composer-error" className="mb-1.5 text-[12px]" style={{ color: 'var(--color-destructive)' }}>
+          {error}
+        </div>
+      )}
+
       <div
-        className="flex items-center"
+        className="flex items-end"
         style={{
           border: '1px solid var(--color-border)',
           backgroundColor: 'var(--color-card)',
@@ -158,41 +155,69 @@ export const TalkyTextInput = ({ connected }: Props) => {
           padding: '2px 4px 2px 10px',
         }}
       >
-        <input
+        <textarea
           ref={inputRef}
-          type="text"
+          data-testid="composer"
+          aria-label="Message"
+          aria-describedby="composer-hint"
+          rows={1}
+          autoFocus
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKey}
-          disabled={!connected}
-          placeholder={
-            connected ? 'Type, or say "hey…" · / for commands' : 'Connect to start…'
-          }
-          className="flex-1 outline-none bg-transparent text-sm py-2"
-          style={{ color: 'var(--color-foreground)' }}
+          onCompositionStart={() => (composing.current = true)}
+          onCompositionEnd={() => (composing.current = false)}
+          placeholder={'Type, or say "hey…" · / for commands'}
+          className="flex-1 min-w-0 resize-none outline-none bg-transparent text-sm py-2 leading-5"
+          style={{ color: 'var(--color-foreground)', maxHeight: MAX_HEIGHT }}
         />
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!text.trim() || !connected}
-          className="inline-flex items-center justify-center transition-colors"
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: 'var(--radius)',
-            backgroundColor:
-              text.trim() && connected
-                ? 'color-mix(in srgb, var(--color-accent) 12%, transparent)'
-                : 'transparent',
-            color:
-              text.trim() && connected
-                ? 'var(--color-accent)'
-                : 'var(--color-text-mute, var(--color-muted-foreground))',
-            cursor: text.trim() && connected ? 'pointer' : 'default',
-          }}
-        >
-          <SendIcon size={14} />
-        </button>
+        {busy ? (
+          <button
+            type="button"
+            data-testid="composer-stop"
+            aria-label="Cancel message"
+            title="Cancel message (Esc)"
+            onClick={turn.stop}
+            className="inline-flex items-center justify-center shrink-0 transition-colors mb-1"
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 'var(--radius)',
+              backgroundColor: 'color-mix(in srgb, var(--color-accent) 12%, transparent)',
+              color: 'var(--color-accent)',
+            }}
+          >
+            <SquareIcon size={12} fill="currentColor" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            data-testid="composer-send"
+            onClick={send}
+            disabled={!hasText || sending}
+            aria-label={hasText ? 'Send message' : 'Message requires text'}
+            title={hasText ? 'Send message' : 'Message requires text'}
+            className="inline-flex items-center justify-center shrink-0 transition-colors mb-1"
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 'var(--radius)',
+              backgroundColor: hasText ? 'color-mix(in srgb, var(--color-accent) 12%, transparent)' : 'transparent',
+              color: hasText ? 'var(--color-accent)' : 'var(--color-text-mute, var(--color-muted-foreground))',
+              cursor: hasText ? 'pointer' : 'default',
+            }}
+          >
+            <SendIcon size={14} />
+          </button>
+        )}
+      </div>
+      <div
+        id="composer-hint"
+        data-testid="composer-hint"
+        className="mt-1 px-0.5 text-[11px] truncate"
+        style={{ color: 'var(--color-text-mute)' }}
+      >
+        {touch ? 'Return for new line · tap Send to send' : 'Enter to send, Shift + Enter for new line'}
       </div>
     </div>
   );

@@ -172,3 +172,46 @@
 *::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-text-mute);
 }
+
+/* ─── Transcript (WIN-536) ───────────────────────────────────────
+   Pinning to the newest line is an instant jump, never a smooth
+   scroll. Message actions and timestamps show on hover / focus; on
+   touch screens (no hover) they are always shown. */
+.transcript {
+  scroll-behavior: auto;
+}
+
+.message-row .message-actions,
+.message-row .message-meta {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+.message-row:hover .message-actions,
+.message-row:focus-within .message-actions,
+.message-row:hover .message-meta {
+  opacity: 1;
+}
+.message-row:hover .message-meta {
+  opacity: 0.5;
+}
+@media (hover: none) {
+  .message-row .message-actions {
+    opacity: 1;
+  }
+}
+
+/* ─── Reduced motion ─────────────────────────────────────────────
+   With the system setting on, nothing animates: spinners, pulses,
+   streamed-text fades and smooth scrolls all land instantly. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}

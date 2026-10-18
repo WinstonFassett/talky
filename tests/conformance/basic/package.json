@@ -1,0 +1,12 @@
+{
+  "name": "talky-basic-conformance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "floor": "node run.mjs --floor --app=talky",
+    "diagram": "node diagram.mjs --app=talky"
+  },
+  "dependencies": {
+    "playwright": "^1.60.0"
+  }
+}
