@@ -223,6 +223,9 @@ class _ClaudeSDKThread:
         elif isinstance(msg, ResultMessage):  # type: ignore[possibly-unbound]
             if msg.session_id:
                 self._last_session_id = msg.session_id
+            if getattr(msg, "is_error", False):
+                detail = getattr(msg, "result", None) or getattr(msg, "subtype", None) or "turn failed"
+                self._put_frame(("error", f"Claude turn failed: {detail}"))
         elif isinstance(msg, SystemMessage) and msg.subtype == "init":  # type: ignore[possibly-unbound]
             # The init SystemMessage is the earliest reliable session id; the
             # AssistantMessage/ResultMessage fields above are fallbacks.
@@ -410,6 +413,7 @@ class ClaudeCodeLLMService(HistoryPreambleMixin, LLMService):
                 await self.push_frame(LLMFullResponseEndFrame())
             elif kind == "error":
                 logger.error(f"Claude SDK error: {item[1]}")
+                await event_bus.emit("backendError", {"profile": "claude", "message": str(item[1])})
                 await self.push_frame(LLMFullResponseEndFrame())
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
