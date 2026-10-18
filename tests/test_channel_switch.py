@@ -31,7 +31,7 @@ def ch() -> VoiceChannel:
 @pytest.fixture
 def known_profiles(monkeypatch) -> list[str]:
     """Stub available_profiles to a known set, decoupling tests from YAML."""
-    profiles = [VoiceChannel.MCP_DRIVER_PROFILE, "openclaw", "moltis"]
+    profiles = [VoiceChannel.MCP_DRIVER_PROFILE, "pi", "moltis"]
     monkeypatch.setattr(VoiceChannel, "available_profiles", lambda self: profiles)
     return profiles
 
@@ -46,10 +46,10 @@ async def test_soft_switch_stores_profile_when_pipeline_not_live(ch, known_profi
     monkeypatch.setattr(VoiceChannel, "_emit_profile_changed", fake_emit)
 
     assert ch.is_live() is False
-    await ch.switch_to_profile("openclaw")
+    await ch.switch_to_profile("pi")
 
-    assert ch._active_profile == "openclaw"
-    assert emitted == ["openclaw"]
+    assert ch._active_profile == "pi"
+    assert emitted == ["pi"]
 
 @pytest.mark.asyncio
 async def test_soft_switch_rejects_unknown_profile(ch, known_profiles):
@@ -57,10 +57,16 @@ async def test_soft_switch_rejects_unknown_profile(ch, known_profiles):
         await ch.switch_to_profile("nope-not-real")
 
 @pytest.mark.asyncio
+async def test_removed_openclaw_profile_is_unknown_not_a_crash(ch, known_profiles):
+    """OpenClaw was removed (WIN-558); a stale config naming it gets a clear error."""
+    with pytest.raises(ValueError, match="unknown profile 'openclaw'"):
+        await ch.switch_to_profile("openclaw")
+
+@pytest.mark.asyncio
 async def test_live_switch_queues_manually_switch_service_frame(ch, known_profiles, monkeypatch):
     """When a pipeline is live, switch_to_profile queues a frame on it."""
     fake_service = object()
-    ch._llm_services = {"openclaw": fake_service}
+    ch._llm_services = {"pi": fake_service}
 
     fake_task = AsyncMock()
     fake_task.queue_frames = AsyncMock()
@@ -74,7 +80,7 @@ async def test_live_switch_queues_manually_switch_service_frame(ch, known_profil
     monkeypatch.setattr(VoiceChannel, "_emit_profile_changed", fake_emit)
     monkeypatch.setattr(VoiceChannel, "_announcement_for_profile", lambda self, name: None)
 
-    await ch.switch_to_profile("openclaw")
+    await ch.switch_to_profile("pi")
 
     assert fake_task.queue_frames.await_count == 1
     queued = fake_task.queue_frames.await_args.args[0]
@@ -83,7 +89,7 @@ async def test_live_switch_queues_manually_switch_service_frame(ch, known_profil
 
     assert isinstance(queued[0], ManuallySwitchServiceFrame)
     assert queued[0].service is fake_service
-    assert ch._active_profile == "openclaw"
+    assert ch._active_profile == "pi"
 
 def test_available_profiles_includes_mcp_driver(ch):
     """The null MCPDriver profile is always present, even when YAML loading fails."""

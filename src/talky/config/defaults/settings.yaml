@@ -1,8 +1,8 @@
 # Talky Settings — set your preferred llm_backend and voice_profile
 defaults:
-  llm_backend: "openclaw"
+  llm_backend: "claude-code"
   voice_profile: "default"
-  talky_profile: "openclaw"
+  talky_profile: "claude"
 
 # Network settings
 network:

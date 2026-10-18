@@ -1,6 +1,6 @@
 # Talky
 
-Voice interface for AI. Talk to OpenClaw, Moltis, Hermes or Pi. Or use MCP to talk to Claude.
+Voice interface for AI. Talk to Moltis, Hermes or Pi. Or use MCP to talk to Claude.
 
 ### Desktop
 
@@ -37,7 +37,7 @@ Voice interface for AI. Talk to OpenClaw, Moltis, Hermes or Pi. Or use MCP to ta
 
 ```bash
 uv tool install talky                 # from PyPI, or: uv tool install --editable . (from source)
-talky openclaw                    # Talk to OpenClaw
+talky claude                    # Talk to Claude
 talky moltis                      # Talk to Moltis  
 talky hermes                      # Talk to Hermes (NousResearch)
 talky pi                          # Talk to Pi
@@ -57,7 +57,7 @@ talky pi                          # Talk to Pi
 ## Usage
 
 **Talk to AI**
-- `talky openclaw` - OpenClaw assistant
+- `talky claude` - Claude assistant
 - `talky moltis` - Moltis assistant  
 - `talky hermes` - Hermes agent (NousResearch)
 - `talky pi` - Pi coding assistant
@@ -72,7 +72,7 @@ talky pi                          # Talk to Pi
 
 **Daemon / MCP** (for Claude Desktop/Claude Code)
 - `talky daemon` - Start the talky daemon (local HTTP on 8765, serves browser UI + MCP tools — see [docs/ports.md](docs/ports.md))
-- Any daemon-dependent command (e.g. `talky openclaw`) auto-spawns the daemon if it isn't running
+- Any daemon-dependent command (e.g. `talky claude`) auto-spawns the daemon if it isn't running
 
 ## Documentation
 

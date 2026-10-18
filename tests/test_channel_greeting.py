@@ -2,7 +2,7 @@
 
 After ticket e540 the historical "greeting" field was split:
 
-- ``_announcement_for_profile`` — impersonal channel cue ("OpenClaw channel"),
+- ``_announcement_for_profile`` — impersonal channel cue ("Pi channel"),
   spoken by the daemon on *manual picker* switches only.
 - ``ProfileManager.resolve_greeting_instruction`` — agent-greeting *instruction*,
   handed to the agent on /ws/agent connect so the agent generates its own
@@ -61,13 +61,13 @@ def test_profile_without_announcement_returns_none():
 
 def test_profile_with_announcement_returns_it():
     """A backend with a configured announcement returns the announcement text."""
-    backend = SimpleNamespace(name="openclaw", announcement="OpenClaw channel.")
+    backend = SimpleNamespace(name="pi", announcement="Pi channel.")
     ch = VoiceChannel()
     with patch(
         "talky.shared.profile_manager.get_profile_manager",
-        return_value=_fake_pm({"openclaw": backend}),
+        return_value=_fake_pm({"pi": backend}),
     ):
-        assert ch._announcement_for_profile("openclaw") == "OpenClaw channel."
+        assert ch._announcement_for_profile("pi") == "Pi channel."
 
 def test_profile_manager_exception_is_swallowed():
     """A broken profile manager must not crash the switch path."""
@@ -76,4 +76,4 @@ def test_profile_manager_exception_is_swallowed():
         "talky.shared.profile_manager.get_profile_manager",
         side_effect=RuntimeError("kaboom"),
     ):
-        assert ch._announcement_for_profile("openclaw") is None
+        assert ch._announcement_for_profile("pi") is None

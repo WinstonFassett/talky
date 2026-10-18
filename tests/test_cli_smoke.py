@@ -39,16 +39,16 @@ def test_top_level_help():
 
 
 def test_bare_profile_shortcut_dispatches_to_cmd_profile():
-    """`talky openclaw` should route through cmd_profile with name=openclaw."""
+    """`talky claude` should route through cmd_profile with name=claude."""
     captured = {}
 
     def fake_cmd_profile(args):
         captured["name"] = args.name
 
     with patch.object(talky_cli, "cmd_profile", fake_cmd_profile):
-        _run_main(["openclaw"])
+        _run_main(["claude"])
 
-    assert captured["name"] == "openclaw"
+    assert captured["name"] == "claude"
 
 
 def test_explicit_profile_subcommand_dispatches():

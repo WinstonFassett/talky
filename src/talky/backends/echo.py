@@ -2,7 +2,7 @@
 
 Part of the E2E test substrate (ticket 0179 / parent ad0e). This is the
 "fake brain" end of the steel thread: it plugs into an ``LLMSwitcher`` as
-a peer of the real inference backends (openclaw, opencode, ...) and the
+a peer of the real inference backends (moltis, opencode, ...) and the
 ``MCPDriverLLMService`` null passthrough, but does **no inference and no
 network I/O**. It simply echoes the user's turn back as the assistant
 response.

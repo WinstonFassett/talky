@@ -14,10 +14,6 @@ talky_profiles:
     description: "Script (UI test backend)"
     llm_backend: "script"
 
-  # OpenClaw
-  openclaw:
-    description: "OpenClaw"
-
   # Moltis
   moltis:
     description: "Moltis"

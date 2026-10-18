@@ -14,9 +14,6 @@
 
 talky_profiles:
 
-  openclaw:
-    description: "OpenClaw"
-
   moltis:
     description: "Moltis"
     llm_backend: "moltis"

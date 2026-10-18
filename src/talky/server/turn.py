@@ -9,7 +9,7 @@
 Drops LLMContext aggregation from the voice pipeline. Talky's use cases
 never read the accumulated context history:
 
-- Remote LLM backends (openclaw, moltis) extract only the latest user
+- Remote LLM backends (moltis) extract only the latest user
   message and send it to a gateway that owns its own session state.
 - The MCP-driver passthrough pushes the latest user text onto a queue
   for ``convo_listen`` to read. No history.
@@ -23,7 +23,7 @@ push a lightweight ``UserTurnTextFrame`` instead of accumulating into
 a context.
 
 Pairs with refactors in ``mcp_driver_llm_service.py``,
-``server/backends/openclaw.py``, ``server/backends/moltis.py`` to
+``server/backends/moltis.py`` to
 consume ``UserTurnTextFrame`` instead of ``LLMContextFrame``.
 """
 
