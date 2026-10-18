@@ -705,8 +705,8 @@ def _build_webrtc_routes():
             # Loopback peers connect over host candidates; an external STUN
             # server there only makes gathering hang on a flaky network, and
             # the offer can't go out until gathering completes (WIN-536).
-            host = (request.headers.get("host") or "").split(":")[0]
-            if host in ("127.0.0.1", "localhost"):
+            host = (request.headers.get("host") or "").split(":")[0].strip("[]")
+            if host in ("127.0.0.1", "localhost", "::1"):
                 result["iceConfig"] = {"iceServers": []}
             else:
                 result["iceConfig"] = {

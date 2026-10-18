@@ -1421,16 +1421,17 @@ class VoiceChannel:
     async def _resume_interrupted_turn(self, replay: dict) -> None:
         """Tell the client the turn is being resumed, then re-run it on its backend."""
         logger.info(f"VoiceChannel: resuming interrupted turn {replay['convo_id']} on {replay['backend']}")
+        svc = self._llm_services.get(replay["backend"])
+        if svc is None:
+            logger.warning(f"VoiceChannel: {replay['backend']} not loaded — interrupted turn not replayed")
+            return
         if self._active_profile != replay["profile"]:
             try:
                 await self.switch_to_profile(replay["profile"], announce=False)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"VoiceChannel: interrupted-turn profile switch failed: {e}")
+        # Only claim the turn is resuming once the replay can actually run.
         await event_bus.emit("turnResumed", {"convo_id": replay["convo_id"]})
-        svc = self._llm_services.get(replay["backend"])
-        if svc is None:
-            logger.warning(f"VoiceChannel: {replay['backend']} not loaded — interrupted turn not replayed")
-            return
         try:
             # A replay is a user turn re-run: the user processor skips it (replay=True),
             # so the transcript doesn't duplicate the message the user already sent.

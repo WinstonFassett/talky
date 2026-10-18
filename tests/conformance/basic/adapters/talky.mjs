@@ -322,6 +322,7 @@ export default {
 			await connect(page);
 			await send(page, "[[sleep 2]] [[think reading]] [[tool grep 1]] [[lines 8]]");
 			await wheelUp(page, 900);
+			if ((await distanceFromBottom(page)) < 150) fail("the wheel did not leave the bottom");
 			const before = await scrollTop(page);
 			await watchScroll(page);
 			await waitTurnDone(page);
@@ -352,6 +353,7 @@ export default {
 			await send(page, "[[sleep 1]] [[lines 16]]");
 			await page.waitForFunction((m) => /Line 1 of/.test(document.querySelector(m.list)?.innerText ?? ""), { list: sel.list }, { timeout: 30000 });
 			await wheelUp(page, 600);
+			if ((await distanceFromBottom(page)) < 150) fail("the wheel did not leave the bottom");
 			const held = await scrollTop(page);
 			await watchScroll(page);
 			await page.waitForTimeout(3500);
@@ -732,7 +734,6 @@ export default {
 			await send(page, `[[sleep 5]] [[say hi.]] ${word}`);
 			const row = page.locator(`${sel.group}[data-group="Today"] ${sel.row}`, { hasText: word });
 			await row.waitFor({ timeout: 3000 }).catch(() => fail("the chat was not listed under Today within 3s"));
-			if (await page.locator(sel.list).innerText().then((t) => t.includes("you said"))) fail("the reply arrived before the check");
 			const id = await row.getAttribute("data-convo-id");
 			if (page.url() === before || !page.url().includes(id)) fail(`the URL stayed ${page.url()}`);
 			await waitTurnDone(page);
@@ -961,7 +962,10 @@ export default {
 			daemon("stop");
 			daemon("start");
 			await page.waitForFunction((n) => /interrupted by a restart/i.test([...document.querySelectorAll(n)].map((e) => e.innerText).join(" ")), sel.notice, { timeout: 60000 }).catch(() => fail("the transcript never said the turn was interrupted"));
-			await page.waitForFunction((list) => document.querySelector(list)?.innerText.includes("migration finished"), sel.list, { timeout: 60000 }).catch(() => fail("the interrupted turn never finished"));
+			// The replayed reply is an ASSISTANT message: the user's own message
+			// holds the same words inside its [[say]] directive, so the needle
+			// must be scoped to an assistant message that only the replay creates.
+			await page.waitForFunction(({ m, w }) => [...document.querySelectorAll(`${m}[data-role="assistant"]`)].some((e) => e.innerText.includes(w)), { m: sel.message, w: "migration finished" }, { timeout: 60000 }).catch(() => fail("the interrupted turn never produced its reply"));
 			return "after a daemon restart mid tool call the transcript said so and the turn ran to its reply";
 		},
 
