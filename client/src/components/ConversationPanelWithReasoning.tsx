@@ -689,15 +689,19 @@ function ConversationMessages({
     return () => io.disconnect();
   }, [hasOlder, pageOlder]);
 
-  // Notices sit after the message they belong to.
+  // Notices sit after the message they belong to, in the session they were
+  // raised on (a notice from another convo stays hidden until it's back).
   const noticesAfter = useMemo(() => {
     const m = new Map<number, Notice[]>();
     for (const n of turn.notices) {
+      // null convo = raised while no session was bound (e.g. the turn that
+      // created this convo); show it here rather than losing it.
+      if (n.convo !== null && n.convo !== openId) continue;
       const at = Math.min(n.after, messages.length);
       m.set(at, [...(m.get(at) ?? []), n]);
     }
     return m;
-  }, [turn.notices, messages.length]);
+  }, [turn.notices, messages.length, openId]);
 
   const lastIndex = messages.length - 1;
   const showEmpty = !loading && messages.length === 0 && turn.notices.length === 0 && !turn.running;

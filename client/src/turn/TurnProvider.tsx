@@ -32,6 +32,8 @@ export type Notice = {
   after: number;
   /** Cleared when the next turn starts. */
   transient: boolean;
+  /** The session it belongs to; hidden while another session is on screen. */
+  convo: string | null;
   action?: { label: string; run: () => void };
 };
 
@@ -65,6 +67,8 @@ export function TurnProvider({ children }: { children: ReactNode }) {
   const { messages, openId } = useSessions();
   const countRef = useRef(messages.length);
   countRef.current = messages.length;
+  const openIdRef = useRef(openId);
+  openIdRef.current = openId;
 
   const [running, setRunning] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -83,8 +87,11 @@ export function TurnProvider({ children }: { children: ReactNode }) {
   const endTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const addNotice = useCallback((n: Omit<Notice, 'id' | 'after'> & { after?: number }) => {
-    setNotices((ns) => [...ns, { ...n, id: nextId++, after: n.after ?? countRef.current }]);
+  const addNotice = useCallback((n: Omit<Notice, 'id' | 'after' | 'convo'> & { after?: number }) => {
+    setNotices((ns) => [
+      ...ns,
+      { ...n, id: nextId++, after: n.after ?? countRef.current, convo: openIdRef.current },
+    ]);
   }, []);
   const dismiss = useCallback((id: number) => setNotices((ns) => ns.filter((n) => n.id !== id)), []);
 
@@ -97,7 +104,6 @@ export function TurnProvider({ children }: { children: ReactNode }) {
     setRunning(true);
     setWaiting(true);
     setStartedAt(Date.now());
-    setNotices((ns) => ns.filter((n) => !n.transient));
   }, []);
 
   const finish = useCallback(() => {
@@ -108,7 +114,10 @@ export function TurnProvider({ children }: { children: ReactNode }) {
     setWaiting(false);
     setStartedAt(null);
     if (sawLlm.current && !sawOutput.current && !stopped.current) {
-      setNotices((ns) => [...ns, { id: nextId++, kind: 'info', text: EMPTY_REPLY, after: countRef.current, transient: true }]);
+      setNotices((ns) => [
+      ...ns,
+      { id: nextId++, kind: 'info', text: EMPTY_REPLY, after: countRef.current, transient: true, convo: openIdRef.current },
+    ]);
     }
   }, []);
 
@@ -135,6 +144,10 @@ export function TurnProvider({ children }: { children: ReactNode }) {
       // A new message while one is running starts a new turn.
       runningRef.current = false;
     }
+    // Sending is what clears transient notices — not a bot-started turn, which
+    // can fire late for the response that just ended (SSE backendError beats
+    // the RTVI BotLlmStarted for the same reply).
+    setNotices((ns) => ns.filter((n) => !n.transient));
     start();
   }, [settle, start]);
 
@@ -162,7 +175,9 @@ export function TurnProvider({ children }: { children: ReactNode }) {
     useCallback(() => {
       pending.current = false;
       if (pendingTimer.current) clearTimeout(pendingTimer.current);
-      if (!runningRef.current) start();
+      // A stop (Esc, drop, backend error) ends the turn until the user sends
+      // again; a BotLlmStarted for the same dying response must not reopen it.
+      if (!runningRef.current && !stopped.current) start();
       sawLlm.current = true;
       set(llm, true);
     }, [start]), // eslint-disable-line react-hooks/exhaustive-deps
@@ -217,10 +232,10 @@ export function TurnProvider({ children }: { children: ReactNode }) {
     addNotice({ kind: 'info', text: 'This turn was interrupted by a restart. Resuming from the last saved message.', transient: false });
   });
 
-  // Another session on screen: its notices don't belong here.
-  useEffect(() => {
-    setNotices([]);
-  }, [openId]);
+  // Notices carry their convo and render only while that session is on screen
+  // (filtered in the transcript). No delete here — the 'created' event for a
+  // new convo can land in the same React batch as the last events of its
+  // first turn, and deleting could wipe a just-added notice.
 
   // Esc cancels the running turn, unless a dialog or menu has it.
   useEffect(() => {

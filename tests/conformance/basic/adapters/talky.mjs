@@ -921,9 +921,11 @@ export default {
 				return s.getBoundingClientRect().height;
 			});
 			if (summaryHeight > 40) fail(`the summary line is ${summaryHeight}px tall`);
-			if (await page.getByText("frame 11 in module_11.py").isVisible()) fail("the full text is shown up front");
+			// Scoped to the notice: the user's own message legitimately holds the
+			// same text (the [[fail]] script is how the error is synthesised).
+			if (await notice.getByText(/frame 11 in module_11\.py/).isVisible()) fail("the full text is shown up front");
 			await notice.getByText(/details/i).click();
-			if (!(await page.getByText(/frame 11 in module_11\.py/).isVisible())) fail("the details do not show the full text");
+			if (!(await notice.getByText(/frame 11 in module_11\.py/).isVisible())) fail("the details do not show the full text");
 			return "one line, the full traceback behind Details";
 		},
 

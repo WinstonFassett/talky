@@ -2,17 +2,17 @@
 
 Run against the deployed app on 2026-10-18, floor only.
 
-pass 30 · fail 19 · n/a 7 · untested 0
+pass 31 · fail 18 · n/a 7 · untested 0
 
 | Scenario | Tags | Result | Detail |
 | --- | --- | --- | --- |
-| Following the stream while at the bottom | @must | fail | a frame after new content sat 43px from the bottom |
-| Reading history while the agent streams | @must | pass | 19 updates (thinking, tool rows, text), scrollTop held at 2115 |
+| Following the stream while at the bottom | @must | pass | 20 updates, every one pinned on the next frame, scroll-behavior auto |
+| Reading history while the agent streams | @must | pass | 20 updates (thinking, tool rows, text), scrollTop held at 2115 |
 | A scroll-wheel up releases the pin at once | @must | pass | after one wheel tick the next update left the view 379px from the bottom |
 | Scrolling up during a real reply is never pulled back | @must | pass | 7 renders while scrolled up left scrollTop at 2492; following resumed 40px from the bottom |
 | A way back to the newest message | @must | fail | the button shows 0 unread after a reply arrived |
-| Opening a conversation lands at the bottom | @must | pass | every painted frame with messages (14) was at the bottom |
-| An existing conversation never flashes the empty state | @must | fail | /?session=2f3f682f-e5f8-4879-91f5-5161fef2b157 did not show that conversation |
+| Opening a conversation lands at the bottom | @must | pass | every painted frame with messages (20) was at the bottom |
+| An existing conversation never flashes the empty state | @must | fail | /?session=939cde81-2d1c-4442-b5ca-4c5044c95489 did not show that conversation |
 | My own message always pins | @must | pass |  |
 | Enter sends, Shift+Enter breaks a line, on desktop | @must | fail | Shift+Enter sent the message |
 | Enter during IME composition never sends | @must | fail | Enter while composing sent the message |
@@ -59,6 +59,6 @@ pass 30 · fail 19 · n/a 7 · untested 0
 | After signing out, nothing private is reachable | @must | n/a | Talky has no accounts and no sign-in: it is a single-user app the owner runs on their own machine. The local listener binds loopback; the optional remote listener is HTTPS on the owner's network. There is no identity to sign in or out of. (The remote listener has no access control at all — tracked as its own ticket.) |
 | The transcript is a polite live region | @must | pass | role=log aria-live=polite, heading "Conversation" |
 | Motion respects the system setting | @must | pass | with reduced motion on, nothing animated during a turn |
-| Every icon button has a name | @must | pass | 110 icon-only buttons, all named |
-| No text sits on top of other text | @must | fail | desktop, idle: "A very long session title that" overlaps "now"; "[[sleep 4]] [[say done.]]" overlaps "5m" |
+| Every icon button has a name | @must | pass | 133 icon-only buttons, all named |
+| No text sits on top of other text | @must | fail | desktop, idle: "A very long session title that" overlaps "now"; "[[sleep 4]] [[say done.]]" overlaps "4m" |
 | The empty state offers starters | @must | fail | page.waitForSelector: Timeout 5000ms exceeded. |
