@@ -8,8 +8,10 @@ session/prompt, session/cancel, plus streamed session/update notifications
 adapter covers local and cloud Devin.
 
 Turn loop:
-  1. Handshake once at pipeline start: initialize → (authenticate if
-     DEVIN_API_KEY is set) → session/new (or session/load on resume).
+  1. Handshake once at pipeline start: initialize → session/new (or
+     session/load on resume). Never ACP `authenticate`: devin only
+     advertises `devin-browser`, so any authenticate call opens a Chrome
+     login tab (WIN-554). The CLI uses its own login, like the plain CLI.
   2. Each user turn → session/prompt; streamed chunks → TextFrame /
      AggregatedTextFrame; the prompt response ends the turn.
 
@@ -36,13 +38,25 @@ Config (llm-backends.yaml):
   cloud:  true → spawn `devin acp --cloud` (relays to Devin Cloud sessions)
   resume: devin session id to reload via session/load (one-shot; also settable
           at runtime via set_resume())
+
+Auth (WIN-554): under an isolated HOME (conformance iso-home,
+talky-daemon.sh) the CLI can't find its login, so the child gets
+WINDSURF_API_KEY read from the real ~/.local/share/devin/credentials.toml at
+spawn time. The key is never logged or written anywhere. A logged-out CLI
+fails the backend with a clear message, and repeated deaths back off instead
+of respawning on every pipeline build.
 """
 
 import asyncio
 import json
 import os
+import pwd
 import shutil
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
+
+import tomllib
 
 # Env vars injected by the Devin desktop app (Windsurf fork) that poison the
 # standalone devin CLI — it detects them, thinks it's running inside Windsurf,
@@ -63,6 +77,60 @@ _POISON_ENV_KEYS = frozenset({
 
 if TYPE_CHECKING:
     from talky.backends import BackendStatus
+
+LOGGED_OUT_MESSAGE = "Devin CLI is logged out — run `devin auth login` once."
+
+# Respawn backoff: after a death, the next MAX_FAILURES pipeline builds wait
+# BACKOFF_BASE * 2**(n-1) seconds; past that, Devin stays off until restart.
+MAX_FAILURES = 5
+BACKOFF_BASE = 10.0
+
+
+def _real_home() -> Path:
+    """The user's real home from the passwd db — not $HOME, which may be isolated."""
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
+def _credentials_path() -> Path:
+    return _real_home() / ".local" / "share" / "devin" / "credentials.toml"
+
+
+def _read_windsurf_key() -> Optional[str]:
+    try:
+        with open(_credentials_path(), "rb") as f:
+            key = tomllib.load(f).get("windsurf_api_key")
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return key if isinstance(key, str) and key else None
+
+
+def _credentials_mtime() -> Optional[float]:
+    try:
+        return _credentials_path().stat().st_mtime
+    except OSError:
+        return None
+
+
+def _is_logged_out(message: str) -> bool:
+    m = message.lower()
+    return "please log in" in m or "auth_required" in m or "please authenticate" in m
+
+
+def build_child_env(environ: Optional[dict] = None) -> dict:
+    """Env for the `devin acp` child: poison keys stripped; WINDSURF_API_KEY
+    injected from the real credentials file when HOME is not the real home."""
+    src = os.environ if environ is None else environ
+    env = {k: v for k, v in src.items() if k not in _POISON_ENV_KEYS}
+    home = env.get("HOME")
+    real = _real_home()
+    if home and os.path.realpath(home) != os.path.realpath(real):
+        key = _read_windsurf_key()
+        if key:
+            env["WINDSURF_API_KEY"] = key
+            logger.info("devin acp: isolated HOME — using CLI login from the real home")
+        else:
+            logger.warning(f"devin acp: isolated HOME and no windsurf_api_key in {_credentials_path()}")
+    return env
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -93,18 +161,48 @@ DEFAULT_MODE = "accept-edits"
 class DevinACPLLMService(LLMService):
     """Devin via `devin acp` — interruptible, structured, resumable."""
 
-    @staticmethod
-    def status() -> tuple["BackendStatus", str]:
+    # Process-wide, so every pipeline build sees the last instance's fate.
+    _logged_out_mtime: Optional[float] = None  # credentials mtime when we saw "Please log in"
+    _logged_out: bool = False
+    _failures: int = 0
+    _retry_at: float = 0.0
+
+    @classmethod
+    def status(cls) -> tuple["BackendStatus", str]:
         """Backend Status — see UBIQUITOUS_LANGUAGE.md.
 
-        Cheap pre-construction check: is the `devin` binary on PATH? No
-        subprocess, no network. No Python extra for devin — Misconfigured,
+        Cheap pre-construction check: is the `devin` binary on PATH, is the
+        CLI logged in (as last seen), and are we backing off after deaths?
+        No subprocess, no network. No Python extra for devin — Misconfigured,
         not Installable.
         """
         from talky.backends import BackendStatus
         if shutil.which("devin") is None:
             return BackendStatus.MISCONFIGURED, "devin CLI not found on PATH"
+        if cls._logged_out:
+            if _credentials_mtime() == cls._logged_out_mtime:
+                return BackendStatus.MISCONFIGURED, LOGGED_OUT_MESSAGE
+            cls._logged_out = False  # credentials changed — `devin auth login` ran
+            cls._failures = 0
+            cls._retry_at = 0.0
+        if cls._failures >= MAX_FAILURES:
+            return BackendStatus.BLOCKED, (
+                f"devin acp died {cls._failures} times — restart the daemon to retry"
+            )
+        wait = cls._retry_at - time.monotonic()
+        if wait > 0:
+            return BackendStatus.BLOCKED, f"devin acp died — retrying in {wait:.0f}s"
         return BackendStatus.READY, ""
+
+    @classmethod
+    def _record_failure(cls) -> None:
+        cls._failures += 1
+        cls._retry_at = time.monotonic() + BACKOFF_BASE * 2 ** (cls._failures - 1)
+
+    @classmethod
+    def _record_logged_out(cls) -> None:
+        cls._logged_out = True
+        cls._logged_out_mtime = _credentials_mtime()
 
     def __init__(
         self,
@@ -149,7 +247,7 @@ class DevinACPLLMService(LLMService):
     async def start(self, frame: StartFrame):
         await super().start(frame)
         self._dead = False
-        env = {k: v for k, v in os.environ.items() if k not in _POISON_ENV_KEYS}
+        env = build_child_env()
         cmd = self._build_cmd()
         logger.info(f"Starting Devin ACP: {' '.join(cmd)}")
         self._proc = await asyncio.create_subprocess_exec(
@@ -169,9 +267,14 @@ class DevinACPLLMService(LLMService):
         try:
             await self._handshake()
         except Exception as e:
+            if _is_logged_out(str(e)):
+                await self._fail_logged_out()
+                return
             logger.error(f"Devin ACP handshake failed: {e}")
             await self._handle_subprocess_death()
             return
+        type(self)._failures = 0
+        type(self)._retry_at = 0.0
         logger.info(f"Devin ACP ready, session={self._session_id}")
 
     async def stop(self, frame: EndFrame):
@@ -241,11 +344,13 @@ class DevinACPLLMService(LLMService):
         except Exception as e:
             logger.error(f"devin acp stderr reader error: {e}")
 
-    async def _handle_subprocess_death(self):
+    async def _handle_subprocess_death(self, message: Optional[str] = None):
         if self._dead:
             return
         self._dead = True
-        logger.error("devin acp subprocess died — marking backend dead")
+        if message is None:
+            type(self)._record_failure()
+            logger.error("devin acp subprocess died — marking backend dead")
         for fut in self._pending.values():
             if not fut.done():
                 fut.set_exception(RuntimeError("devin acp process exited"))
@@ -253,10 +358,23 @@ class DevinACPLLMService(LLMService):
             from talky.server.event_bus import event_bus
             await event_bus.emit("backendError", {
                 "profile": "devin",
-                "message": "Devin channel lost — the agent process exited. Reconnect to restart.",
+                "message": message or "Devin channel lost — the agent process exited. Reconnect to restart.",
             })
         except Exception:
             pass
+
+    async def _fail_logged_out(self):
+        """The CLI has no login. Fail once, clearly; no retry, no browser."""
+        if self._dead:
+            return
+        logger.error(f"devin acp: {LOGGED_OUT_MESSAGE}")
+        type(self)._record_logged_out()
+        await self._handle_subprocess_death(LOGGED_OUT_MESSAGE)
+        if self._proc and self._proc.returncode is None:
+            try:
+                self._proc.kill()
+            except ProcessLookupError:
+                pass
 
     # ------------------------------------------------------------------
     # ACP handshake
@@ -269,13 +387,6 @@ class DevinACPLLMService(LLMService):
             # bypass mode it may still ask via session/request_permission.
             "clientCapabilities": {},
         })
-
-        api_key = os.environ.get("DEVIN_API_KEY")
-        if api_key:
-            await self._request("authenticate", {
-                "methodId": "windsurf-api-key",
-                "credentials": {"apiKey": api_key},
-            })
 
         cwd = self._cwd or os.getcwd()
         resume_id, self._resume = self._resume, None  # one-shot
@@ -478,8 +589,12 @@ class DevinACPLLMService(LLMService):
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.error(f"devin session/prompt failed: {e}")
-                    await self.push_frame(TextFrame("Sorry, I hit an error talking to Devin."))
+                    if _is_logged_out(str(e)):
+                        await self.push_frame(TextFrame(LOGGED_OUT_MESSAGE))
+                        await self._fail_logged_out()
+                    else:
+                        logger.error(f"devin session/prompt failed: {e}")
+                        await self.push_frame(TextFrame("Sorry, I hit an error talking to Devin."))
                 finally:
                     await self.push_frame(LLMFullResponseEndFrame())
         except asyncio.CancelledError:
