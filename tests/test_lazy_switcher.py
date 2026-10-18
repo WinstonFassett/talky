@@ -50,14 +50,12 @@ async def test_added_llm_starts_once_and_replies():
     task = PipelineTask(Pipeline([switcher, sink]), idle_timeout_secs=None, cancel_on_idle_timeout=False)
     runner = asyncio.create_task(PipelineRunner(handle_sigint=False).run(task))
     try:
-        for _ in range(100):
-            if switcher._start_frame is not None:  # noqa: SLF001
-                break
-            await asyncio.sleep(0.02)
         assert later.starts == 0, "a backend nobody switched to must not start"
 
-        await switcher.add_llm(later)
-        await switcher.add_llm(later)  # idempotent
+        # Called right away: waits for the pipeline to start, then for later's start().
+        assert await switcher.add_llm(later) is True
+        assert later.starts == 1, "add_llm returns only once the backend has started"
+        assert await switcher.add_llm(later) is True  # idempotent
         await task.queue_frames([ManuallySwitchServiceFrame(service=later), UserTurnTextFrame(text="hi")])
         await asyncio.wait_for(sink.got.wait(), timeout=5)
 
@@ -67,3 +65,16 @@ async def test_added_llm_starts_once_and_replies():
     finally:
         await task.queue_frame(EndFrame())
         await asyncio.wait_for(runner, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_no_add_once_the_pipeline_is_ending():
+    switcher = LazyLLMSwitcher(llms=[_CountingEcho("first")], strategy_type=ServiceSwitcherStrategyManual)
+    task = PipelineTask(Pipeline([switcher]), idle_timeout_secs=None, cancel_on_idle_timeout=False)
+    runner = asyncio.create_task(PipelineRunner(handle_sigint=False).run(task))
+    assert await switcher.add_llm(_CountingEcho("warm")) is True
+    await task.queue_frame(EndFrame())
+    await asyncio.wait_for(runner, timeout=5)
+    late = _CountingEcho("late")
+    assert await switcher.add_llm(late) is False
+    assert late.starts == 0

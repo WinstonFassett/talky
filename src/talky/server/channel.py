@@ -814,8 +814,12 @@ class VoiceChannel:
             if svc is None:
                 return None
             logger.info(f"VoiceChannel: starting backend {backend_name!r} on first use")
-            await self._llm_switcher.add_llm(svc)
-            self._llm_services[backend_name] = svc
+            switcher, services = self._llm_switcher, self._llm_services
+            if not await switcher.add_llm(svc):
+                return None
+            if self._llm_switcher is not switcher:
+                return None  # the pipeline was torn down while it started
+            services[backend_name] = svc
             if plan is not None and not native:
                 self._apply_replay(svc, {**plan, "replay": True})
             return svc
