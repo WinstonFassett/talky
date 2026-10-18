@@ -1215,6 +1215,19 @@ def _build_webrtc_routes():
                 agent_backend_name = name
                 break
 
+        # Backends start on first use (WIN-556): if no agent-ext backend is
+        # live yet, start the first configured one.
+        if agent_ext is None:
+            from talky.shared.profile_manager import get_profile_manager as _gpm_ext
+            _pm_ext = _gpm_ext()
+            for name in _pm_ext.list_llm_backends().keys():
+                b = _pm_ext.get_llm_backend(name)
+                if b is not None and b.service_class.endswith(".AgentExtensionLLMService"):
+                    svc = await voice_channel._ensure_backend(name)  # noqa: SLF001
+                    if isinstance(svc, AgentExtensionLLMService):
+                        agent_ext, agent_backend_name = svc, name
+                        break
+
         if agent_ext is None:
             await websocket.send_text(json.dumps({"type": "error", "message": "no agent-ext backend configured — is the browser connected?"}))
             await websocket.close()
