@@ -798,7 +798,8 @@ class VoiceChannel:
         """
         svc = await self._ensure_backend_added(backend_name)
         if svc is not None and wait_started and isinstance(self._llm_switcher, LazyLLMSwitcher):
-            await self._llm_switcher.wait_started(svc)
+            if not await self._llm_switcher.wait_started(svc):
+                return None
         return svc
 
     async def _ensure_backend_added(self, backend_name: str) -> Any:
@@ -829,6 +830,11 @@ class VoiceChannel:
             if self._llm_switcher is not switcher:
                 return None  # the pipeline was torn down while it started
             services[backend_name] = svc
+            # A resume_convo may have deferred a plan while this was starting;
+            # it's too late for a native resume, so replay that one.
+            late = self._deferred_resumes.pop(backend_name, None)
+            if late is not None:
+                plan, native = late, None
             if plan is not None and not native:
                 self._apply_replay(svc, {**plan, "replay": True})
             return svc
