@@ -7,7 +7,7 @@ defaults:
 # Network settings
 network:
   # See docs/ports.md — the canonical port truth.
-  host: "0.0.0.0"            # remote (HTTPS) bind host. "0.0.0.0" = all interfaces.
+  host: "tailscale"          # remote (HTTPS) bind host. "tailscale" = this machine's tailnet IPv4 (no LAN exposure). "0.0.0.0" = all interfaces (no access control!).
   external_host: ""          # External hostname for browser URLs (e.g. macbook.tailnet.ts.net)
 
   # Two listeners, named by reach:

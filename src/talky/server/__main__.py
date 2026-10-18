@@ -139,6 +139,22 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _tailscale_ip() -> str:
+    """Return this machine's tailnet IPv4 via `tailscale ip -4`. Fails loud."""
+    import shutil
+    import subprocess
+    exe = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    try:
+        out = subprocess.run([exe, "ip", "-4"], capture_output=True, text=True, timeout=10).stdout.split()
+    except Exception as e:
+        logger.error(f"network.host=tailscale but `tailscale ip -4` failed: {e}")
+        sys.exit(2)
+    if not out:
+        logger.error("network.host=tailscale but no tailnet IPv4 found (is Tailscale up?)")
+        sys.exit(2)
+    return out[0]
+
+
 def _resolve_network_config() -> tuple[str, Optional[str], Optional[str], dict]:
     """Resolve (host, ssl_certfile, ssl_keyfile, raw_network_dict) from env + settings.yaml."""
     from talky.shared.profile_manager import get_profile_manager
@@ -152,6 +168,8 @@ def _resolve_network_config() -> tuple[str, Optional[str], Optional[str], dict]:
     https = (net.get("https") or {}) if isinstance(net, dict) else {}
 
     host = os.getenv("TALKY_HOST") or net.get("host") or "localhost"
+    if host == "tailscale":
+        host = _tailscale_ip()
     cert = os.getenv("TALKY_HTTPS_CERT") or https.get("cert")
     key = os.getenv("TALKY_HTTPS_KEY") or https.get("key")
     # Expand ~ so users can write "~/.talky/ssl/..." in settings.yaml
