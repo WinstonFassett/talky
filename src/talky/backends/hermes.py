@@ -210,8 +210,11 @@ class _HermesThread:
             try:
                 result = self._agent.run_conversation(prompt, conversation_history=history)
                 history = result.get("messages") or history
+                if result.get("failed") or result.get("error"):
+                    self._put_frame(("error", str(result.get("error") or "Hermes turn failed")))
             except Exception as e:
                 logger.error(f"Hermes run_conversation error: {e}", exc_info=True)
+                self._put_frame(("error", str(e)))
             finally:
                 self._turn_active = False
                 self._put_frame(_TURN_END)
@@ -401,7 +404,10 @@ class HermesLLMService(HistoryPreambleMixin, LLMService):
                     await self.push_frame(LLMFullResponseEndFrame())
                 else:
                     kind, payload = item
-                    if kind == "text":
+                    if kind == "error":
+                        from talky.server.event_bus import event_bus
+                        await event_bus.emit("backendError", {"profile": "hermes", "message": payload})
+                    elif kind == "text":
                         await self.push_frame(LLMTextFrame(payload))
                     elif kind == "reasoning":
                         await self.push_frame(AggregatedTextFrame(text=payload, aggregated_by="thinking"))

@@ -283,6 +283,7 @@ class OpencodeLLMService(HistoryPreambleMixin, LLMService):
             raise
         except Exception as e:
             logger.error(f"opencode event stream error: {e}", exc_info=True)
+            await self._emit_backend_error(f"opencode event stream lost: {e}")
 
     async def _dispatch(self, ev: dict) -> None:
         t = ev.get("type")
@@ -302,6 +303,9 @@ class OpencodeLLMService(HistoryPreambleMixin, LLMService):
         elif t == "session.error":
             err = props.get("error", {}) or {}
             logger.error(f"opencode session.error: {err}")
+            await self._emit_backend_error(
+                (err.get("data") or {}).get("message") or err.get("name") or "opencode session error"
+            )
             if self._turn_started:
                 self._turn_started = False
                 await self.push_frame(LLMFullResponseEndFrame())
@@ -396,8 +400,18 @@ class OpencodeLLMService(HistoryPreambleMixin, LLMService):
             )
             if r.status_code not in (200, 204):
                 logger.error(f"opencode prompt_async {r.status_code}: {r.text[:200]}")
+                await self._emit_backend_error(f"opencode prompt failed ({r.status_code}): {r.text[:200]}")
         except Exception as e:
             logger.error(f"opencode prompt_async error: {e}", exc_info=True)
+            await self._emit_backend_error(f"opencode prompt failed: {e}")
+
+    async def _emit_backend_error(self, message: str) -> None:
+        """Tell the Sessions sidebar this turn failed (same signal pi emits)."""
+        try:
+            from talky.server.event_bus import event_bus
+            await event_bus.emit("backendError", {"profile": "opencode", "message": message})
+        except Exception:
+            pass
 
     async def _abort(self) -> None:
         if not self._client or not self._session_id:
