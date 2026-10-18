@@ -545,7 +545,7 @@ async def switch_profile(profile: str) -> dict:
     """Switch the active talky profile.
 
     Args:
-        profile: The profile name to switch to (e.g. 'openclaw', 'moltis', '__mcp__').
+        profile: The profile name to switch to (e.g. 'claude', 'moltis', '__mcp__').
 
     Returns:
         Dict with status and active profile name.

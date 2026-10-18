@@ -37,7 +37,7 @@ class LLMBackend:
     config: Dict[str, Any]
     # Optional fixed-string announcement spoken via TTS when this backend
     # becomes the active profile via a *manual picker switch*. Impersonal
-    # system cue ("OpenClaw channel"), not a greeting from the agent.
+    # system cue ("Pi channel"), not a greeting from the agent.
     # ``None`` means silent. Tickets 8c9d, e540.
     announcement: Optional[str] = None
     # Optional fixed-string signoff spoken via TTS when an agent using
@@ -70,7 +70,7 @@ class VoiceProfile:
 class TalkyProfile:
     name: str
     description: str
-    llm_backend: Optional[str] = None  # Legacy - for backends like OpenClaw/Moltis
+    llm_backend: Optional[str] = None  # Legacy - for backends like Moltis
     voice_profile: Optional[str] = None
     backend: Optional[str] = None  # New: "mcp" for voice backends
     app: Optional[str] = None  # New: "pi", "claude", etc.
@@ -83,7 +83,7 @@ class TalkyProfile:
     # Optional launcher block — generic agent launcher config (5d95).
     # Schema: {command: [str], extension: str, autoconnect_browser: bool,
     # mode: "foreground"|"background"}. ``None`` means non-launchable
-    # (remote backend like openclaw / moltis).
+    # (remote backend like moltis).
     launcher: Optional[Dict[str, Any]] = None
 
 

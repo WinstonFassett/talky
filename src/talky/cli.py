@@ -1054,7 +1054,7 @@ def cmd_talkystatus(args):
 def cmd_daemon(args):
     """Ensure the talky daemon is running, or run it in foreground with --foreground.
 
-    Default (user-facing): same shape as `talky openclaw` — ensures the
+    Default (user-facing): same shape as `talky claude` — ensures the
     daemon is up and returns immediately. Safe to run repeatedly.
 
     --force: kill any existing daemon first, then start a fresh one.
@@ -1318,7 +1318,7 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
 def main():
     """Main CLI entry point."""
     # Shortcut: treat first non-option, non-command arg as a profile name.
-    # `talky openclaw` → `talky profile openclaw`. `cmd_profile` ensures
+    # `talky claude` → `talky profile claude`. `cmd_profile` ensures
     # the daemon is up.
     known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch", "certs", "convos", "resume"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
@@ -1416,7 +1416,7 @@ def main():
     profile_parser.add_argument(
         "name",
         nargs="?",
-        help="Profile name to switch to (e.g. openclaw, moltis, __mcp__). Omit to list.",
+        help="Profile name to switch to (e.g. claude, moltis, __mcp__). Omit to list.",
     )
     profile_parser.add_argument("--resume", "-r", metavar="SESSION_ID", help="Resume a previous agent session by ID")
     profile_parser.add_argument("--cwd", "-d", metavar="DIR", help="Working directory for the agent session")

@@ -1,6 +1,6 @@
 # LLM Backends — each needs service_class (dotted import path), config.
 # Optional `announcement` is an impersonal system cue spoken when the user
-# *manually* switches to this profile in the picker (e.g. "OpenClaw channel").
+# *manually* switches to this profile in the picker (e.g. "Pi channel").
 # It's a "channel changed" UX cue, not a greeting from the agent. Agents that
 # join via the /ws/agent extension speak their own greeting through the TTS
 # stream — no system announcement fires on that path. Tickets 8c9d, e540.
@@ -26,14 +26,6 @@ llm_backends:
     service_class: "talky.backends.script.ScriptLLMService"
     config:
       token_delay_s: 0.08
-  openclaw:
-    description: "OpenClaw - OpenAI-compatible LLM"
-    service_class: "talky.backends.openclaw.OpenClawLLMService"
-    announcement: "OpenClaw channel."
-    config:
-      model: "gpt-4o"
-      api_key: ""  # Will be loaded from credentials
-      session_key: "agent:main:main"  # Default session key for OpenClaw
   moltis:
     description: "Moltis - Anthropic Claude"
     service_class: "talky.backends.moltis.MoltisLLMService"
@@ -42,13 +34,6 @@ llm_backends:
       model: "claude-3-5-sonnet-20241022"
       api_key: ""  # Will be loaded from credentials
       session_key: "agent:main:main"  # Default session key
-  openclaw-voice:
-    description: "OpenClaw - native Talk API (streaming, barge-in)"
-    service_class: "talky.backends.openclaw.OpenClawVoiceLLMService"
-    announcement: "OpenClaw voice channel open."
-    config:
-      session_key: "agent:main:main"
-      talk_mode: "stt-tts/managed-room"
   agent-ext:
     description: "Agent extension bridge (WebSocket, any agent CLI)"
     service_class: "talky.server.agent_ext.AgentExtensionLLMService"

@@ -13,8 +13,8 @@ See ticket c3a1 for the original design, ticket 76a3 for the
 
 A subclass of ``pipecat.services.llm_service.LLMService`` that bridges an
 external MCP caller to the LLM slot of a talky voice pipeline. It sits
-inside an ``LLMSwitcher`` alongside real inference LLMs (openclaw,
-moltis, etc.). When it is the active service, the pipeline is in
+inside an ``LLMSwitcher`` alongside real inference LLMs (moltis,
+opencode, etc.). When it is the active service, the pipeline is in
 "MCP-driven" mode — user speech is captured and pushed to a shared queue
 that ``convo_listen`` reads from; agent speech is injected externally
 via ``task.queue_frames([LLMTextFrame(...)])`` and flows through this

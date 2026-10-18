@@ -85,17 +85,17 @@ async def test_request_leave_plays_signoff_then_cue(monkeypatch):
     No speech onset during grace → left=True.
     """
     ch = _live_channel(monkeypatch, grace_seconds=0.1)
-    ch._active_profile = "openclaw"
+    ch._active_profile = "pi"
 
     monkeypatch.setattr(
-        ch, "_signoff_for_profile", lambda name: "openclaw signing off"
+        ch, "_signoff_for_profile", lambda name: "pi signing off"
     )
 
     result = await ch.request_leave()
 
     assert result["left"] is True
     assert result["user_interrupted"] is False
-    ch.speak.assert_awaited_once_with("openclaw signing off")  # type: ignore[attr-defined]
+    ch.speak.assert_awaited_once_with("pi signing off")  # type: ignore[attr-defined]
     ch._inject_cue.assert_awaited_once()  # type: ignore[attr-defined]
 
 # ── user interrupts the grace window via speech onset ────────────────────

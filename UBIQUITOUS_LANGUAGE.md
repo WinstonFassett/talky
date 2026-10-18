@@ -16,7 +16,7 @@ When framework terms leak in, qualify them: **Pipecat LLM Switcher**, **Pipecat 
 
 | Term | Definition | Aliases to avoid |
 | --- | --- | --- |
-| **Talky Profile** | A named recipe in `talky-profiles.yaml` joining one Backend with, optionally, one Voice Profile and one Launch Spec. The user-selectable top-level unit (`talky openclaw`). | profile (bare), session profile, profile_map |
+| **Talky Profile** | A named recipe in `talky-profiles.yaml` joining one Backend with, optionally, one Voice Profile and one Launch Spec. The user-selectable top-level unit (`talky claude`). | profile (bare), session profile, profile_map |
 | **Voice Profile** | A named recipe in `voice-profiles.yaml` pairing one STT Provider + one TTS Provider + one TTS Voice. | voice preset, voice config |
 | **Backend** | A named recipe in `llm-backends.yaml` (file name kept for now) pinning one Backend Adapter import path plus its config. Not all Backends are LLMs. | LLM backend, llm_backend, agent binding |
 | **Backend Adapter** | The Pipecat-compatible adapter that connects a Backend's wire protocol into the pipeline. In config: a dotted import path string. At runtime: a live instance. Uniform across all Backend flavors. | service_class, LLMService, service |
@@ -91,11 +91,10 @@ Backends split by *what they do with the turn*:
 | Category | What it does | Examples |
 | --- | --- | --- |
 | **Agent Backend** | Runs its own turn loop with tools, permissions, multi-step reasoning. | `claude-code`, `hermes`, `pi`, `opencode` |
-| **Model Backend** | Terminates a single inference call (text in, text out). No tool loop. | `openclaw`, `moltis`, `openclaw-voice` |
+| **Model Backend** | Terminates a single inference call (text in, text out). No tool loop. | `moltis`, `opencode` |
 | **Receiver Backend** | Doesn't generate. External caller drives speech into the daemon. | `__mcp__` (MCP Receiver), `agent-ext` (WebSocket Receiver) |
 | **Stub Backend** | Test/development fixture. No real generation. | `echo` (planned, not yet built) |
 
-`openclaw` vs `openclaw-voice` — same OpenClaw gateway, different remote endpoint. `openclaw` uses the OpenAI-compatible chat-completions API (text only; Talky's local STT/TTS handle audio). `openclaw-voice` uses OpenClaw's native Talk API (audio-in/audio-out streamed end-to-end on the gateway, bypassing Talky's STT/TTS). Two separate Backends, two separate Adapters, same remote service.
 
 ### Receiver Mode
 
@@ -169,7 +168,7 @@ The method on each Backend Adapter class is `status() -> (BackendStatus, reason)
 | **Voice Profile Name** | Key in `voice-profiles.yaml`. |
 | **Provider Name** | Key under `voice_backends.tts.*` or `voice_backends.stt.*`. |
 
-Many Talky Profile Names coincidentally equal their Backend Name today (`openclaw` → `openclaw`). Not an invariant. `claude` is a Talky Profile whose Backend is `agent-ext` (WebSocket Receiver) — proof they're separate. Any code treating Talky Profile Name and Backend Name as the same string is buggy. `switch_to_profile(name)` accepting both is the latent bug.
+Many Talky Profile Names coincidentally equal their Backend Name today (`pi` → `pi`). Not an invariant. `claude` is a Talky Profile whose Backend is `agent-ext` (WebSocket Receiver) — proof they're separate. Any code treating Talky Profile Name and Backend Name as the same string is buggy. `switch_to_profile(name)` accepting both is the latent bug.
 
 ## Relationships
 

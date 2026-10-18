@@ -6,7 +6,7 @@
 uv tool install --editable . --python 3.12   # install/update global `talky` binary
 uv sync                                      # sync project venv (dev + after dep changes)
 talky daemon                          # ensure the daemon is running (local_port 8765 + optional remote — see docs/ports.md)
-talky <profile>                       # e.g. `talky openclaw` — ensures daemon and switches its active LLM
+talky <profile>                       # e.g. `talky claude` — ensures daemon and switches its active LLM
 talky profile [<name>]                # explicit daemon profile control (list / switch)
 talky kill                            # stop the daemon (discovers it via ~/.talky/run/talky-daemon.local-port)
 uv run ruff check . && uv run pyright
@@ -34,9 +34,9 @@ After changing pyproject.toml deps: `uv sync && uv tool install --editable . --f
 
 One unified daemon. There is no legacy standalone bot anymore (ripped in 5098).
 
-- **talky daemon** — `talky daemon` runs a single process that serves one collapsed app — WebRTC handler, `client/dist/`, FastMCP tools, and the in-process voice pipeline — over an always-on local HTTP listener (`local_port`, default 8765) plus an optional remote HTTPS listener (`remote_port`) when a cert resolves. See [docs/ports.md](docs/ports.md). The pipeline includes an `LLMSwitcher` whose slot contains `MCPDriverLLMService` (null passthrough — the default) plus every configured LLM backend. Switch via `talky profile openclaw` or the shortcut `talky openclaw`. Any daemon-dependent command auto-spawns the daemon if it isn't already running (`ensure_mcp_daemon()`, 9d02 / d239c5d). This is the 58db / ea77 / c3a1 architecture.
+- **talky daemon** — `talky daemon` runs a single process that serves one collapsed app — WebRTC handler, `client/dist/`, FastMCP tools, and the in-process voice pipeline — over an always-on local HTTP listener (`local_port`, default 8765) plus an optional remote HTTPS listener (`remote_port`) when a cert resolves. See [docs/ports.md](docs/ports.md). The pipeline includes an `LLMSwitcher` whose slot contains `MCPDriverLLMService` (null passthrough — the default) plus every configured LLM backend. Switch via `talky profile claude` or the shortcut `talky claude`. Any daemon-dependent command auto-spawns the daemon if it isn't already running (`ensure_mcp_daemon()`, 9d02 / d239c5d). This is the 58db / ea77 / c3a1 architecture.
 
-Pipeline shape: `Mic → VAD → STT → LLMSwitcher → TTS → Speaker`. The switcher routes frames to whichever LLM is active. `MCPDriverLLMService` consumes `LLMContextFrame` by pushing the latest user message onto the daemon's speech queue (read by `convo_listen`) and passes injected `LLMTextFrame`s through to TTS. Real LLMs (openclaw, moltis, hermes, etc.) run inference against their own remote sessions.
+Pipeline shape: `Mic → VAD → STT → LLMSwitcher → TTS → Speaker`. The switcher routes frames to whichever LLM is active. `MCPDriverLLMService` consumes `LLMContextFrame` by pushing the latest user message onto the daemon's speech queue (read by `convo_listen`) and passes injected `LLMTextFrame`s through to TTS. Real LLMs (moltis, hermes, etc.) run inference against their own remote sessions.
 
 - `server/` — voice daemon (local audio `talky say` / `talky ask`), LLM backends, transcribe, voice client
 - `src/talky/server/` — talky daemon entry point, in-process voice channel (`channel.py`), FastMCP tools, embedded WebRTC handler, profile switching
@@ -64,15 +64,15 @@ When the daemon is running and a browser peer is connected:
 
 ```bash
 talky profile                  # list available profiles, show active
-talky profile openclaw         # switch to openclaw
-talky openclaw                 # shortcut: same as `talky profile openclaw`
+talky profile claude         # switch to claude
+talky claude                 # shortcut: same as `talky profile claude`
 talky profile __mcp__          # switch to the null MCP passthrough (so an MCP agent can drive via convo_speak)
 talky __mcp__                  # shortcut
 ```
 
 Switching uses `ManuallySwitchServiceFrame` — the transport stays connected, only the active LLM changes. No new pipeline, no peer disconnect. The soft switch (3769fe4) works even before the pipeline is live — the profile is remembered and applied at pipeline build.
 
-**Do:** Background-mode shortcuts (`talky pi`, `talky openclaw`, `talky hermes`, `talky moltis`) switch the daemon profile via `cmd_profile` → POST `/api/profile`. They are all the same operation. Foreground shortcuts (`talky pi-tui`, `talky claude`) take a different path — `cmd_launch` execs into the agent's CLI with a voice extension loaded. `claude` is foreground despite its bare name; see "Agent integration modalities" below.
+**Do:** Background-mode shortcuts (`talky pi`, `talky hermes`, `talky moltis`) switch the daemon profile via `cmd_profile` → POST `/api/profile`. They are all the same operation. Foreground shortcuts (`talky pi-tui`, `talky claude`) take a different path — `cmd_launch` execs into the agent's CLI with a voice extension loaded. `claude` is foreground despite its bare name; see "Agent integration modalities" below.
 **Don't:** Create agent-specific CLI subcommands that do something different from profile-switching or `cmd_launch`. Don't create a subcommand just to hardcode a profile name — let the shortcut handle it.
 
 Ports: `local_port` (8765, always-on HTTP) + optional `remote_port` (HTTPS, cert-gated) — see [docs/ports.md](docs/ports.md). 7860 is dead (ripped in 5098); 5173 is vite dev only.
@@ -126,7 +126,7 @@ Hermes auto-approves and never asks.
 
 Talky supports two ways an agent (Claude, Pi, etc.) can participate in a voice session. **Background is the default and the preferred mode** — the daemon owns the agent, the browser is the only UI, and the agent is fully interruptible. Foreground is the exception, used when you specifically want the agent's own terminal UI alongside Talky's.
 
-**Background (app-first, default):** Talky owns the agent as an embedded backend in its voice pipeline. No parallel agent UI. The browser drives the conversation. Profile names are bare: `talky pi`, `talky hermes`, `talky openclaw`. No `launcher:` block — just an `llm_backend:` reference. The shortcut hits `cmd_profile` → POST `/api/profile` and the daemon swaps LLMs without rebuilding the pipeline.
+**Background (app-first, default):** Talky owns the agent as an embedded backend in its voice pipeline. No parallel agent UI. The browser drives the conversation. Profile names are bare: `talky pi`, `talky hermes`, `talky claude`. No `launcher:` block — just an `llm_backend:` reference. The shortcut hits `cmd_profile` → POST `/api/profile` and the daemon swaps LLMs without rebuilding the pipeline.
 
 **Foreground (agent-first, opt-in):** Talky `exec`s into the agent's own CLI with a voice extension loaded. The agent runs in its own terminal, loads its talky skill, and connects to the daemon as a `/ws/agent` participant. User sees both the agent UI and the talky browser UI. Profile names use the `-tui` suffix: `talky pi-tui`, `talky claude-tui`. The profile has a `launcher:` block describing the command and extension; the shortcut hits `cmd_launch`.
 

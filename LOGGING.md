@@ -11,7 +11,7 @@ This guide covers logging across the entire Talky voice bot system, including th
 #### Environment Variable Control
 ```bash
 # This works across ALL components
-PIPECAT_LOG_LEVEL=DEBUG talky openclaw
+PIPECAT_LOG_LEVEL=DEBUG talky claude
 PIPECAT_LOG_LEVEL=INFO talky moltis
 PIPECAT_LOG_LEVEL=ERROR talky pi
 ```
@@ -91,7 +91,7 @@ talky --quiet                    # Tries configure_logging (BROKEN)
 talky --log-level INFO          # Tries configure_logging (BROKEN)
 
 # Default uses setup_essential_logging
-talky openclaw                   # Uses setup_essential_logging
+talky claude                   # Uses setup_essential_logging
 ```
 
 #### Problems
@@ -120,17 +120,9 @@ logger.add(sys.stderr, level="INFO")
 
 ### LLM Backends
 
-#### OpenClaw Backend
-```python
-# Uses loguru with environment variable support
-from loguru import logger
-# Responds to PIPECAT_LOG_LEVEL
-logger.info(f"📤 Sending to OpenClaw: {request_data}")
-```
-
 #### Moltis Backend
 ```python
-# Similar to OpenClaw
+# Uses loguru with environment variable support
 from loguru import logger
 # Responds to PIPECAT_LOG_LEVEL
 logger.info(f"🔌 Connecting to Moltis at {gateway_url}")
@@ -151,17 +143,17 @@ logger.info(f"🚀 Starting pi subprocess: {self.pi_binary}")
 #### What to Check
 ```bash
 # Enable full debug logging
-PIPECAT_LOG_LEVEL=DEBUG talky openclaw
+PIPECAT_LOG_LEVEL=DEBUG talky claude
 
 # Look for these specific messages:
-# - "🔌 Connecting to OpenClaw"
-# - "✅ Connected to OpenClaw" 
-# - "📤 Sending to OpenClaw"
+# - "🔌 Connecting to Moltis"
+# - "✅ Connected to Moltis" 
+# - "📤 Sending to Moltis"
 # - WebSocket connection errors
 ```
 
 #### Common Issues
-- OpenClaw gateway not running
+- Moltis gateway not running
 - Wrong gateway URL
 - Authentication token issues
 - Network connectivity problems
@@ -264,10 +256,10 @@ logger.info(f"[{COMPONENT}] 🔌 Connecting to Moltis")
 ```python
 # Add consistent context
 logger.bind(
-    component="openclaw",
+    component="moltis",
     request_id=request_id,
     user_id=user_id
-).info("Sending request to OpenClaw")
+).info("Sending request to Moltis")
 ```
 
 #### 2. Log Level Hierarchy
@@ -308,7 +300,7 @@ logger.info(f"Operation completed in {time.time() - start:.2f}s")
 # Workaround: Check individual component logs
 
 # Check specific backend logs
-PIPECAT_LOG_LEVEL=DEBUG talky openclaw 2>&1 | grep "OpenClaw"
+PIPECAT_LOG_LEVEL=DEBUG talky claude 2>&1 | grep "Moltis"
 ```
 
 ### For Voice Pipeline Issues
@@ -358,30 +350,30 @@ PIPECAT_LOG_LEVEL=DEBUG talky moltis 2>&1 | grep -E "(VAD|STT|TTS|audio)"
 ### Environment Variables
 ```bash
 # Primary method - works with all components
-TALKY_LOG_LEVEL=ERROR talky openclaw      # Errors only (recommended)
+TALKY_LOG_LEVEL=ERROR talky claude      # Errors only (recommended)
 TALKY_LOG_LEVEL=WARNING talky moltis     # Warnings and errors
 TALKY_LOG_LEVEL=INFO talky pi              # Verbose mode
-TALKY_LOG_LEVEL=DEBUG talky openclaw      # Full debug
+TALKY_LOG_LEVEL=DEBUG talky claude      # Full debug
 ```
 
 ### Command Line Arguments
 ```bash
 # All working now
-talky --log-level ERROR openclaw          # Errors only
+talky --log-level ERROR claude          # Errors only
 talky --log-level WARNING moltis          # Warnings and errors
 talky --log-level INFO pi                 # Verbose mode
-talky --log-level DEBUG openclaw          # Full debug
+talky --log-level DEBUG claude          # Full debug
 
 # Aliases that work
-talky --quiet openclaw                    # Same as --log-level ERROR
-talky --debug openclaw                    # Same as --log-level DEBUG
-talky --minimal openclaw                  # Same as --log-level ERROR
+talky --quiet claude                    # Same as --log-level ERROR
+talky --debug claude                    # Same as --log-level DEBUG
+talky --minimal claude                  # Same as --log-level ERROR
 ```
 
 ### Common Debugging Commands
 ```bash
-# Full debug for OpenClaw
-TALKY_LOG_LEVEL=DEBUG talky openclaw
+# Full debug for Moltis
+TALKY_LOG_LEVEL=DEBUG talky claude
 
 # Check MCP server status
 talky daemon
@@ -410,6 +402,6 @@ When reporting issues, include:
 
 Example:
 ```bash
-PIPECAT_LOG_LEVEL=DEBUG talky openclaw > debug.log 2>&1
+PIPECAT_LOG_LEVEL=DEBUG talky claude > debug.log 2>&1
 # Then share debug.log
 ```

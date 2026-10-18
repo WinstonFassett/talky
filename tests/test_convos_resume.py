@@ -52,8 +52,6 @@ def test_empty_history_gives_no_preamble():
         ("talky.backends.hermes", "HermesLLMService"),
         ("talky.backends.opencode", "OpencodeLLMService"),
         ("talky.backends.pi_rpc", "PiRPCLLMService"),
-        ("talky.backends.openclaw", "OpenClawLLMService"),
-        ("talky.backends.openclaw", "OpenClawVoiceLLMService"),
         ("talky.backends.moltis", "MoltisLLMService"),
     ],
 )

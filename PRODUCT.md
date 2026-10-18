@@ -12,7 +12,7 @@ Their job-to-be-done is to have a useful spoken conversation with an AI agent th
 
 ## Product Purpose
 
-Talky is a voice-first AI assistant client that connects a browser to a local daemon over WebRTC + SSE. It exists so the user can talk to any of several agent backends (Claude Code, Pi, openclaw, hermes, opencode) and have the agent both talk back and take action under supervision.
+Talky is a voice-first AI assistant client that connects a browser to a local daemon over WebRTC + SSE. It exists so the user can talk to any of several agent backends (Claude Code, Pi, hermes, opencode) and have the agent both talk back and take action under supervision.
 
 The differentiator is the **approval loop**: when the agent wants to run something with real-world consequences, talky surfaces a card with the verbatim command, and the user can answer Allow / Allow-for-session / Deny by voice or click. No other voice agent does this cleanly.
 
@@ -33,7 +33,7 @@ Tone: present, attentive, unhurried. The UI behaves like someone who's actually 
 
 ## Design Principles
 
-1. **Backend-agnostic transparency.** Whichever brain is driving — Claude, Pi, openclaw, hermes — its thinking, tool calls, and state are equally legible. Renderers key on part kind (thinking / tool / approval / text / error), never on a specific backend's event shape. No backend gets visual privilege; none gets hidden.
+1. **Backend-agnostic transparency.** Whichever brain is driving — Claude, Pi, hermes — its thinking, tool calls, and state are equally legible. Renderers key on part kind (thinking / tool / approval / text / error), never on a specific backend's event shape. No backend gets visual privilege; none gets hidden.
 2. **The transcript is the product.** Almost all surface area belongs to the conversation. Chrome (header, input, pickers) exists to serve the transcript, not compete with it. If a feature can't justify pixels above or below the conversation, it doesn't get them.
 3. **Calm by default; alive at the moment.** The default state is quiet — small motion, restrained color, no demands. The voice visualizer breathing, the approval card arriving, the state shifting from LISTENING to THINKING — those moments are where the design uses its budget. Everything else stays still so those moments can land.
 4. **Voice can carry it; visuals carry what voice can't.** Prose, status, acknowledgments — voice handles. Code, diffs, file lists, command approvals, long-running progress — visuals handle, because voice can't read a shell command aloud and have it survive. The split is the design discipline.

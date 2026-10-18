@@ -316,14 +316,14 @@ Monitor logs for:
 
 ## Comparison with Other Integrations
 
-| Feature | MCP | Pi | Moltis | OpenClaw |
-|---------|-----|----|--------|----------|
-| Type | Voice Interface | LLM Backend | LLM Backend | LLM Backend |
-| Protocol | MCP Tools | RPC Subprocess | WebSocket | WebSocket |
-| Primary Use | Voice I/O for AI | AI Processing | AI Processing | AI Processing |
-| Setup Complexity | Low | Medium | Low | High |
-| Resource Usage | Medium | High | Low | Medium |
-| Extensibility | High | Medium | Medium | Low |
+| Feature | MCP | Pi | Moltis |
+|---------|-----|----|--------|
+| Type | Voice Interface | LLM Backend | LLM Backend |
+| Protocol | MCP Tools | RPC Subprocess | WebSocket |
+| Primary Use | Voice I/O for AI | AI Processing | AI Processing |
+| Setup Complexity | Low | Medium | Low |
+| Resource Usage | Medium | High | Low |
+| Extensibility | High | Medium | Medium |
 
 ## References
 

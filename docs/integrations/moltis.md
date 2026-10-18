@@ -176,7 +176,7 @@ sequenceDiagram
 - **Session persistence**: SQLite-backed conversation history
 
 ### Latency
-- **Direct streaming**: No acknowledgment delay like OpenClaw
+- **Direct streaming**: No acknowledgment delay
 - **Token-by-token delivery**: Immediate response start
 - **WebSocket ping**: Connection health monitoring
 
@@ -218,15 +218,15 @@ logger.info(f"🤖 Response: {response[:100]}...")
 
 ## Comparison with Other Integrations
 
-| Feature | Moltis | OpenClaw | Pi |
-|---------|--------|----------|----|
-| Language | Rust | Node.js | Python |
-| Protocol | WebSocket + streaming | WebSocket + two-phase | WebSocket |
-| Response Pattern | Direct streaming | Empty res + chat event | Direct |
-| Latency | Very low (streaming) | Medium (two-phase) | Medium |
-| Session Management | SQLite persistence | Session-based | Request-based |
-| Tool Execution | Parallel | Sequential | Sequential |
-| Memory Usage | Low (Rust) | Medium (Node.js) | High (Python) |
+| Feature | Moltis | Pi |
+|---------|--------|----|
+| Language | Rust | Python |
+| Protocol | WebSocket + streaming | WebSocket |
+| Response Pattern | Direct streaming | Direct |
+| Latency | Very low (streaming) | Medium |
+| Session Management | SQLite persistence | Request-based |
+| Tool Execution | Parallel | Sequential |
+| Memory Usage | Low (Rust) | High (Python) |
 
 ## Development Notes
 

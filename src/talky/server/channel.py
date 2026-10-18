@@ -672,7 +672,7 @@ class VoiceChannel:
         ``_active_profile`` is updated.
 
         ``announce``: when True (default), speak the profile's
-        ``announcement`` cue ("OpenClaw channel"). Callers triggered by
+        ``announcement`` cue ("Pi channel"). Callers triggered by
         an *agent joining* (e.g. /ws/agent) should pass ``announce=False``
         so the agent owns its own greeting via the TTS stream. Ticket e540.
 
@@ -1136,7 +1136,7 @@ class VoiceChannel:
         """Look up the optional system announcement for a profile.
 
         Impersonal cue spoken on *manual* picker-initiated profile switches
-        ("OpenClaw channel"). Not a greeting from the agent — see ticket e540.
+        ("Pi channel"). Not a greeting from the agent — see ticket e540.
 
         Returns ``None`` for the MCP driver profile, for unknown profiles,
         or for profiles without an ``announcement`` field. Tickets 8c9d, e540.
