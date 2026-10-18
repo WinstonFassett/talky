@@ -60,6 +60,7 @@ const api = async (base, path, body, method = "POST") => {
 		method: body === undefined && method === "POST" ? "POST" : method,
 		headers: { "Content-Type": "application/json" },
 		body: body === undefined ? undefined : JSON.stringify(body),
+		signal: AbortSignal.timeout(15000),
 	});
 	return res.json().catch(() => ({}));
 };
@@ -107,9 +108,20 @@ const noLeftoverDraft = (page) =>
 		for (const key of Object.keys(localStorage)) if (key.startsWith("talky.draft")) localStorage.removeItem(key);
 	});
 
+// A "fresh chat" must forget what this browser had open, or the app reopens
+// the last-opened convo instead of showing a blank chat (WIN-535's
+// remembered-session feature). The real New-chat flow clears it client-side;
+// openFresh does the same. Runs on every load, not just the first: later
+// checks (openSeeded) re-set the key, and drafts must survive reloads.
+const noRememberedConvo = (page) =>
+	page.addInitScript(() => {
+		localStorage.removeItem("talky.openConvo");
+	});
+
 const openFresh = async (page, base) => {
 	await fresh(base);
 	await noLeftoverDraft(page);
+	await noRememberedConvo(page);
 	await open(page, base);
 };
 
@@ -131,9 +143,19 @@ const isConnected = (voice) => /Voice status: (IDLE|LISTENING|THINKING|SPEAKING)
 
 const connect = async (page) => {
 	if (await page.evaluate(isConnected, sel.voice)) return;
-	const start = page.getByRole("button", { name: /^(Start call|Converse)$/ }).first();
-	await start.click({ timeout: 5000 });
-	await page.waitForFunction(isConnected, sel.voice, { timeout: 30000 });
+	// Headless WebRTC occasionally leaves the client stuck "connecting" (the
+	// offer never reaches the daemon); a fresh attempt disconnects and retries.
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		const start = page.getByRole("button", { name: /^(Start call|Converse)$/ }).first();
+		await start.click({ timeout: 5000 });
+		const ok = await page
+			.waitForFunction(isConnected, sel.voice, { timeout: 30000 })
+			.then(() => true)
+			.catch(() => false);
+		if (ok) return;
+		if (attempt < 3) await page.waitForTimeout(500);
+	}
+	fail("the call did not connect after three attempts");
 };
 
 const typeInto = async (page, text) => {
@@ -204,7 +226,7 @@ const dragBy = async (page, selector, dx) => {
 
 const phone = async (page, fn) => {
 	// A phone is its own browser context (touch, 390px); it shares the runner's browser.
-	const ctx = await page.context().browser().newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ["clipboard-read", "clipboard-write"] });
+	const ctx = await page.context().browser().newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ["clipboard-read", "clipboard-write", "microphone"] });
 	const p = await ctx.newPage();
 	try {
 		return await fn(p);
@@ -219,6 +241,22 @@ const SIGN_IN_NA = "Talky has no accounts and no sign-in: it is a single-user ap
 const textOverlaps = (page) =>
 	page.evaluate(() => {
 		const rects = [];
+		// Text clipped by an overflowed ancestor is not on screen — intersect
+		// each range with EVERY clip box up the tree so a row cut off by a
+		// scroll viewport doesn't count as overlapping what it sits under.
+		const clipBox = (el) => {
+			let box = null;
+			for (let a = el.parentElement; a; a = a.parentElement) {
+				const o = getComputedStyle(a);
+				if (/hidden|auto|scroll|clip/.test(o.overflow) || /hidden|auto|scroll|clip/.test(o.overflowX) || /hidden|auto|scroll|clip/.test(o.overflowY)) {
+					const r = a.getBoundingClientRect();
+					box = box === null
+						? r
+						: new DOMRect(Math.max(box.left, r.left), Math.max(box.top, r.top), Math.max(0, Math.min(box.right, r.right) - Math.max(box.left, r.left)), Math.max(0, Math.min(box.bottom, r.bottom) - Math.max(box.top, r.top)));
+				}
+			}
+			return box;
+		};
 		const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
 		while (walker.nextNode()) {
 			const node = walker.currentNode;
@@ -226,9 +264,15 @@ const textOverlaps = (page) =>
 			const el = node.parentElement;
 			const cs = getComputedStyle(el);
 			if (cs.visibility === "hidden" || cs.opacity === "0" || el.closest("[aria-hidden=true], .sr-only")) continue;
+			const clip = clipBox(el);
 			const range = document.createRange();
 			range.selectNodeContents(node);
-			for (const r of range.getClientRects()) if (r.width > 1 && r.height > 1 && r.bottom > 0 && r.top < innerHeight) rects.push({ r, el, text: node.textContent.trim().slice(0, 30) });
+			for (const r of range.getClientRects()) {
+				const rr = clip
+					? new DOMRect(Math.max(r.left, clip.left), Math.max(r.top, clip.top), Math.max(0, Math.min(r.right, clip.right) - Math.max(r.left, clip.left)), Math.max(0, Math.min(r.bottom, clip.bottom) - Math.max(r.top, clip.top)))
+					: r;
+				if (rr.width > 1 && rr.height > 1 && rr.bottom > 0 && rr.top < innerHeight) rects.push({ r: rr, el, text: node.textContent.trim().slice(0, 30) });
+			}
 		}
 		for (const input of document.querySelectorAll("input[placeholder], textarea[placeholder]")) {
 			if (input.value || !input.placeholder || input.offsetParent === null) continue;
@@ -329,18 +373,28 @@ export default {
 			await page.waitForSelector(sel.jump, { timeout: 3000 });
 			// The reply's own message (message N+2 — the user's turn at N+1 holds the same words in its [[say]] script).
 			await page.waitForFunction(({ m, n }) => document.querySelectorAll(m).length > n + 1 && [...document.querySelectorAll(m)].at(-1).innerText.includes("Here is the newest reply"), { m: sel.message, n: before }, { timeout: 30000 });
+			// The reply is out of view, so the count appears once the streamed
+			// message is in the transcript (the unread effect and the reply can
+			// land in the same frame).
+			await page.waitForFunction((j) => Number(document.querySelector(j)?.getAttribute("data-unread") ?? 0) >= 1, sel.jump, { timeout: 5000 }).catch(() => fail("the button shows no unread after a reply arrived"));
 			const unread = await page.$eval(sel.jump, (el) => Number(el.getAttribute("data-unread")));
 			const label = await page.$eval(sel.jump, (el) => el.getAttribute("aria-label") ?? el.textContent);
-			if (!(unread >= 1)) fail(`the button shows ${unread} unread after a reply arrived`);
 			if (!/latest/i.test(label)) fail(`the button is labelled "${label}"`);
 			const composerTop = await page.$eval(sel.composer, (el) => el.getBoundingClientRect().top);
 			const jumpBottom = await page.$eval(sel.jump, (el) => el.getBoundingClientRect().bottom);
 			if (jumpBottom > composerTop) fail("the button is not above the composer");
 			await page.click(sel.jump);
-			await page.waitForTimeout(300);
-			const distance = await distanceFromBottom(page);
-			if (distance > 2) fail(`after the button the transcript is ${distance}px from the bottom`);
-			if ((await page.$(sel.jump)) !== null && (await page.$eval(sel.jump, (el) => el.getAttribute("data-unread"))) !== "0") fail("the unread count did not reset");
+			// The jump lands at the bottom; the bot-speaking bar can shrink the
+			// transcript a beat later, so wait for the pinned state rather than a
+			// fixed delay.
+			await page.waitForFunction(({ list, j }) => {
+				const el = document.querySelector(list);
+				const dist = el.scrollHeight - el.clientHeight - el.scrollTop;
+				return dist <= 2 && document.querySelector(j) === null;
+			}, { list: sel.list, j: sel.jump }, { timeout: 5000 }).catch(async () => {
+				const d = await distanceFromBottom(page);
+				fail(`after the button the transcript is ${d}px from the bottom`);
+			});
 			await waitTurnDone(page);
 			return `"${label}" showed ${unread} unread above the composer and jumped to the bottom`;
 		},
@@ -799,7 +853,9 @@ export default {
 			await mine.hover();
 			await mine.getByRole("button", { name: "Branch off" }).click();
 			await page.waitForFunction((m) => document.querySelectorAll(m).length === 0, sel.message, { timeout: 5000 }).catch(() => fail("Branch off did not open a new chat"));
-			if (!(await page.inputValue(sel.composer)).includes(word)) fail("Branch off did not carry the message into the new chat's composer");
+			// The message lands in the new chat's composer as soon as the new chat
+			// is created (a short async gap after the transcript clears).
+			await page.waitForFunction(({ c, w }) => (document.querySelector(c)?.value ?? "").includes(w), { c: sel.composer, w: word }, { timeout: 5000 }).catch(() => fail("Branch off did not carry the message into the new chat's composer"));
 			return "Retry re-sent it, Edit put it back in the composer, Branch off opened a new chat with it in the composer";
 		},
 
@@ -1136,7 +1192,9 @@ export default {
 				await p.fill(sel.composer, "");
 				await p.click(sel.composer);
 				await p.keyboard.insertText("[[sleep 2]] [[tool scan 2]] [[lines 6]]");
-				await p.keyboard.press("Enter");
+				// On a touch device Enter is a newline, not a send — tap Send.
+				if (p.viewportSize()?.width && p.viewportSize().width <= 640) await p.tap(sel.send);
+				else await p.keyboard.press("Enter");
 				await p.waitForSelector(sel.toolRow, { timeout: 15000 });
 				hits = await textOverlaps(p);
 				if (hits.length) fail(`${label}, during a turn: ${hits.slice(0, 2).join("; ")}`);
@@ -1144,6 +1202,11 @@ export default {
 				report.push(label);
 			};
 			await run(page, "desktop");
+			// The desktop page is still in a call; the daemon serves one peer at a
+			// time, and the desktop tab's auto-reconnect would steal the pipeline
+			// from the phone. End its call first (test isolation, not app behavior).
+			await page.getByRole("button", { name: /^End/ }).first().click().catch(() => {});
+			await page.waitForFunction((v) => !/Voice status: (IDLE|LISTENING|THINKING|SPEAKING)/.test(document.querySelector(v)?.getAttribute("aria-label") ?? ""), sel.voice, { timeout: 10000 }).catch(() => {});
 			await phone(page, (p) => run(p, "phone"));
 			return `no overlapping text on ${report.join(" and ")}, idle and mid-turn`;
 		},

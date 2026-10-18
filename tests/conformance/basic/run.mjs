@@ -7,6 +7,36 @@ const MISSING = "MISSING:";
 const SKIPPED = "SKIPPED:";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
+
+// Headless Chromium has no mic: the same fake-media setup the browser rigs
+// use (tests/browser/drive_text.py) — a fake device + a 5s silence WAV as
+// the audio capture, and the microphone permission granted. Without it the
+// WebRTC connect hangs or errors intermittently (WIN-536).
+function fakeMediaArgs() {
+	const silence = join(ROOT, "reports", "silence.wav");
+	mkdirSync(dirname(silence), { recursive: true });
+	const pcm = Buffer.alloc(16000 * 5 * 2, 0); // 5s of 16kHz mono silence
+	const h = Buffer.alloc(44);
+	h.write("RIFF", 0);
+	h.writeUInt32LE(36 + pcm.length, 4);
+	h.write("WAVE", 8);
+	h.write("fmt ", 12);
+	h.writeUInt32LE(16, 16); // fmt chunk size
+	h.writeUInt16LE(1, 20); // PCM
+	h.writeUInt16LE(1, 22); // mono
+	h.writeUInt32LE(16000, 24); // sample rate
+	h.writeUInt32LE(32000, 28); // byte rate
+	h.writeUInt16LE(2, 32); // block align
+	h.writeUInt16LE(16, 34); // bits per sample
+	h.write("data", 36);
+	h.writeUInt32LE(pcm.length, 40);
+	writeFileSync(silence, Buffer.concat([h, pcm]));
+	return [
+		"--use-fake-device-for-media-stream",
+		"--use-fake-ui-for-media-stream",
+		`--use-file-for-fake-audio-capture=${silence}`,
+	];
+}
 const args = process.argv.slice(2);
 const floorOnly = args.includes("--floor");
 const appName = args.find((arg) => arg.startsWith("--app="))?.slice(6) ?? "skin";
@@ -31,8 +61,7 @@ const scenarios = [...feature.matchAll(/^\s*((?:@[\w.]+\s+)+)Scenario: (.+)$/gm)
 
 const selected = scenarios.filter((scenario) => (!floorOnly || scenario.tags.includes("@must")) && (ruleFilter === undefined || scenario.rule.toLowerCase().includes(ruleFilter)));
 
-const browser = await chromium.launch();
-const context = await browser.newContext({ extraHTTPHeaders: adapter.headers?.() ?? {}, viewport: { width: 1280, height: 800 }, permissions: ["clipboard-read", "clipboard-write"] });
+const browser = await chromium.launch({ channel: "chrome", headless: true, args: fakeMediaArgs() });
 mkdirSync(join(ROOT, "reports", "shots"), { recursive: true });
 
 const results = [];
@@ -52,6 +81,12 @@ for (const scenario of selected) {
 		continue;
 	}
 
+	// A fresh context per check: the shared browser keeps cold starts cheap,
+	// but a 30-check run sharing one context accumulates half-closed SSE /
+	// WebRTC connections and the browser's per-host pool stalls new page
+	// loads (WIN-536). No check depends on localStorage surviving across
+	// checks — openFresh clears drafts and the remembered convo itself.
+	const context = await browser.newContext({ extraHTTPHeaders: adapter.headers?.() ?? {}, viewport: { width: 1280, height: 800 }, permissions: ["clipboard-read", "clipboard-write", "microphone"] });
 	const page = await context.newPage();
 
 	try {
@@ -66,6 +101,7 @@ for (const scenario of selected) {
 	} finally {
 		await context.setOffline(false);
 		await page.close();
+		await context.close();
 	}
 
 	console.log(`${results.at(-1).status.padEnd(8)} ${scenario.title}`);

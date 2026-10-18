@@ -48,10 +48,15 @@ class UserTurnTextFrame(DataFrame):
     text and a timestamp, no conversation history, no context object.
     Flows downstream through the pipeline and is consumed by whichever
     LLM service is currently active in the ``LLMSwitcher``.
+
+    ``replay`` marks a turn re-run after a daemon restart (WIN-536): the
+    user already sent it once, so the user transcript processor must not
+    append it again.
     """
 
     text: str = ""
     timestamp: float = 0.0
+    replay: bool = False
 
     def __str__(self) -> str:
         preview = self.text[:60] + ("…" if len(self.text) > 60 else "")

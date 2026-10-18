@@ -672,14 +672,33 @@ function ConversationMessages({
 
   // Content that grows inside a message (streamed text, highlighting, a tool
   // row) doesn't change `messages`; keep pinned through resizes too.
+  // Also watch the container itself: the bot-speaking bar (and the composer
+  // growing) change how tall the transcript is, and a following reader must
+  // stay at the bottom through that too (WIN-536).
   useEffect(() => {
     const content = contentRef.current;
-    if (!content) return;
+    const container = scrollRef.current;
+    if (!content || !container) return;
     const ro = new ResizeObserver(() => {
       if (following.current) pin();
     });
     ro.observe(content);
+    ro.observe(container);
     return () => ro.disconnect();
+  }, [pin]);
+
+  // ResizeObserver delivers before layout, so a resize that lands in the
+  // same frame (the bot-speaking bar appearing, a line wrapping) can still
+  // leave the reader off the bottom for one frame. While following, re-pin
+  // after every layout — this is what "following" means.
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      if (following.current) pin();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [pin]);
 
   const onScroll = () => {

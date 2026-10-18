@@ -244,7 +244,7 @@ function SessionRow({
           />
         ) : (
           <div
-            className="truncate text-[13px]"
+            className="break-words text-[13px] leading-snug"
             data-testid="session-title"
             style={{ color: isOpen ? 'var(--color-foreground)' : 'var(--color-text-dim)' }}
             title={row.title || 'Untitled'}
@@ -497,7 +497,7 @@ export function SessionRail({ onCollapse }: { onCollapse: () => void }) {
         aria-valuenow={width}
         tabIndex={0}
         data-testid="session-rail-resize"
-        className="absolute -right-1 top-0 z-20 h-full w-2 cursor-col-resize outline-none hover:bg-[var(--color-border)] focus-visible:bg-[var(--color-ring)]"
+        className="absolute right-0 top-0 z-20 h-full w-2 cursor-col-resize outline-none hover:bg-[var(--color-border)] focus-visible:bg-[var(--color-ring)]"
         style={{ touchAction: 'none' }}
         onPointerDown={(e) => {
           e.preventDefault();
