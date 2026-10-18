@@ -73,7 +73,6 @@ Citations: `#N` is a merged PR. Bare hashes are direct-to-main commits that neve
 - Profiles renamed to `<agent>` / `<agent>-tui`, autoconnect on by default. [f07345c](https://github.com/WinstonFassett/talky/commit/f07345c)
 - No more hardcoded Pi provider/model; Pi uses its own defaults. [7b1e006](https://github.com/WinstonFassett/talky/commit/7b1e006)
 - LLMContext aggregation dropped from the voice pipeline. [fc51414](https://github.com/WinstonFassett/talky/commit/fc51414)
-- Daemon is MIT-licensed per workspace member at the time; `readme` field added for PyPI. [f2fc0a3](https://github.com/WinstonFassett/talky/commit/f2fc0a3), [53590a1](https://github.com/WinstonFassett/talky/commit/53590a1)
 
 ### Fixed
 
@@ -100,7 +99,7 @@ Citations: `#N` is a merged PR. Bare hashes are direct-to-main commits that neve
 
 ### Internal
 
-- **Test coverage grew from 7 test files to a unit suite plus an E2E rig.** A browser WebRTC rig with fake media, a steel-thread pipeline test and an interruption test. ([#8](https://github.com/WinstonFassett/talky/pull/8), [7c97dd4](https://github.com/WinstonFassett/talky/commit/7c97dd4), [96c94a1](https://github.com/WinstonFassett/talky/commit/96c94a1))
+- **Test coverage grew from a handful of files to a unit suite plus an E2E rig.** A browser WebRTC rig with fake media, a steel-thread pipeline test and an interruption test. ([#8](https://github.com/WinstonFassett/talky/pull/8), [7c97dd4](https://github.com/WinstonFassett/talky/commit/7c97dd4), [96c94a1](https://github.com/WinstonFassett/talky/commit/96c94a1))
 - Basic conformance floor (`tests/conformance/basic`): 49 pass, 0 fail, 7 n/a, per the #12 commit log. `TALKY_ONLY_BACKENDS` allowlist keeps the rig from starting real agents (it had started 102 Devin sessions). ([#8](https://github.com/WinstonFassett/talky/pull/8), [#12](https://github.com/WinstonFassett/talky/pull/12))
 - Docs: `PRODUCT.md`, `DESIGN.md`, `LOGGING.md`, `UBIQUITOUS_LANGUAGE.md`, per-backend integration docs, ports doc.
 - Code-health passes (desloppify), distribution-parity spike notes, `scripts/check-venv-drift.py`.
