@@ -1,3 +1,6 @@
 node_modules
 reports/shots/
 reports/silence.wav
+reports/pass/
+diagrams/
+dbg-*.png

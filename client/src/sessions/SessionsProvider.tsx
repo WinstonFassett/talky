@@ -152,9 +152,14 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const archivedRef = useRef(showArchived);
   archivedRef.current = showArchived;
 
+  // Only the newest request may set the list: an unfiltered refresh that
+  // resolves after a search must not overwrite the search's rows.
+  const listSeq = useRef(0);
   const refreshList = useCallback(async () => {
+    const seq = ++listSeq.current;
     try {
       const out = await convosApi.list(queryRef.current, archivedRef.current);
+      if (seq !== listSeq.current) return out;
       setRows(out.convos);
       setCurrent(out.current);
       return out;

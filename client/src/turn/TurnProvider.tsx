@@ -187,14 +187,15 @@ export function TurnProvider({ children }: { children: ReactNode }) {
   useRTVIClientEvent(RTVIEvent.BotTtsStopped, useCallback(() => set(tts, false), [settle])); // eslint-disable-line react-hooks/exhaustive-deps
   useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, useCallback(() => set(speaking, true), [settle])); // eslint-disable-line react-hooks/exhaustive-deps
   useRTVIClientEvent(RTVIEvent.BotStoppedSpeaking, useCallback(() => set(speaking, false), [settle])); // eslint-disable-line react-hooks/exhaustive-deps
-  useRTVIClientEvent(
-    RTVIEvent.BotOutput,
-    useCallback((data: { text?: string }) => {
-      if (!runningRef.current || !data?.text?.trim()) return;
-      sawOutput.current = true;
-      setWaiting(false);
-    }, []),
-  );
+  // The first token: bot-llm-text arrives as the model produces text, before
+  // TTS; bot-output covers backends that only send text through TTS.
+  const firstOutput = useCallback((data: { text?: string }) => {
+    if (!runningRef.current || !data?.text?.trim()) return;
+    sawOutput.current = true;
+    setWaiting(false);
+  }, []);
+  useRTVIClientEvent(RTVIEvent.BotLlmText, firstOutput);
+  useRTVIClientEvent(RTVIEvent.BotOutput, firstOutput);
   // The call ended mid-turn: nothing more will arrive.
   useRTVIClientEvent(
     RTVIEvent.Disconnected,
@@ -227,9 +228,20 @@ export function TurnProvider({ children }: { children: ReactNode }) {
     pending.current = llm.current = tts.current = speaking.current = false;
     finish();
   });
-  useDaemonEvent('turnResumed', (d: { convo_id?: string }) => {
-    if (d?.convo_id && d.convo_id !== openId) return;
+  // The daemon says so on the call (reliable right after a restart) and on the
+  // event stream; show it once.
+  const resumedAt = useRef<{ convo: string; at: number } | null>(null);
+  const onResumed = (d: { convo_id?: string } | undefined) => {
+    const convo = d?.convo_id ?? '';
+    if (convo && convo !== openId) return;
+    const prev = resumedAt.current;
+    if (prev && prev.convo === convo && Date.now() - prev.at < 30000) return;
+    resumedAt.current = { convo, at: Date.now() };
     addNotice({ kind: 'info', text: 'This turn was interrupted by a restart. Resuming from the last saved message.', transient: false });
+  };
+  useDaemonEvent('turnResumed', onResumed);
+  useRTVIClientEvent(RTVIEvent.ServerMessage, (data: { type?: string; convo_id?: string }) => {
+    if (data?.type === 'turnResumed') onResumed(data);
   });
 
   // Notices carry their convo and render only while that session is on screen

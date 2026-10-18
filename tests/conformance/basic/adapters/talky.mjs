@@ -100,7 +100,7 @@ const open = async (page, base, path = "/") => {
 	await page.waitForTimeout(300);
 };
 
-/** Each check's tab starts without a new-chat draft left by an earlier check (one browser context is shared). */
+/** A tab starts without a new-chat draft left by an earlier check (run.mjs gives each check its own context; dbg.mjs and older runners share one). */
 const noLeftoverDraft = (page) =>
 	page.addInitScript(() => {
 		if (sessionStorage.getItem("basic.started")) return;
@@ -239,7 +239,7 @@ const phone = async (page, fn) => {
 	}
 };
 
-const SIGN_IN_NA = "Talky has no accounts and no sign-in: it is a single-user app the owner runs on their own machine. The local listener binds loopback; the optional remote listener is HTTPS on the owner's network. There is no identity to sign in or out of. (The remote listener has no access control at all — tracked as its own ticket.)";
+const SIGN_IN_NA = "Talky has no accounts and no sign-in: it is a single-user app the owner runs on their own machine. The local listener binds loopback; the optional remote listener is HTTPS on the owner's network. There is no identity to sign in or out of. (The remote listener has no access control at all — tracked in WIN-555.)";
 
 // Text rectangles of every visible leaf text run, for the overlap check.
 const textOverlaps = (page) =>
@@ -298,8 +298,7 @@ const textOverlaps = (page) =>
 		return hits;
 	});
 
-export default {
-	checks: {
+const checks = {
 		// ─── 1. Scroll follows the reader, never the stream ─────────────────
 		"Following the stream while at the bottom": async ({ page, base }) => {
 			await openSeeded(page, base, seed());
@@ -479,6 +478,8 @@ export default {
 
 		"Enter during IME composition never sends": async ({ page, base }) => {
 			await openFresh(page, base);
+			// Connected first, so a wrongly sent message would show at once.
+			await connect(page);
 			await page.click(sel.composer);
 			await page.keyboard.insertText("にほん");
 			await page.$eval(sel.composer, (el) => {
@@ -486,10 +487,15 @@ export default {
 				el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
 				el.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "にほん" }));
 			});
-			await page.waitForTimeout(1500);
+			await page.waitForTimeout(2000);
 			if ((await messageCount(page)) !== 0) fail("Enter while composing sent the message");
 			if ((await page.inputValue(sel.composer)) !== "にほん") fail("the composition text was lost");
-			return "a composing Enter (isComposing, keyCode 229) left the text in place";
+			// Control: the same Enter, not composing, does send within that window.
+			const t0 = Date.now();
+			await page.press(sel.composer, "Enter");
+			await page.waitForFunction((m) => document.querySelectorAll(m).length > 0, sel.message, { timeout: 2000 }).catch(() => fail("control: a plain Enter did not send within 2s, so the 2s wait proves nothing"));
+			await waitTurnDone(page);
+			return `a composing Enter (isComposing, keyCode 229) sent nothing in 2s; a plain Enter then sent in ${Date.now() - t0}ms`;
 		},
 
 		"On a phone, Enter is a newline": async ({ page: desktop, base }) =>
@@ -567,6 +573,7 @@ export default {
 		},
 
 		"The draft survives a reload or a deploy": async ({ page, base }) => {
+			const convo = seed({ turns: 4 });
 			await openFresh(page, base);
 			await typeInto(page, "a draft I have not sent");
 			await page.waitForTimeout(600);
@@ -584,7 +591,16 @@ export default {
 			await page.reload({ waitUntil: "load" });
 			await page.waitForSelector(sel.composer);
 			if ((await page.inputValue(sel.composer)) !== "") fail("a draft older than an hour came back");
-			return "the draft came back after a reload; one aged past an hour was dropped. Talky has no attachments, so there are none to restore";
+			// A saved conversation: its draft comes back in that same conversation.
+			await page.click(`${sel.row}[data-convo-id="${convo.id}"]`);
+			await page.waitForFunction((id) => location.search.includes(id), convo.id, { timeout: 10000 });
+			await typeInto(page, "a draft for the saved one");
+			await page.waitForTimeout(400);
+			await page.reload({ waitUntil: "load" });
+			await page.waitForSelector(sel.composer);
+			if (!page.url().includes(convo.id)) fail("the reload did not reopen the same conversation");
+			if ((await page.inputValue(sel.composer)) !== "a draft for the saved one") fail("the saved conversation's draft did not come back");
+			return "drafts came back after a reload, in a new chat and in a saved conversation; one aged past an hour was dropped. Talky has no attachments, so there are none to restore";
 		},
 
 		// ─── 3. A running turn is visible, timed, and stoppable ─────────────
@@ -610,10 +626,14 @@ export default {
 			await page.waitForFunction((list) => /Line 1 of 30/.test(document.querySelector(list)?.innerText ?? ""), sel.list, { timeout: 30000 });
 			await page.locator("body").press("Escape");
 			await page.waitForSelector(sel.stop, { state: "detached", timeout: 5000 }).catch(() => fail("the turn was still running 5s after Esc"));
-			await page.waitForTimeout(2000);
-			const text = await lastText(page);
-			if (/Line 30 of 30/.test(text)) fail("the reply ran to the end after Esc");
-			return `cancelled at "${text.match(/Line \d+ of 30/g)?.at(-1) ?? "the first line"}"`;
+			const reply = () => page.$$eval(`${sel.message}[data-role="assistant"]`, (els) => els.at(-1)?.innerText ?? "");
+			const atStop = await reply();
+			// Uncancelled, the 30 lines take ~7s more to stream; nothing may arrive after Esc.
+			await page.waitForTimeout(8000);
+			const later = await reply();
+			if (later !== atStop) fail(`the reply kept growing after Esc: "${atStop.slice(-40)}" → "${later.slice(-40)}"`);
+			if (/Line 30 of 30/.test(later)) fail("the reply ran to the end after Esc");
+			return `cancelled at "${later.match(/Line \d+ of 30/g)?.at(-1) ?? "the first line"}"; nothing arrived in the 8s after`;
 		},
 
 		"A thinking indicator appears only when it is needed": async ({ page, base }) => {
@@ -793,11 +813,19 @@ export default {
 			const want = ["Today", "Yesterday", "Last 7 days", "Older"];
 			const order = groups.filter((g) => want.includes(g));
 			if (order.join() !== want.join()) fail(`groups are ${groups.join(", ")}`);
+			const typed = Date.now();
 			await page.fill(sel.search, `${tag} yesterday`);
-			await page.waitForTimeout(800);
-			const titles = await page.$$eval(`${sel.row} [data-testid="session-title"]`, (els) => els.map((e) => e.innerText));
-			if (titles.length !== 1 || titles[0] !== `${tag} yesterday`) fail(`searching shows ${JSON.stringify(titles)}`);
-			return `groups ${order.join(" / ")}; search narrowed to one title`;
+			// Results come from the daemon; give them up to 5s and report how long they took.
+			const wanted = `${tag} yesterday`;
+			const titlesNow = () => page.$$eval(`${sel.row} [data-testid="session-title"]`, (els) => els.map((e) => e.innerText));
+			await page
+				.waitForFunction((w) => {
+					const t = [...document.querySelectorAll('[data-testid="session-row"] [data-testid="session-title"]')].map((e) => e.innerText);
+					return t.length === 1 && t[0] === w;
+				}, wanted, { timeout: 5000 })
+				.catch(async () => fail(`5s after typing, searching shows ${JSON.stringify(await titlesNow())}`));
+			const searchMs = Date.now() - typed;
+			return `groups ${order.join(" / ")}; search narrowed to one title in ${searchMs}ms`;
 		},
 
 		// ─── 5. Messages have actions where I need them ─────────────────────
@@ -865,13 +893,10 @@ export default {
 		},
 
 		"Code is highlighted without blocking the first token": async ({ page, base }) => {
-			const shiki = [];
-			page.on("request", (r) => {
-				if (/shiki|streamdown_code|code-[\w-]+\.js|langs?\//i.test(r.url())) shiki.push({ url: r.url(), at: Date.now() });
-			});
 			await openFresh(page, base);
 			await connect(page);
-			const loadedEarly = shiki.length;
+			const scripts = () => page.evaluate(() => performance.getEntriesByType("resource").filter((e) => /\.js(\?|$)/.test(e.name)).map((e) => e.name));
+			const atLoad = await scripts();
 			await send(page, "[[code]]");
 			await page.waitForFunction((list) => /Here is the function/.test(document.querySelector(list)?.innerText ?? ""), sel.list, { timeout: 20000 });
 			const firstRender = await page.$$eval(sel.message, (els) => {
@@ -886,8 +911,10 @@ export default {
 				if (spans.some((s) => /--sdm-c|--shiki-dark|color\s*:/.test(s.getAttribute("style") ?? ""))) return true;
 				return new Set(spans.map((s) => getComputedStyle(s).color)).size > 1;
 			}, sel.list, { timeout: 15000 }).catch(() => fail("the code block was never highlighted"));
+			const lazy = (await scripts()).filter((u) => !atLoad.includes(u));
+			if (!lazy.length) fail("no script was fetched after the page loaded: the highlighter is not lazy");
 			await waitTurnDone(page);
-			return `markdown on the first render; highlighter fetched lazily (${loadedEarly ? "preloaded" : "after load"}), then the block upgraded`;
+			return `markdown on the first render; ${lazy.length} highlighter chunks fetched after page load, then the block upgraded`;
 		},
 
 		// ─── 6. Connection state is truthful ────────────────────────────────
@@ -925,14 +952,19 @@ export default {
 			const lost = states.find((s) => !/IDLE|LISTENING|THINKING|SPEAKING/.test(s));
 			if (lost) fail(`after the new connection opened the state went to "${lost}"`);
 			await send(page, "[[say still here.]]");
-			await page.waitForFunction((list) => document.querySelector(list)?.innerText.includes("still here"), sel.list, { timeout: 20000 });
+			// The reply, not the user's own message (which holds the same words).
+			await page.waitForFunction((m) => [...document.querySelectorAll(`${m}[data-role="assistant"]`)].some((e) => e.innerText.includes("still here")), sel.message, { timeout: 20000 }).catch(() => fail("no reply arrived on the new connection"));
+			await waitTurnDone(page);
 			return "ten seconds after an end-and-restart the call stayed connected and a turn went through";
 		},
 
 		"A backgrounded tab catches up when it returns": async ({ page, base }) => {
 			await openFresh(page, base);
 			await connect(page);
-			await send(page, "[[sleep 2]] [[say finished while you were away.]]");
+			const needle = "finished while you were away";
+			const replied = (p) => p.$$eval(`${sel.message}[data-role="assistant"]`, (els, n) => els.some((e) => e.innerText.includes(n)), needle);
+			await send(page, `[[sleep 3]] [[say ${needle}.]]`);
+			if (await replied(page)) fail("the reply was on screen before the tab was hidden");
 			const cdp = await page.context().newCDPSession(page);
 			await page.evaluate(() => {
 				Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
@@ -940,16 +972,22 @@ export default {
 				document.dispatchEvent(new Event("visibilitychange"));
 			});
 			await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
-			await new Promise((r) => setTimeout(r, 15000));
+			// While frozen: the turn finishes and is saved, then the daemon restarts,
+			// so the call this tab had is gone when it comes back.
+			await new Promise((r) => setTimeout(r, 12000));
+			daemon("stop");
+			daemon("start");
 			await cdp.send("Page.setWebLifecycleState", { state: "active" });
 			await page.evaluate(() => {
 				Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
 				Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
 				document.dispatchEvent(new Event("visibilitychange"));
 			});
-			await page.waitForFunction((list) => document.querySelector(list)?.innerText.includes("finished while you were away"), sel.list, { timeout: 15000 }).catch(() => fail("the finished turn did not show after returning"));
-			await page.waitForFunction(isConnected, sel.voice, { timeout: 20000 }).catch(() => fail("the page did not reconnect after returning"));
-			return "frozen hidden for 15s while the turn finished; on return it was connected and showed the reply";
+			await page.waitForFunction(isConnected, sel.voice, { timeout: 45000 }).catch(() => fail("the page did not reconnect after returning"));
+			await page
+				.waitForFunction((n) => [...document.querySelectorAll('[data-testid="transcript-message"][data-role="assistant"]')].some((e) => e.innerText.includes(n)), needle, { timeout: 15000 })
+				.catch(() => fail("the reply that finished while hidden did not show after returning"));
+			return "frozen and hidden while the reply finished and the daemon restarted; on return it reconnected and showed the reply";
 		},
 
 		"A turn interrupted by a restart resumes": async ({ page, base }) => {
@@ -1075,7 +1113,7 @@ export default {
 						if (!root) continue;
 						const box = root.getBoundingClientRect();
 						const clipped = (el) => {
-							for (let a = el.parentElement; a && a !== root.parentElement; a = a.parentElement) if (/hidden|auto|scroll|clip/.test(getComputedStyle(a).overflowX)) return a.getBoundingClientRect();
+							for (let a = el.parentElement; a && a !== root; a = a.parentElement) if (/hidden|auto|scroll|clip/.test(getComputedStyle(a).overflowX)) return a.getBoundingClientRect();
 							return null;
 						};
 						for (const el of root.querySelectorAll("*")) {
@@ -1155,9 +1193,8 @@ export default {
 			await page.emulateMedia({ reducedMotion: "reduce" });
 			await openSeeded(page, base, seed({ turns: 30 }));
 			await connect(page);
-			await send(page, "[[sleep 2]] [[tool spin 2]] [[lines 4]]");
-			await page.waitForTimeout(1500);
-			const moving = await page.evaluate((list) => {
+			await send(page, "[[sleep 2]] [[tool spin 3]] [[lines 8]]");
+			const sample = () => page.evaluate((list) => {
 				const out = [];
 				for (const el of document.querySelectorAll("*")) {
 					const cs = getComputedStyle(el);
@@ -1167,9 +1204,17 @@ export default {
 				if (getComputedStyle(document.querySelector(list)).scrollBehavior === "smooth") out.push("transcript smooth-scrolls");
 				return out;
 			}, sel.list);
+			// While thinking, while the tool row runs, and while lines stream in.
+			const moving = [];
+			await page.waitForTimeout(1000);
+			moving.push(...(await sample()));
+			await page.locator(`${sel.toolRow}[data-state="running"]`).waitFor({ timeout: 10000 });
+			moving.push(...(await sample()));
+			await page.waitForFunction((l) => /Line 1 of 8/.test(document.querySelector(l)?.innerText ?? ""), sel.list, { timeout: 30000 });
+			moving.push(...(await sample()));
 			await waitTurnDone(page);
-			if (moving.length) fail(`still animating: ${moving.slice(0, 4).join(", ")}`);
-			return "with reduced motion on, nothing animated during a turn";
+			if (moving.length) fail(`still animating: ${[...new Set(moving)].slice(0, 4).join(", ")}`);
+			return "with reduced motion on, nothing animated while thinking, while a tool ran, or while text streamed";
 		},
 
 		"Every icon button has a name": async ({ page, base }) => {
@@ -1233,5 +1278,26 @@ export default {
 			await waitTurnDone(page);
 			return `"${question}" with ${starters.length} starters; one click sent "${text.trim()}"`;
 		},
-	},
+};
+
+// BASIC_SHOTS=<dir>: also save the page as each check finishes, so a pass has
+// evidence too (the runner only screenshots failures). Phone checks run in
+// their own context; their shot is of the desktop page.
+const SHOTS = process.env.BASIC_SHOTS ?? "";
+const slug = (title) => title.replace(/[^\w]+/g, "-").toLowerCase();
+
+export default {
+	checks: Object.fromEntries(
+		Object.entries(checks).map(([title, check]) => [
+			title,
+			typeof check !== "function" || !SHOTS
+				? check
+				: async (ctx) => {
+						const note = await check(ctx);
+						mkdirSync(SHOTS, { recursive: true });
+						await ctx.page.screenshot({ path: join(SHOTS, `${slug(title)}.png`) }).catch(() => {});
+						return note;
+					},
+		]),
+	),
 };

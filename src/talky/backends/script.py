@@ -41,7 +41,7 @@ from pipecat.frames.frames import (
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
-    TextFrame,
+    LLMTextFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
@@ -74,7 +74,9 @@ class ScriptLLMService(StreamingEchoLLMService):
         # Keep the whitespace with each word so newlines (code fences) survive.
         for token in re.findall(r"\S+\s*", text):
             await asyncio.sleep(self._token_delay_s)
-            await self.push_frame(TextFrame(token))
+            # LLMTextFrame, as hermes emits: RTVI reports it as bot-llm-text the
+            # moment it's produced, before TTS has synthesized anything.
+            await self.push_frame(LLMTextFrame(token))
 
     async def _run(self, text: str) -> None:
         steps = DIRECTIVE.findall(text)

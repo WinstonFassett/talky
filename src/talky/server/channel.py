@@ -228,6 +228,9 @@ class VoiceChannel:
         # Active pipeline state (populated by attach(), cleared by detach())
         self._transport: Optional[SmallWebRTCTransport] = None
         self._pipeline_task: Optional[PipelineTask] = None
+        # Set when the daemon itself is stopping: only then is a turn left
+        # mid-way "interrupted by a restart" and resumed on the next start.
+        self._shutting_down = False
         self._runner: Optional[PipelineRunner] = None
         self._runner_task: Optional[asyncio.Task] = None
         self._voice_switcher: Optional[Any] = None  # VoiceProfileSwitcher
@@ -1293,6 +1296,11 @@ class VoiceChannel:
                 # up; tearing down here would kill the new call.
                 logger.info("VoiceChannel: ignoring disconnect from a replaced peer")
                 return
+            if not self._shutting_down and self._convo_session is not None:
+                # The browser left mid-turn while the daemon keeps running: the
+                # turn ends with this call. It wasn't interrupted by a restart,
+                # so the next daemon start must not resume it (WIN-536).
+                self._convo_session.mark_turn_complete()
             await self._teardown_locked(preserve_active_profile=True)
             # Schedule TTL inside the lock so a concurrent attach() that
             # already holds or is waiting on the lock will see the cancel
@@ -1515,6 +1523,15 @@ class VoiceChannel:
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"VoiceChannel: interrupted-turn profile switch failed: {e}")
         # Only claim the turn is resuming once the replay can actually run.
+        # Over the call itself (ordered with the replayed frames; the browser's
+        # SSE stream may still be reconnecting after the restart), and on the
+        # bus for anything else listening.
+        if self._pipeline_task is not None:
+            from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
+
+            await self._pipeline_task.queue_frames(
+                [RTVIServerMessageFrame(data={"type": "turnResumed", "convo_id": replay["convo_id"]})]
+            )
         await event_bus.emit("turnResumed", {"convo_id": replay["convo_id"]})
         try:
             # A replay is a user turn re-run: the user processor skips it (replay=True),
@@ -1691,6 +1708,7 @@ class VoiceChannel:
 
     async def shutdown(self) -> None:
         """Lifespan-shutdown hook. Tears down any active pipeline."""
+        self._shutting_down = True
         await self.detach()
         logger.info("VoiceChannel shutdown complete")
 
