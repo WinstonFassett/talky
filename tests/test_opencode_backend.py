@@ -128,7 +128,7 @@ async def backend(opencode_server, monkeypatch):
         auto_spawn=False,  # already running
         cwd=cwd,
         provider_id="opencode",
-        model_id="claude-haiku-4-5",
+        model_id="big-pickle",
         permissions=[{"permission": "bash", "pattern": "*", "action": "ask"}],
     )
 

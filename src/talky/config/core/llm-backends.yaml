@@ -82,7 +82,7 @@ llm_backends:
       cwd: null
       # Leave provider_id/model_id null to defer to opencode's /config defaults.
       provider_id: "opencode"
-      model_id: "claude-haiku-4-5"
+      model_id: "big-pickle"
       # Per-session permission ruleset. Each entry: {permission, pattern, action}
       # where action ∈ allow|deny|ask. Empty list = no asks.
       permissions:

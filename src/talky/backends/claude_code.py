@@ -296,6 +296,8 @@ class ClaudeCodeLLMService(HistoryPreambleMixin, LLMService):
         self._reader_task: Optional[asyncio.Task] = None
 
     def _build_options(self) -> "ClaudeAgentOptions":
+        if not _SDK_AVAILABLE:
+            raise RuntimeError("claude-agent-sdk not installed (extra: claude-code)")
         opts = ClaudeAgentOptions(
             permission_mode=self._permission_mode,
             max_turns=self._max_turns,
