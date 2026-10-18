@@ -84,7 +84,6 @@ from pipecat.frames.frames import (
     OutputAudioRawFrame,
     UserStartedSpeakingFrame,
 )
-from pipecat.pipeline.llm_switcher import LLMSwitcher
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyManual
@@ -109,6 +108,7 @@ from talky.convos.transcript_sink import (
 )
 from talky.server.agent_ext import AgentExtensionLLMService
 from talky.server.event_bus import event_bus
+from talky.server.lazy_switcher import LazyLLMSwitcher
 from talky.server.mcp_driver import MCPDriverLLMService
 from talky.server.turn import TalkyUserTurnDetector, UserTurnTextFrame
 
@@ -239,6 +239,12 @@ class VoiceChannel:
         # LLM switcher + profile → service map (populated by attach()).
         self._llm_switcher: Optional[Any] = None  # LLMSwitcher
         self._llm_services: dict[str, Any] = {}  # profile name → LLMService
+        # Backends are started on first switch (WIN-556); the lock keeps two
+        # concurrent switches from starting the same one twice.
+        self._backend_start_lock = asyncio.Lock()
+        # backend → live resume plan, for a resume_convo whose backend wasn't
+        # started yet; applied when _ensure_backend starts it.
+        self._deferred_resumes: dict[str, dict] = {}
         self._active_profile: Optional[str] = None
 
         # Speech buffer — written by MCPDriverLLMService, drained by listen()
@@ -722,10 +728,10 @@ class VoiceChannel:
         _pm = _gpm()
         _tp = _pm.get_talky_profile(profile_name)
         service_key = (_tp.llm_backend if _tp and _tp.llm_backend else None) or profile_name
-        service = self._llm_services.get(service_key)
+        service = await self._ensure_backend(service_key)
         if service is None:
             raise ValueError(
-                f"profile {profile_name!r} valid but not in active switcher"
+                f"profile {profile_name!r} valid but its backend {service_key!r} could not be started"
             )
 
         from pipecat.frames.frames import ManuallySwitchServiceFrame
@@ -755,6 +761,64 @@ class VoiceChannel:
                     logger.info(f"VoiceChannel: announced {announcement!r}")
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"VoiceChannel: announcement failed for {profile_name!r}: {e}")
+
+    def _build_backend(self, pm: Any, backend_name: str, resume: Optional[str] = None) -> Any:
+        """Instantiate a Ready backend, or return None (and mark it Blocked)."""
+        from talky.backends import BackendStatus
+
+        entry = self._backend_status.get(backend_name)
+        status_str = entry.get("status") if entry else None
+        if status_str != BackendStatus.READY.value:
+            logger.info(
+                f"VoiceChannel: skipping backend {backend_name!r} "
+                f"({status_str}): {entry.get('reason') if entry else 'no status'}"
+            )
+            return None
+        try:
+            return _instantiate_llm_backend(pm, backend_name, resume=resume)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"VoiceChannel: skipping backend {backend_name!r}: {e}")
+            self._backend_status[backend_name] = {
+                "status": BackendStatus.BLOCKED.value,
+                "reason": f"construction failed: {e}",
+            }
+            return None
+
+    async def _ensure_backend(self, backend_name: str) -> Any:
+        """Return the live pipeline's service for ``backend_name``, starting it if needed.
+
+        Only the active profile's backend is built with the pipeline; any
+        other is built and added to the running switcher here, the first time
+        it's needed, and then stays for the rest of the call (WIN-556).
+        Returns None if the backend isn't configured, isn't Ready, or no
+        pipeline is live.
+        """
+        svc = self._llm_services.get(backend_name)
+        if svc is not None:
+            return svc
+        async with self._backend_start_lock:
+            svc = self._llm_services.get(backend_name)
+            if svc is not None:
+                return svc
+            if not self.is_live() or not isinstance(self._llm_switcher, LazyLLMSwitcher):
+                return None
+            from talky.shared.profile_manager import get_profile_manager
+
+            pm = get_profile_manager()
+            if pm.get_llm_backend(backend_name) is None:
+                return None
+            self._refresh_backend_status(pm)
+            plan = self._deferred_resumes.pop(backend_name, None)
+            native = plan.get("native_session_id") if plan else None
+            svc = self._build_backend(pm, backend_name, resume=native)
+            if svc is None:
+                return None
+            logger.info(f"VoiceChannel: starting backend {backend_name!r} on first use")
+            await self._llm_switcher.add_llm(svc)
+            self._llm_services[backend_name] = svc
+            if plan is not None and not native:
+                self._apply_replay(svc, {**plan, "replay": True})
+            return svc
 
     async def _emit_profile_changed(self, profile_name: str) -> None:
         """Push a profileChanged event to the SSE bus."""
@@ -1259,6 +1323,7 @@ class VoiceChannel:
         # Per-pipeline LLM service instances can't be reused across rebuilds
         # (pipecat services are pipeline-bound), so clear them regardless.
         self._llm_services = {}
+        self._deferred_resumes = {}
 
         if not preserve_active_profile:
             self._active_profile = None
@@ -1421,7 +1486,7 @@ class VoiceChannel:
     async def _resume_interrupted_turn(self, replay: dict) -> None:
         """Tell the client the turn is being resumed, then re-run it on its backend."""
         logger.info(f"VoiceChannel: resuming interrupted turn {replay['convo_id']} on {replay['backend']}")
-        svc = self._llm_services.get(replay["backend"])
+        svc = await self._ensure_backend(replay["backend"])
         if svc is None:
             logger.warning(f"VoiceChannel: {replay['backend']} not loaded — interrupted turn not replayed")
             return
@@ -1452,7 +1517,13 @@ class VoiceChannel:
         """
         plan = self._resume_plan(convo_id, profile)
         if self.is_live() and self._convo_session is not None:
-            self._apply_replay(self._llm_services.get(plan["backend"]), {**plan, "replay": True})
+            live_svc = self._llm_services.get(plan["backend"])
+            if live_svc is None and plan["backend"] != self.MCP_DRIVER_PROFILE:
+                # Not started yet (WIN-556): the switch the caller makes next
+                # starts it, natively resumed or with this replay applied.
+                self._deferred_resumes[plan["backend"]] = plan
+            else:
+                self._apply_replay(live_svc, {**plan, "replay": True})
             self._convo_session.bind(plan["convo_id"])
             # A daemon restart mid-turn: once this convo is bound again, replay the turn.
             self._maybe_resume_interrupted_turn(plan["convo_id"])
@@ -1665,13 +1736,12 @@ class VoiceChannel:
         stt = create_stt_service_from_config(vp.stt_provider, model=vp.stt_model)
 
         # LLMSwitcher slot (= Backend Switcher in our vocabulary, see
-        # UBIQUITOUS_LANGUAGE.md): MCPDriver first (default active) then
-        # every Backend whose Backend Status is Ready. Non-Ready backends
-        # are skipped here. Backend Status was populated in warmup() so the
-        # picker had it before this pipeline build; we refresh now in case
-        # state changed since warmup. See ticket 8fbe.
-        from talky.backends import BackendStatus
-
+        # UBIQUITOUS_LANGUAGE.md): MCPDriver first (default active) then only
+        # the Backend this call needs right now — the active profile's (plus a
+        # pending resume's). Every other Backend is built and started the
+        # first time a switch targets it (``_ensure_backend``, WIN-556), so a
+        # call doesn't spawn every configured agent process. Non-Ready
+        # backends are skipped. See ticket 8fbe.
         self._refresh_backend_status(pm)
 
         mcp_driver = MCPDriverLLMService(user_speech_queue=self._user_speech_queue)
@@ -1681,34 +1751,29 @@ class VoiceChannel:
         }
 
         pending = self._take_pending_resume()
+        self._deferred_resumes = {}
+
+        build_profile = self._active_profile or self.MCP_DRIVER_PROFILE
+        _tp_build = pm.get_talky_profile(build_profile) if build_profile else None
+        build_backend = (_tp_build.llm_backend if _tp_build and _tp_build.llm_backend else None) or build_profile
+        wanted = {build_backend}
+        if pending is not None:
+            wanted.add(pending["backend"])
 
         for backend_name in pm.list_llm_backends().keys():
-            entry = self._backend_status.get(backend_name)
-            status_str = entry.get("status") if entry else None
-            if status_str != BackendStatus.READY.value:
-                logger.info(
-                    f"VoiceChannel: skipping backend {backend_name!r} "
-                    f"({status_str}): {entry.get('reason') if entry else 'no status'}"
-                )
+            if backend_name not in wanted:
                 continue
-
-            try:
-                native = pending.get("native_session_id") if pending and pending["backend"] == backend_name else None
-                svc = _instantiate_llm_backend(pm, backend_name, resume=native)
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"VoiceChannel: skipping backend {backend_name!r}: {e}")
-                self._backend_status[backend_name] = {
-                    "status": BackendStatus.BLOCKED.value,
-                    "reason": f"construction failed: {e}",
-                }
+            native = pending.get("native_session_id") if pending and pending["backend"] == backend_name else None
+            svc = self._build_backend(pm, backend_name, resume=native)
+            if svc is None:
                 continue
             llm_services.append(svc)
             profile_map[backend_name] = svc
 
-        llm_switcher = LLMSwitcher(llms=llm_services, strategy_type=ServiceSwitcherStrategyManual)
+        llm_switcher = LazyLLMSwitcher(llms=llm_services, strategy_type=ServiceSwitcherStrategyManual)
         logger.info(
             f"VoiceChannel: LLMSwitcher ready — profiles={list(profile_map.keys())}, "
-            f"active={self.MCP_DRIVER_PROFILE}"
+            f"active={self.MCP_DRIVER_PROFILE} (other backends start on first switch)"
         )
 
         # Pong responder — echo a JSON pong on the data channel whenever
@@ -1771,9 +1836,6 @@ class VoiceChannel:
             ),
         )
 
-        build_profile = self._active_profile or self.MCP_DRIVER_PROFILE
-        _tp_build = pm.get_talky_profile(build_profile) if build_profile else None
-        build_backend = (_tp_build.llm_backend if _tp_build and _tp_build.llm_backend else None) or build_profile
         if pending is not None:
             self._apply_replay(profile_map.get(pending["backend"]), pending)
         session = ConvoSession(
