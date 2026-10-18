@@ -98,6 +98,7 @@ class _HermesThread:
         self._loop = loop
         self._frame_queue = frame_queue
         self._prompt_queue: queue.Queue = queue.Queue()
+        self._resume_session_id: Optional[str] = None
         self._thread: Optional[threading.Thread] = None
         self._turn_active = False
 
@@ -107,6 +108,20 @@ class _HermesThread:
         self._perm_lock = threading.Lock()
         self._perm_event: Optional[threading.Event] = None
         self._perm_allow = False
+
+    def _load_resumed_history(self) -> list:
+        """Prior messages for a resumed session. AIAgent(session_id=...) only reuses
+        the id; the model sees history solely via run_conversation(conversation_history=)."""
+        if not self._resume_session_id:
+            return []
+        try:
+            from hermes_state import SessionDB  # type: ignore[import]
+            msgs = SessionDB().get_messages_as_conversation(self._resume_session_id)
+            logger.info(f"Hermes: resumed {len(msgs)} messages from session {self._resume_session_id}")
+            return msgs
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Hermes: could not load history for {self._resume_session_id}: {e}")
+            return []
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True, name="hermes-agent")
@@ -199,7 +214,7 @@ class _HermesThread:
         except Exception as e:
             logger.warning(f"Hermes: could not register approval callback: {e}")
 
-        history = []
+        history = self._load_resumed_history()
         while True:
             prompt = self._prompt_queue.get()
             if prompt is None:
@@ -289,10 +304,28 @@ class HermesLLMService(HistoryPreambleMixin, LLMService):
         )
         if self._model or default_model:
             kwargs["model"] = self._model or default_model
-        if self._provider or default_provider:
-            kwargs["provider"] = self._provider or default_provider
+        provider = self._provider or default_provider
+        if provider:
+            kwargs["provider"] = provider
+            # AIAgent(provider=...) alone falls back to openai chat_completions at
+            # the bare base_url; custom providers (e.g. custom:claude-max ->
+            # localhost:3456, anthropic_messages) need the resolved runtime.
+            try:
+                from hermes_cli.runtime_provider import resolve_runtime_provider  # type: ignore[import]
+                rt = resolve_runtime_provider(requested=provider)
+                for k in ("base_url", "api_key", "api_mode"):
+                    if rt.get(k):
+                        kwargs[k] = rt[k]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("hermes runtime provider resolve failed for %s: %s", provider, exc)
         if self._resume:
             kwargs["session_id"] = self._resume
+        # Without a session_db AIAgent never persists turns, so there is nothing to resume.
+        try:
+            from hermes_state_registry import acquire  # type: ignore[import]
+            kwargs["session_db"] = acquire()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("hermes session db unavailable; resume will not work: %s", exc)
 
         agent = AIAgent(**kwargs)
 
@@ -368,6 +401,7 @@ class HermesLLMService(HistoryPreambleMixin, LLMService):
         self._loop = asyncio.get_event_loop()
         agent = self._build_agent()
         self._bridge = _HermesThread(agent, self._loop, self._frame_queue)
+        self._bridge._resume_session_id = self._resume  # noqa: SLF001
         self._bridge.start()
         self._drain_task = asyncio.create_task(self._drain_frames())
 

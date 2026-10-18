@@ -128,6 +128,7 @@ class OpencodeLLMService(HistoryPreambleMixin, LLMService):
         self._client: Optional[httpx.AsyncClient] = None
         self._session_id: Optional[str] = None
         self._event_task: Optional[asyncio.Task] = None
+        self._part_types: dict[str, str] = {}
         self._spawned_proc: Optional[subprocess.Popen] = None
 
         # Permission state — guarded by _perm_lock.
@@ -296,6 +297,8 @@ class OpencodeLLMService(HistoryPreambleMixin, LLMService):
 
         if t == "message.part.updated":
             await self._on_part_updated(props)
+        elif t == "message.part.delta":
+            await self._on_part_delta(props)
         elif t == "session.idle":
             if self._turn_started:
                 self._turn_started = False
@@ -315,9 +318,29 @@ class OpencodeLLMService(HistoryPreambleMixin, LLMService):
             # Already cleared in resolve_permission; no-op.
             pass
 
+    async def _on_part_delta(self, props: dict) -> None:
+        """opencode >= 1.18 streams text as ``message.part.delta`` (partID + field + delta);
+        ``message.part.updated`` no longer carries ``delta``. Part type comes from the
+        part.updated that announced the part."""
+        delta = props.get("delta")
+        if not delta or props.get("field") != "text":
+            return
+        ptype = self._part_types.get(props.get("partID"))
+        if ptype not in ("text", "reasoning"):
+            return  # unknown or user-message part: don't echo it
+        if not self._turn_started:
+            self._turn_started = True
+            await self.push_frame(LLMFullResponseStartFrame())
+        if ptype == "text":
+            await self.push_frame(TextFrame(delta))
+        else:
+            await self.push_frame(AggregatedTextFrame(text=delta, aggregated_by="thinking"))
+
     async def _on_part_updated(self, props: dict) -> None:
         part = props.get("part", {}) or {}
         ptype = part.get("type")
+        if part.get("id") and ptype:
+            self._part_types[part["id"]] = ptype
         delta = props.get("delta")
         # Start a turn lazily on the first emission of the assistant response.
         if not self._turn_started and ptype in ("text", "reasoning", "tool"):

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 import urllib.request
 import wave
@@ -63,7 +64,7 @@ def _transcript(page) -> list[str]:  # noqa: ANN001
     )
 
 
-def _wait_settled(page, before: int, timeout: float, quiet: float = 4.0) -> list[str]:  # noqa: ANN001
+def _wait_settled(page, before: int, timeout: float, quiet: float) -> list[str]:  # noqa: ANN001
     """Wait until a reply appeared after the typed message and stopped growing."""
     deadline = time.time() + timeout
     last, last_change = _transcript(page), time.time()
@@ -83,6 +84,7 @@ def main() -> int:
     ap.add_argument("--expect", action="append", default=[], help="substring the last reply must contain")
     ap.add_argument("--profile", help="switch LLM profile first (default: leave as is)")
     ap.add_argument("--voice", default=os.environ.get("TALKY_VOICE_PROFILE", "local-test"))
+    ap.add_argument("--quiet", type=float, default=4.0, help="seconds of no transcript change that count as settled (raise for slow cold backends)")
     ap.add_argument("--timeout", type=float, default=90.0, help="seconds to wait per reply")
     args = ap.parse_args()
 
@@ -102,7 +104,7 @@ def main() -> int:
         page = browser.new_context(permissions=["microphone"]).new_page()
         page.on("pageerror", lambda e: log("pageerror:", str(e)))
         page.goto(CLIENT_URL, wait_until="domcontentloaded")
-        page.get_by_role("button", name="Start call").click()
+        page.get_by_role("button", name=re.compile("^(Start call|Converse)$")).first.click()  # label is "Converse" once a convo exists
 
         box = page.get_by_placeholder("Type", exact=False)
         deadline = time.time() + 30
@@ -120,7 +122,7 @@ def main() -> int:
             box.fill(msg)
             box.press("Enter")
             log("typed:", msg)
-            transcript = _wait_settled(page, before, args.timeout)
+            transcript = _wait_settled(page, before, args.timeout, args.quiet)
 
         browser.close()  # disconnect → pipeline teardown → assistant sink flush
 
