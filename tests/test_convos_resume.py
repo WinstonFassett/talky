@@ -497,3 +497,17 @@ def test_corrupt_record_does_not_block_the_next_build(channel, tmp_path):
     (channel._convo_store.root / rec.id / "convo.json").write_text("{not json")
     channel._pending_resume = {"convo_id": rec.id, "follow_active": True, "expires_at": 1e18}
     assert channel._take_pending_resume() is None
+
+
+def test_mcp_mode_does_not_take_over_the_session_profile(tmp_path):
+    store = ConvoStore(root=tmp_path)
+    session = ConvoSession(store, backend="claude", profile="claude")
+    session.append("user", "hello")
+    rec_id = session.record.id
+
+    session.set_active(backend="__mcp__", profile="__mcp__", native_id_reader=None)
+    session.append("user", "typed while in mcp mode")
+
+    assert (session.backend, session.profile) == ("claude", "claude")
+    rec = store.get(rec_id)
+    assert (rec.backend, rec.profile) == ("claude", "claude")
