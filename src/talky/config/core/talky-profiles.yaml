@@ -25,7 +25,7 @@ talky_profiles:
 
   # Claude — background (Agent SDK) and foreground (CLI) variants are defined
   # in the defaults template, following the standard `<agent>` / `<agent>-tui`
-  # naming convention. The Agent SDK (claude-code-sdk) wraps the `claude` CLI
+  # naming convention. The Agent SDK (claude-agent-sdk) wraps the `claude` CLI
   # and uses the Claude Code subscription OAuth login by default, so both
   # variants bill against the Pro/Max/Team subscription — no separate API key
   # charges.

@@ -311,12 +311,25 @@ def test_claude_never_continues_the_cwds_latest_session():
     assert opts.continue_conversation is False and opts.resume == "sdk-1"
 
 
-def test_claude_sdk_skips_unknown_message_types_instead_of_ending_stream():
-    import claude_code_sdk._internal.client as sdk_client
+def test_claude_sdk_handles_rate_limit_and_unknown_messages_natively():
+    """claude-agent-sdk needs no monkeypatch (WIN-547): rate_limit_event is a
+    first-class message and unknown types are skipped, so the stream survives.
+    """
+    from claude_agent_sdk import RateLimitEvent
+    from claude_agent_sdk._internal.message_parser import parse_message
 
-    import talky.backends.claude_code  # noqa: F401  (applies the patch)
+    # The CLI's rate_limit_event — the type that used to kill claude-code-sdk
+    # 0.0.25 streams mid-reply — parses to a typed message, not an exception.
+    evt = parse_message({
+        "type": "rate_limit_event",
+        "rate_limit_info": {"status": "allowed_warning"},
+        "uuid": "u1",
+        "session_id": "s1",
+    })
+    assert isinstance(evt, RateLimitEvent)
 
-    assert sdk_client.parse_message({"type": "rate_limit_event"}) is None
+    # Unknown message types return None (skipped) instead of ending the stream.
+    assert parse_message({"type": "future_event_talky_does_not_know"}) is None
 
 
 # --- review fixes (WIN-534) ----------------------------------------------------

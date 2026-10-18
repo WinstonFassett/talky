@@ -40,7 +40,7 @@ talky_profiles:
       extension_arg: "-e"
       extension: "{pkg_dir}/_extensions_pi_voice/extension.ts"
 
-  # Claude — background via Agent SDK (claude-code-sdk). The SDK wraps the
+  # Claude — background via Agent SDK (claude-agent-sdk). The SDK wraps the
   # `claude` CLI and uses the Claude Code subscription OAuth login by default,
   # so it bills against your Pro/Max/Team subscription — no separate API key
   # charges. Interruptible, no terminal UI; browser drives the conversation.
