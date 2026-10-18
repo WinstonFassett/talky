@@ -52,6 +52,9 @@ class ConvoRecord:
     native_session_id: Optional[str] = None  # backend's own session id, when it has one
     pinned: bool = False
     archived: bool = False
+    # A user turn was received and its reply never completed (daemon died
+    # mid-turn). The daemon resumes this turn after a restart (WIN-536).
+    in_progress: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -68,6 +71,7 @@ class ConvoRecord:
             native_session_id=d.get("native_session_id") or None,
             pinned=bool(d.get("pinned", False)),
             archived=bool(d.get("archived", False)),
+            in_progress=bool(d.get("in_progress", False)),
         )
 
 
@@ -146,6 +150,24 @@ class ConvoStore:
         rec.native_session_id = native_session_id
         rec.last_active_at = time.time()
         self._write_meta(rec)
+
+    def set_in_progress(self, convo_id: str, value: bool) -> None:
+        """Mark that the convo's last turn is (not) awaiting its reply (WIN-536).
+
+        Set when a user turn is received, cleared when its reply completes.
+        Survives a daemon crash so the interrupted turn can be resumed.
+        """
+        rec = self.get(convo_id)
+        if rec is None:
+            return
+        if rec.in_progress == value:
+            return
+        rec.in_progress = value
+        self._write_meta(rec)
+
+    def find_interrupted(self) -> list[ConvoRecord]:
+        """Newest-first convos whose last turn never completed (daemon died mid-turn)."""
+        return [rec for rec in self.list() if rec.in_progress]
 
     def set_title(self, convo_id: str, title: str) -> None:
         rec = self.get(convo_id)

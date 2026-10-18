@@ -93,6 +93,10 @@ class ConvoSession:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"ConvoSession: failed to persist {role} turn: {e}")
             return
+        if role == "user":
+            # A reply is owed; clear the marker when it completes, or on the
+            # next daemon start it is treated as interrupted and resumed (WIN-536).
+            self._store.set_in_progress(self.record.id, True)
         self.status = "working" if role == "user" else "idle"
         self._notify("created" if created else "turn")
         if role == "assistant":
@@ -109,6 +113,11 @@ class ConvoSession:
         """The backend errored mid-turn; the list shows the row as failed until the next turn."""
         self.status = "failed"
         self._notify("status")
+
+    def mark_turn_complete(self) -> None:
+        """The reply finished (or was cancelled): no turn is owed anymore."""
+        if self.record is not None:
+            self._store.set_in_progress(self.record.id, False)
 
     def _notify(self, reason: str) -> None:
         cid = self.convo_id

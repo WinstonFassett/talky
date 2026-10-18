@@ -7,6 +7,10 @@
 // live voice-ui-kit messages after `liveMark` — the live messages that were
 // already on screen before the session was opened belong to another session.
 //
+// The open session is in the address (`?session=<id>`, WIN-536), so a reload
+// or a shared link opens it, and a loading state covers the gap until its
+// turns arrive — the empty state never shows for a session that has messages.
+//
 // Opening a row binds it on the daemon right away (POST /api/convos/resume +
 // a profile switch if needed). No LLM call happens; the next typed or spoken
 // turn continues it. That keeps the daemon's "current" convo equal to what's on
@@ -28,6 +32,7 @@ import { usePipecatClientTransportState, useRTVIClientEvent } from '@pipecat-ai/
 import { RTVIEvent } from '@pipecat-ai/client-js';
 
 import { adaptMessages } from '../messages/adapter';
+import { useDaemonEvent } from '../lib/daemonEvents';
 import type { TalkyMessage } from '../messages/types';
 import {
   convosApi,
@@ -48,6 +53,25 @@ const AGGREGATION_METADATA: Record<string, AggregationMetadata> = {
 
 const PAGE = 100;
 const OPEN_KEY = 'talky.openConvo';
+const URL_PARAM = 'session';
+
+function sessionFromUrl(): string | null {
+  try {
+    return new URLSearchParams(window.location.search).get(URL_PARAM);
+  } catch {
+    return null;
+  }
+}
+
+function writeUrl(id: string | null) {
+  try {
+    const url = new URL(window.location.href);
+    if ((url.searchParams.get(URL_PARAM) ?? null) === id) return;
+    if (id) url.searchParams.set(URL_PARAM, id);
+    else url.searchParams.delete(URL_PARAM);
+    window.history.replaceState(window.history.state, '', url);
+  } catch { /* no history API */ }
+}
 
 type SessionsValue = {
   rows: ConvoRow[];
@@ -60,6 +84,10 @@ type SessionsValue = {
   profiles: ProfileInfo[];
   /** history + live messages, in order. */
   messages: TalkyMessage[];
+  /** The first load (which session is open) has finished. */
+  ready: boolean;
+  /** The open session's turns are still loading. */
+  loading: boolean;
   hasOlder: boolean;
   loadOlder: () => Promise<void>;
   open: (id: string, profile?: string) => Promise<void>;
@@ -103,6 +131,8 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const [historyStart, setHistoryStart] = useState(0);
   const [liveMark, setLiveMark] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
   const activeProfileRef = useRef<string>('');
   const loadSeq = useRef(0);
 
@@ -113,6 +143,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       if (id) localStorage.setItem(OPEN_KEY, id);
       else localStorage.removeItem(OPEN_KEY);
     } catch { /* private mode */ }
+    writeUrl(id);
   }, []);
 
   // ── list ──────────────────────────────────────────────────────────────
@@ -149,10 +180,14 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   // ── history ───────────────────────────────────────────────────────────
   const loadHistory = useCallback(async (id: string) => {
     const seq = ++loadSeq.current;
-    const page = await convosApi.get(id, { limit: PAGE });
-    if (seq !== loadSeq.current || openIdRef.current !== id) return;
-    setHistory(page.turns.map((t) => turnToMessage(id, t)));
-    setHistoryStart(page.start);
+    try {
+      const page = await convosApi.get(id, { limit: PAGE });
+      if (seq !== loadSeq.current || openIdRef.current !== id) return;
+      setHistory(page.turns.map((t) => turnToMessage(id, t)));
+      setHistoryStart(page.start);
+    } finally {
+      if (seq === loadSeq.current) setLoadingId((l) => (l === id ? null : l));
+    }
   }, []);
 
   const clearView = useCallback(() => {
@@ -186,6 +221,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       setLiveMark(liveLenRef.current);
       setHistory([]);
       setHistoryStart(0);
+      setLoadingId(id);
       const loading = loadHistory(id).catch((e) => setError(`Couldn't load session: ${e.message ?? e}`));
       if (opts.bind) await bind(id, opts.profile);
       await loading;
@@ -260,8 +296,32 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           activeProfileRef.current = p.profiles.find((x) => x.active)?.name ?? '';
         })
         .catch(() => {});
+      const fromUrl = sessionFromUrl();
+      // An address names the session: show it while the list loads.
+      if (fromUrl) {
+        openIdRef.current = fromUrl;
+        setOpenIdState(fromUrl);
+        setLoadingId(fromUrl);
+        setReady(true);
+      }
       const out = await refreshList();
-      if (cancelled || !out) return;
+      if (cancelled) return;
+      if (!out) {
+        setReady(true);
+        setLoadingId(null);
+        return;
+      }
+      if (fromUrl) {
+        if (out.convos.some((c) => c.id === fromUrl) || out.current?.id === fromUrl) {
+          await show(fromUrl, { bind: out.current?.id !== fromUrl });
+        } else {
+          setError("That session doesn't exist on this machine.");
+          clearView();
+          setLoadingId(null);
+        }
+        return;
+      }
+      setReady(true);
       if (out.current) {
         await show(out.current.id, { bind: false });
         return;
@@ -279,61 +339,57 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [refreshList, show]);
+  }, [refreshList, show, clearView]);
 
   // ── live updates ──────────────────────────────────────────────────────
+  useDaemonEvent('profileChanged', (d: { type?: string; profile?: string }) => {
+    if (d?.type === 'llm' && d.profile) {
+      activeProfileRef.current = d.profile;
+      setProfiles((ps) => ps.map((p) => ({ ...p, active: p.name === d.profile })));
+    }
+  });
+  useDaemonEvent('init', (d: { profiles?: ProfileInfo[] }) => {
+    if (Array.isArray(d?.profiles)) {
+      setProfiles(d.profiles);
+      activeProfileRef.current = d.profiles.find((p: ProfileInfo) => p.active)?.name ?? '';
+    }
+  });
+  useDaemonEvent('convoChanged', (d: ConvoChangedEvent) => {
+    setCurrent((prev) => {
+      if (!d.current) return null;
+      const status = d.id === d.current ? d.status : prev?.id === d.current ? prev.status : 'idle';
+      return { id: d.current, status, live: prev?.live ?? false };
+    });
+    const openNow = openIdRef.current;
+    if (d.reason === 'deleted' && d.id === openNow) {
+      clearView();
+    } else if (d.current && d.current !== openNow) {
+      if (d.reason === 'created' && !openNow) {
+        // A fresh call just got its record: the live messages are its turns —
+        // unless this tab isn't in the call, then read them from disk.
+        setOpenId(d.current);
+        if (!inCallRef.current) void loadHistory(d.current).catch(() => {});
+      } else {
+        // Someone else (the CLI, another tab) switched the daemon's session.
+        void show(d.current, { bind: false });
+      }
+    } else if (!d.current && d.reason === 'current' && openNow) {
+      clearView();
+    }
+    scheduleRefresh(d.reason === 'turn' || d.reason === 'status' ? 400 : 0);
+  });
+
+  // Back from a hidden tab and not in a call: catch up on turns saved meanwhile.
   useEffect(() => {
-    const es = new EventSource('/api/events');
-    es.addEventListener('profileChanged', (e: MessageEvent) => {
-      try {
-        const d = JSON.parse(e.data);
-        if (d.type === 'llm' && d.profile) {
-          activeProfileRef.current = d.profile;
-          setProfiles((ps) => ps.map((p) => ({ ...p, active: p.name === d.profile })));
-        }
-      } catch { /* ignore */ }
-    });
-    es.addEventListener('init', (e: MessageEvent) => {
-      try {
-        const d = JSON.parse(e.data);
-        if (Array.isArray(d.profiles)) {
-          setProfiles(d.profiles);
-          activeProfileRef.current = d.profiles.find((p: ProfileInfo) => p.active)?.name ?? '';
-        }
-      } catch { /* ignore */ }
-    });
-    es.addEventListener('convoChanged', (e: MessageEvent) => {
-      let d: ConvoChangedEvent;
-      try {
-        d = JSON.parse(e.data);
-      } catch {
-        return;
-      }
-      setCurrent((prev) => {
-        if (!d.current) return null;
-        const status = d.id === d.current ? d.status : prev?.id === d.current ? prev.status : 'idle';
-        return { id: d.current, status, live: prev?.live ?? false };
-      });
-      const openNow = openIdRef.current;
-      if (d.reason === 'deleted' && d.id === openNow) {
-        clearView();
-      } else if (d.current && d.current !== openNow) {
-        if (d.reason === 'created' && !openNow) {
-          // A fresh call just got its record: the live messages are its turns —
-          // unless this tab isn't in the call, then read them from disk.
-          setOpenId(d.current);
-          if (!inCallRef.current) void loadHistory(d.current).catch(() => {});
-        } else {
-          // Someone else (the CLI, another tab) switched the daemon's session.
-          void show(d.current, { bind: false });
-        }
-      } else if (!d.current && d.reason === 'current' && openNow) {
-        clearView();
-      }
-      scheduleRefresh(d.reason === 'turn' || d.reason === 'status' ? 400 : 0);
-    });
-    return () => es.close();
-  }, [clearView, loadHistory, scheduleRefresh, setOpenId, show]);
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      void refreshList();
+      const id = openIdRef.current;
+      if (id && !inCallRef.current) void loadHistory(id).catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [loadHistory, refreshList]);
 
   // A (re)connect clears voice-ui-kit's store, so the previous call's turns
   // vanish from the live list; re-read them from disk.
@@ -374,6 +430,8 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     openId,
     profiles,
     messages,
+    ready,
+    loading: !ready || (loadingId !== null && loadingId === openId),
     hasOlder: historyStart > 0,
     loadOlder,
     open,

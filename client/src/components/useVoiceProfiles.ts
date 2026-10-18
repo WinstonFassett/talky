@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 
+import { useDaemonEvent } from '../lib/daemonEvents';
+
 export interface VoiceProviderStatus {
   status: 'ready' | 'installable' | 'misconfigured' | 'blocked';
   reason: string;
@@ -30,54 +32,35 @@ export function useVoiceProfiles() {
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState('');
 
+  const applyVoices = (data: VoiceProfile[] | undefined) => {
+    if (!Array.isArray(data)) return;
+    setVoices(data);
+    const active = data.find((v) => v.active);
+    if (active) setActiveVoice(active.name);
+  };
+
   useEffect(() => {
     let mounted = true;
-    let eventSource: EventSource | null = null;
-
-    const applyVoices = (data: VoiceProfile[]) => {
-      setVoices(data);
-      const active = data.find((v) => v.active);
-      if (active) setActiveVoice(active.name);
-    };
-
     fetch('/api/voices')
       .then((r) => r.json())
       .then((data) => mounted && applyVoices(data.voices))
       .catch(() => mounted && setError('Cannot reach daemon'));
-
-    eventSource = new EventSource('/api/events');
-    eventSource.addEventListener('init', (e: MessageEvent) => {
-      if (!mounted) return;
-      try {
-        const data = JSON.parse(e.data);
-        if (data.voices) applyVoices(data.voices);
-        setError('');
-      } catch {
-        setError('Invalid server response');
-      }
-    });
-    eventSource.addEventListener('peerConnected', (e: MessageEvent) => {
-      if (!mounted) return;
-      try {
-        const data = JSON.parse(e.data);
-        if (data.voices) applyVoices(data.voices);
-      } catch { /* ignore */ }
-    });
-    eventSource.addEventListener('voiceChanged', (e: MessageEvent) => {
-      if (!mounted) return;
-      try {
-        const data = JSON.parse(e.data);
-        setActiveVoice(data.profile);
-        setVoices((prev) => prev.map((v) => ({ ...v, active: v.name === data.profile })));
-      } catch { /* ignore */ }
-    });
-    eventSource.onerror = () => mounted && setError('Connection lost - reconnecting...');
-
     return () => {
       mounted = false;
-      eventSource?.close();
     };
   }, []);
+
+  useDaemonEvent('init', (data: { voices?: VoiceProfile[] }) => {
+    applyVoices(data?.voices);
+    setError('');
+  });
+  useDaemonEvent('peerConnected', (data: { voices?: VoiceProfile[] }) => applyVoices(data?.voices));
+  useDaemonEvent('voiceChanged', (data: { profile?: string }) => {
+    if (!data?.profile) return;
+    setActiveVoice(data.profile);
+    setVoices((prev) => prev.map((v) => ({ ...v, active: v.name === data.profile })));
+  });
+  useDaemonEvent('error', () => setError('Connection lost - reconnecting...'));
 
   const switchVoice = async (next: string) => {
     if (!next || next === activeVoice || switching) return;

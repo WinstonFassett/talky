@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CheckIcon, ChevronDownIcon } from 'lucide-react';
+import { useDaemonEvent } from '../lib/daemonEvents';
 
 import {
   Combobox,
@@ -35,65 +36,40 @@ export const LLMProfileSelect = ({
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
 
+  const applyProfiles = (data: ProfilesResponse) => {
+    if (!Array.isArray(data?.profiles)) return;
+    setProfiles(data.profiles);
+    const active = data.profiles.find((p) => p.active);
+    if (active) setActiveProfile(active.name);
+  };
+
   useEffect(() => {
     let mounted = true;
-    let eventSource: EventSource | null = null;
-
-    const applyProfiles = (data: ProfilesResponse) => {
-      setProfiles(data.profiles);
-      const active = data.profiles.find((p) => p.active);
-      if (active) setActiveProfile(active.name);
-    };
-
     fetch('/api/profiles')
       .then((r) => r.json())
       .then((data: ProfilesResponse) => {
         if (mounted) applyProfiles(data);
       })
       .catch(() => mounted && setError('Cannot reach daemon'));
-
-    eventSource = new EventSource('/api/events');
-    eventSource.addEventListener('init', (e: MessageEvent) => {
-      if (!mounted) return;
-      try {
-        applyProfiles(JSON.parse(e.data));
-        setError('');
-      } catch {
-        setError('Invalid server response');
-      }
-    });
-    eventSource.addEventListener('profileChanged', (e: MessageEvent) => {
-      if (!mounted) return;
-      try {
-        const data = JSON.parse(e.data);
-        if (data.type === 'llm') {
-          setActiveProfile(data.profile);
-          setProfiles((prev) =>
-            prev.map((p) => ({ ...p, active: p.name === data.profile })),
-          );
-        }
-      } catch { /* ignore */ }
-    });
-    eventSource.addEventListener('peerConnected', (e: MessageEvent) => {
-      if (!mounted) return;
-      try { applyProfiles(JSON.parse(e.data)); } catch { /* ignore */ }
-    });
-    eventSource.addEventListener('healthChanged', (e: MessageEvent) => {
-      if (!mounted) return;
-      try {
-        const data = JSON.parse(e.data);
-        setProfiles((prev) =>
-          prev.map((p) => (p.name === data.backend ? { ...p, healthy: data.healthy } : p)),
-        );
-      } catch { /* ignore */ }
-    });
-    eventSource.onerror = () => mounted && setError('Connection lost - reconnecting...');
-
     return () => {
       mounted = false;
-      eventSource?.close();
     };
   }, []);
+
+  useDaemonEvent('init', (data: ProfilesResponse) => {
+    applyProfiles(data);
+    setError('');
+  });
+  useDaemonEvent('profileChanged', (data: { type?: string; profile?: string }) => {
+    if (data?.type !== 'llm' || !data.profile) return;
+    setActiveProfile(data.profile);
+    setProfiles((prev) => prev.map((p) => ({ ...p, active: p.name === data.profile })));
+  });
+  useDaemonEvent('peerConnected', (data: ProfilesResponse) => applyProfiles(data));
+  useDaemonEvent('healthChanged', (data: { backend?: string; healthy?: boolean }) => {
+    setProfiles((prev) => prev.map((p) => (p.name === data?.backend ? { ...p, healthy: !!data.healthy } : p)));
+  });
+  useDaemonEvent('error', () => setError('Connection lost - reconnecting...'));
 
   const handleSwitch = async (next: string) => {
     if (!next || next === activeProfile || switching) return;

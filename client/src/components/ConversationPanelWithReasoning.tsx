@@ -1,6 +1,27 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState, memo, Fragment } from 'react';
+import {
+  cloneElement,
+  isValidElement,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useId,
+  useRef,
+  useState,
+  memo,
+  Fragment,
+  type ReactNode,
+} from 'react';
 import { usePipecatClient } from '@pipecat-ai/client-react';
-import { ChevronRightIcon, CopyIcon, CheckIcon } from 'lucide-react';
+import {
+  ArrowDownIcon,
+  CheckIcon,
+  CopyIcon,
+  GitBranchIcon,
+  Loader2Icon,
+  PencilIcon,
+  RotateCcwIcon,
+} from 'lucide-react';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './ai-elements/reasoning';
 import { TalkyTextInput } from './TalkyTextInput';
 import { Streamdown } from 'streamdown';
@@ -10,9 +31,12 @@ import type { TalkyMessage, TalkyPart } from '../messages/types';
 import { SteerModeChip } from './SteerModeChip';
 import { BotSpeakingBar } from './BotSpeakingBar';
 import { ConverseButton } from './ConverseButton';
+import { EmptyState } from './EmptyState';
 import type { VoiceState } from './useVoiceState';
 import { useUrlParam } from '../fixtures/harness';
 import { useSessions } from '../sessions/SessionsProvider';
+import { formatDuration, useElapsed, useTurn, type Notice } from '../turn/TurnProvider';
+import { useComposer } from '../composer/ComposerProvider';
 
 export interface ConversationChromeProps {
   voiceState: VoiceState;
@@ -22,6 +46,13 @@ export interface ConversationChromeProps {
   onConnect: () => void;
   onDisconnect: () => void;
 }
+
+/** Within this many px of the bottom, the transcript follows new content. */
+const FOLLOW_SLACK = 80;
+/** A turn with no visible output for this long shows the thinking indicator. */
+const THINKING_DELAY = 600;
+/** The whole-task timer appears once a turn has run this long. */
+const TASK_TIMER_AFTER = 10;
 
 // Streamdown plugins are heavy (Shiki for code, KaTeX for math, Mermaid for
 // diagrams). Only code is useful here, and it's lazy-loaded so first paint
@@ -40,12 +71,85 @@ function useCodePlugin(): StreamdownPlugins | undefined {
   return plugins;
 }
 
-type TextChunk = { kind: 'text'; spoken: string; unspoken: string; key: number };
-type BlockChunk = { kind: 'block'; part: TalkyPart; key: number };
-type RenderChunk = TextChunk | BlockChunk;
+// ─── CODE BLOCKS ───────────────────────────────────────────────────────
+// Streamdown's own copy control is an unlabeled icon; ours says "Copy" and
+// "Copied" for a moment after a click.
+// The flash is keyed by the block's text, not component state: the lazy
+// highlighter swaps the code subtree out once it loads, remounting this
+// button — a state-only flag would die with the old instance.
+const copyFlash = new Map<string, number>();
 
-function buildChunks(parts: TalkyPart[]): RenderChunk[] {
+function CodeCopy() {
+  const ref = useRef<HTMLButtonElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [copied, setCopied] = useState(false);
+  // A stable accessible name, independent of the Copied flash: the visible
+  // text toggles but the control is still "the copy button".
+  const labelId = useId();
+
+  const codeText = () => {
+    const block = ref.current?.closest('.talky-code');
+    const code = block?.querySelector('pre code') ?? block?.querySelector('code');
+    // innerText keeps the line breaks between the highlighter's line spans;
+    // textContent flattens them.
+    return ((code instanceof HTMLElement ? code.innerText : code?.textContent) ?? '').replace(/\n$/, '');
+  };
+
+  // A remount after the highlighter upgrade: pick the flash back up.
+  useLayoutEffect(() => {
+    const until = copyFlash.get(codeText());
+    if (until && until > Date.now()) {
+      setCopied(true);
+      timer.current = setTimeout(() => setCopied(false), until - Date.now());
+    }
+  }, []);
+
+  const copy = () => {
+    const text = codeText();
+    copyFlash.set(text, Date.now() + 1000);
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1000);
+    void navigator.clipboard.writeText(text).catch(() => setCopied(false));
+  };
+  return (
+    <>
+      <span id={labelId} className="sr-only">Copy code</span>
+      <button
+        ref={ref}
+        type="button"
+        onClick={copy}
+        aria-labelledby={labelId}
+        data-testid="code-copy"
+        className="absolute right-1.5 top-1.5 z-10 rounded px-1.5 py-0.5 font-mono text-[11px] transition-colors hover:bg-[var(--color-panel-3)]"
+        style={{ color: copied ? 'var(--color-success)' : 'var(--color-text-dim)' }}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </>
+  );
+}
+
+const STREAMDOWN_COMPONENTS = {
+  pre: ({ children }: { children?: ReactNode }) => (
+    <div className="talky-code relative">
+      {isValidElement(children) ? cloneElement(children as React.ReactElement<Record<string, unknown>>, { 'data-block': 'true' }) : children}
+      <CodeCopy />
+    </div>
+  ),
+};
+const STREAMDOWN_CONTROLS = { code: false } as const;
+
+type TextChunk = { kind: 'text'; spoken: string; unspoken: string; key: number };
+type ToolChunk = { kind: 'tool'; name: string; key: number; startKey: string; endKey: string | null; failed: boolean };
+type BlockChunk = { kind: 'block'; part: TalkyPart; key: number };
+type RenderChunk = TextChunk | ToolChunk | BlockChunk;
+
+const toolName = (content: string) => content.replace(/^[▶✓✗⟳]\s*/, '').split(/[:(]/)[0].trim();
+
+function buildChunks(messageId: string, parts: TalkyPart[]): RenderChunk[] {
   const out: RenderChunk[] = [];
+  const open: ToolChunk[] = [];
   parts.forEach((part, i) => {
     if (part.kind === 'thinking') return;
     if (part.kind === 'text') {
@@ -53,9 +157,37 @@ function buildChunks(parts: TalkyPart[]): RenderChunk[] {
       out.push({ kind: 'text', spoken: part.spoken, unspoken: part.unspoken, key: i });
       return;
     }
+    if (part.kind === 'tool_start') {
+      const chunk: ToolChunk = { kind: 'tool', name: part.content.replace(/^▶\s*/, ''), key: i, startKey: `${messageId}:${i}`, endKey: null, failed: false };
+      open.push(chunk);
+      out.push(chunk);
+      return;
+    }
+    if (part.kind === 'tool_end') {
+      // Pair with the oldest unfinished call of the same tool.
+      const name = toolName(part.content);
+      const idx = open.findIndex((c) => toolName(c.name) === name);
+      if (idx >= 0) {
+        const [chunk] = open.splice(idx, 1);
+        chunk.endKey = `${messageId}:${i}`;
+        chunk.failed = part.content.trim().startsWith('✗');
+      } else {
+        out.push({ kind: 'block', part, key: i });
+      }
+      return;
+    }
     out.push({ kind: 'block', part, key: i });
   });
   return out;
+}
+
+// When each tool part was first seen. The daemon's parts carry no time, so the
+// client stamps them on arrival.
+const seenAt = new Map<string, number>();
+function stamp(key: string | null): number | null {
+  if (key === null) return null;
+  if (!seenAt.has(key)) seenAt.set(key, Date.now());
+  return seenAt.get(key)!;
 }
 
 function formatTime(iso: string): string {
@@ -106,6 +238,8 @@ function KaraokePart({
         <Streamdown
           className="karaoke-spoken"
           plugins={plugins}
+          components={STREAMDOWN_COMPONENTS}
+          controls={STREAMDOWN_CONTROLS}
           parseIncompleteMarkdown={isStreaming}
           isAnimating={isStreaming && !unspoken}
         >
@@ -116,6 +250,8 @@ function KaraokePart({
         <Streamdown
           className="karaoke-unspoken text-muted-foreground"
           plugins={plugins}
+          components={STREAMDOWN_COMPONENTS}
+          controls={STREAMDOWN_CONTROLS}
           parseIncompleteMarkdown={isStreaming}
           isAnimating={false}
         >
@@ -126,15 +262,37 @@ function KaraokePart({
   );
 }
 
-// ─── TOOL CARD ─────────────────────────────────────────────────────────
-function ToolBlock({ kind, content }: { kind: 'tool_start' | 'tool_end'; content: string }) {
-  const icon = kind === 'tool_start' ? '⟳' : '✓';
-  const label = kind === 'tool_start' ? 'Running' : 'Done';
+// ─── TOOL ROW ──────────────────────────────────────────────────────────
+// A call shows its elapsed time, ticking each second while it runs and
+// frozen when it ends. A call the turn ended without a result for is an
+// error, not a timer that climbs forever.
+function ToolRow({ chunk, live }: { chunk: ToolChunk; live: boolean }) {
+  const startedAt = stamp(chunk.startKey)!;
+  const endedAt = stamp(chunk.endKey);
+  const state = endedAt !== null ? (chunk.failed ? 'failed' : 'done') : live ? 'running' : 'error';
+  // A stuck call's clock stops when the turn did.
+  const stuckKey = `${chunk.startKey}:stuck`;
+  const stoppedAt = state === 'error' ? stamp(stuckKey) : null;
+  const ticking = useElapsed(startedAt, state === 'running');
+  const secs =
+    state === 'running' ? ticking : Math.max(0, Math.floor(((endedAt ?? stoppedAt ?? startedAt) - startedAt) / 1000));
+  const icon = state === 'running' ? '⟳' : state === 'done' ? '✓' : '✗';
+  const label = state === 'running' ? 'Running' : state === 'done' ? 'Done' : state === 'failed' ? 'Failed' : 'No result';
+  const bad = state === 'error' || state === 'failed';
   return (
-    <div className="flex items-center gap-2 py-1 text-xs font-mono text-muted-foreground">
-      <span className="opacity-60">{icon}</span>
-      <span className="opacity-50 uppercase tracking-wider">{label}</span>
-      <span className="opacity-80 truncate">{content}</span>
+    <div
+      className="flex items-center gap-2 py-1 text-xs font-mono"
+      data-testid="tool-row"
+      data-state={state}
+      data-elapsed={secs}
+      style={{ color: bad ? 'var(--color-destructive)' : 'var(--color-muted-foreground)' }}
+    >
+      <span className="opacity-60" aria-hidden="true">{icon}</span>
+      <span className="opacity-50 uppercase tracking-wider shrink-0">{label}</span>
+      <span className="opacity-80 truncate min-w-0">{chunk.name}</span>
+      <span className="ml-auto shrink-0 tabular-nums opacity-70" data-testid="tool-timer">
+        {formatDuration(secs)}
+      </span>
     </div>
   );
 }
@@ -147,48 +305,175 @@ function InfoBlock({ content }: { content: string }) {
   );
 }
 
-function ErrorBlock({ content }: { content: string }) {
+// ─── NOTICES & ERRORS ──────────────────────────────────────────────────
+// One readable line; the full text behind "Show details".
+function Summarised({ text, detail, kind }: { text: string; detail?: string; kind: 'error' | 'info' }) {
+  const [open, setOpen] = useState(false);
+  const color = kind === 'error' ? 'var(--color-destructive)' : 'var(--color-text-dim)';
   return (
-    <div className="text-xs font-mono py-0.5" style={{ color: 'var(--color-destructive)' }}>
-      ✗ {content}
+    <div className="min-w-0">
+      <div className="flex items-center gap-2 min-w-0" style={{ color }}>
+        {kind === 'error' && <span aria-hidden="true">✗</span>}
+        <span className="truncate min-w-0" title={text}>{text}</span>
+        {detail && (
+          <button
+            type="button"
+            className="shrink-0 text-[11px] underline-offset-2 hover:underline"
+            style={{ color: 'var(--color-text-mute)' }}
+            aria-expanded={open}
+            onClick={() => setOpen(!open)}
+          >
+            {open ? 'Hide details' : 'Show details'}
+          </button>
+        )}
+      </div>
+      {detail && open && (
+        <pre
+          className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded px-2 py-1.5 font-mono text-[11px]"
+          style={{ backgroundColor: 'var(--color-panel-2)', color: 'var(--color-text-dim)' }}
+        >
+          {detail}
+        </pre>
+      )}
     </div>
   );
 }
 
-function renderBlock(part: TalkyPart): React.ReactNode {
+function splitError(content: string): { text: string; detail?: string } {
+  const flat = content.trim();
+  const first = flat.split(/\n|(?<=[.!?])\s+/)[0];
+  return first.length < flat.length ? { text: first, detail: flat } : { text: flat };
+}
+
+function ErrorBlock({ content }: { content: string }) {
+  const { text, detail } = splitError(content);
+  return (
+    <div className="text-xs font-mono py-0.5">
+      <Summarised text={text} detail={detail} kind="error" />
+    </div>
+  );
+}
+
+function NoticeRow({ notice }: { notice: Notice }) {
+  return (
+    <div
+      className="py-2 text-[13px]"
+      data-testid="transcript-notice"
+      data-kind={notice.kind}
+      style={{ borderBottom: '1px solid var(--color-border-soft)' }}
+    >
+      <Summarised text={notice.text} detail={notice.detail} kind={notice.kind} />
+      {notice.action && (
+        <button
+          type="button"
+          className="mt-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium"
+          style={{ border: '1px solid var(--color-border)' }}
+          onClick={notice.action.run}
+        >
+          {notice.action.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function renderBlock(part: TalkyPart): ReactNode {
   if (part.kind === 'tool_start' || part.kind === 'tool_end') {
-    return <ToolBlock kind={part.kind} content={part.content} />;
+    return <InfoBlock content={part.content} />;
   }
   if (part.kind === 'info') return <InfoBlock content={part.content} />;
   if (part.kind === 'error') return <ErrorBlock content={part.content} />;
   return null;
 }
 
-// ─── COPY BUTTON ───────────────────────────────────────────────────────
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const handle = () => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
+// ─── MESSAGE ACTIONS ───────────────────────────────────────────────────
+function ActionButton({
+  label,
+  title,
+  onClick,
+  children,
+  disabled,
+}: {
+  label: string;
+  title?: string;
+  onClick: () => void;
+  children: ReactNode;
+  disabled?: boolean;
+}) {
   return (
     <button
-      onClick={handle}
-      title={copied ? 'Copied' : 'Copy'}
-      className="inline-flex items-center justify-center size-6 rounded transition-colors"
-      style={{ color: copied ? 'var(--color-success)' : 'var(--color-text-mute)' }}
+      type="button"
+      aria-label={label}
+      title={title ?? label}
+      onClick={onClick}
+      disabled={disabled}
+      className="inline-flex items-center justify-center size-6 rounded transition-colors hover:bg-[var(--color-panel-2)] disabled:opacity-40"
+      style={{ color: 'var(--color-text-mute)' }}
     >
-      {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+      {children}
     </button>
   );
 }
 
+function CopyMessage({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <ActionButton
+      label={copied ? 'Copied' : 'Copy message'}
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+    >
+      {copied ? <CheckIcon size={13} style={{ color: 'var(--color-success)' }} /> : <CopyIcon size={13} />}
+    </ActionButton>
+  );
+}
+
+// Retry sends the same words again; Edit puts them back in the composer to
+// change and send; Branch off starts a new session with them in the composer.
+// Backends keep their own history, so none of these rewrite past turns.
+function UserActions({ text }: { text: string }) {
+  const composer = useComposer();
+  const { newChat } = useSessions();
+  return (
+    <>
+      <ActionButton label="Retry" title="Retry: send this message again" onClick={() => composer.submit(text)}>
+        <RotateCcwIcon size={13} />
+      </ActionButton>
+      <ActionButton
+        label="Edit"
+        title="Edit: put this message back in the composer"
+        onClick={() => {
+          composer.setText(text);
+          composer.focus();
+        }}
+      >
+        <PencilIcon size={13} />
+      </ActionButton>
+      <ActionButton
+        label="Branch off"
+        title="Branch off: start a new session from this message"
+        onClick={() => {
+          void newChat().then(() => {
+            composer.setText(text);
+            composer.focus();
+          });
+        }}
+      >
+        <GitBranchIcon size={13} />
+      </ActionButton>
+    </>
+  );
+}
+
 // ─── THINKING ──────────────────────────────────────────────────────────
+// Reasoning is folded: a closed disclosure above the answer, open on demand.
 function ThinkingBlock({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   return (
-    <Reasoning isStreaming={isStreaming} defaultOpen={isStreaming} className="mb-2">
+    <Reasoning isStreaming={isStreaming} defaultOpen={false} className="mb-2">
       <ReasoningTrigger />
       <ReasoningContent>{text}</ReasoningContent>
     </Reasoning>
@@ -196,8 +481,7 @@ function ThinkingBlock({ text, isStreaming }: { text: string; isStreaming: boole
 }
 
 // ─── MESSAGE ROW ───────────────────────────────────────────────────────
-function MessageRow({ message }: { message: TalkyMessage }) {
-  const [hovered, setHovered] = useState(false);
+function MessageRow({ message, live }: { message: TalkyMessage; live: boolean }) {
   const isUser = message.role === 'user';
   const isStreaming = !message.final;
 
@@ -210,18 +494,17 @@ function MessageRow({ message }: { message: TalkyMessage }) {
     [message.parts],
   );
 
-  const chunks = useMemo(() => buildChunks(message.parts), [message.parts]);
+  const chunks = useMemo(() => buildChunks(message.id, message.parts), [message.id, message.parts]);
   const ts = formatTime(message.createdAt);
   const fullText = useMemo(() => messageText(message), [message]);
 
   return (
     <div
-      className="py-3 relative"
+      className="message-row group py-3 relative"
       style={{ borderBottom: '1px solid var(--color-border-soft)' }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
       data-testid="transcript-message"
       data-message-id={message.id}
+      data-role={message.role}
     >
       <div className="flex items-center gap-2 mb-1 min-h-[22px]">
         <span
@@ -232,20 +515,15 @@ function MessageRow({ message }: { message: TalkyMessage }) {
         </span>
         <div className="flex-1" />
         <span
-          className="font-mono text-[11px] transition-opacity"
-          style={{
-            color: 'var(--color-text-mute)',
-            opacity: hovered ? 0.5 : 0,
-          }}
+          className="message-meta font-mono text-[11px]"
+          style={{ color: 'var(--color-text-mute)' }}
         >
           {ts}
         </span>
         {fullText && (
-          <div
-            className="transition-opacity"
-            style={{ opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }}
-          >
-            <CopyButton text={fullText} />
+          <div className="message-actions flex items-center gap-0.5">
+            {isUser && <UserActions text={fullText} />}
+            <CopyMessage text={fullText} />
           </div>
         )}
       </div>
@@ -254,10 +532,12 @@ function MessageRow({ message }: { message: TalkyMessage }) {
         <ThinkingBlock text={thinkingText} isStreaming={isStreaming} />
       )}
 
-      <div className="text-[15px] leading-relaxed max-w-[65ch]">
+      <div className="text-[15px] leading-relaxed max-w-[65ch] min-w-0">
         {chunks.map((c) =>
           c.kind === 'block' ? (
             <Fragment key={c.key}>{renderBlock(c.part)}</Fragment>
+          ) : c.kind === 'tool' ? (
+            <ToolRow key={c.key} chunk={c} live={live} />
           ) : (
             <KaraokePart
               key={c.key}
@@ -272,6 +552,41 @@ function MessageRow({ message }: { message: TalkyMessage }) {
   );
 }
 
+// ─── TURN STATUS ───────────────────────────────────────────────────────
+function ThinkingIndicator() {
+  const { running, waiting } = useTurn();
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    if (!(running && waiting)) {
+      setShow(false);
+      return;
+    }
+    const t = setTimeout(() => setShow(true), THINKING_DELAY);
+    return () => clearTimeout(t);
+  }, [running, waiting]);
+  return (
+    <div role="status" aria-live="polite" className="min-h-0">
+      {show && (
+        <div className="flex items-center gap-2 py-3 text-[13px]" data-testid="thinking-indicator" style={{ color: 'var(--color-text-dim)' }}>
+          <Loader2Icon size={13} className="animate-spin" aria-hidden="true" />
+          Thinking…
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskTimer() {
+  const { running, startedAt } = useTurn();
+  const secs = useElapsed(startedAt, running);
+  if (!running || secs < TASK_TIMER_AFTER) return null;
+  return (
+    <span data-testid="task-timer" className="font-mono text-[11px] tabular-nums shrink-0" style={{ color: 'var(--color-text-dim)' }}>
+      task {formatDuration(secs)}
+    </span>
+  );
+}
+
 // ─── TRANSCRIPT ────────────────────────────────────────────────────────
 function ConversationMessages({
   activeProfile,
@@ -282,6 +597,7 @@ function ConversationMessages({
 }) {
   const messages = useTalkyMessages();
   const client = usePipecatClient();
+  const turn = useTurn();
   const { voiceState, connected } = chrome;
   // ?voiceState=speaking lets the bot-speaking bar be inspected in fixtures
   // without a live bot.
@@ -290,22 +606,122 @@ function ConversationMessages({
     voiceStateOverride === 'speaking' ||
     (!voiceStateOverride && connected && voiceState === 'speaking');
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { hasOlder, loadOlder } = useSessions();
+  const contentRef = useRef<HTMLDivElement>(null);
+  const { hasOlder, loadOlder, loading, openId } = useSessions();
 
-  // Stick to the bottom as messages arrive — except when older history was
-  // prepended (same last message, new first one): then keep the reader's place.
+  // ── Follow the reader, never the stream ──
+  // `following` is true while the reader is within FOLLOW_SLACK of the bottom.
+  // While following, every change pins to the bottom with an instant jump.
+  // Otherwise nothing moves the reader: not tokens, tool rows, or new messages.
+  const following = useRef(true);
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const [unread, setUnread] = useState(0);
+  const seen = useRef<{ len: number; key: string }>({ len: messages.length, key: '' });
+
+  const pin = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  // Content version of a message: identity + how much it holds. A reply
+  // streams into the same message, so length alone can't tell it grew.
+  const keyOfMessage = (m: TalkyMessage | undefined) =>
+    m ? `${m.id}:${m.parts.length}:${m.parts.reduce((n, p) => n + (p.kind === 'text' ? p.spoken.length + p.unspoken.length : 1), 0)}` : '';
+
+  const follow = useCallback(() => {
+    following.current = true;
+    seen.current = { len: messages.length, key: keyOfMessage(messages.at(-1)) };
+    setUnread(0);
+    setAwayFromBottom(false);
+  }, [messages]);
+
+  // A different session opened: land at its bottom.
+  useLayoutEffect(() => {
+    following.current = true;
+    setUnread(0);
+    setAwayFromBottom(false);
+  }, [openId]);
+
   const prev = useRef<{ first?: string; last?: string; height: number; top: number }>({ height: 0, top: 0 });
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const first = messages[0]?.id;
-    const last = messages[messages.length - 1]?.id;
+    const lastMsg = messages[messages.length - 1];
+    const last = lastMsg?.id;
     const p = prev.current;
     const prepended = p.last !== undefined && last === p.last && first !== p.first;
-    if (prepended) el.scrollTop = el.scrollHeight - p.height + p.top;
-    else el.scrollTop = el.scrollHeight;
+    // My own new message always pins.
+    if (lastMsg && last !== p.last && lastMsg.role === 'user' && !prepended) following.current = true;
+    if (prepended) {
+      el.scrollTop = el.scrollHeight - p.height + p.top;
+    } else if (following.current) {
+      el.scrollTop = el.scrollHeight;
+      seen.current = { len: messages.length, key: keyOfMessage(lastMsg) };
+      setUnread(0);
+      setAwayFromBottom(false);
+    } else {
+      // A reply streams into a message that existed when we scrolled up, so
+      // "unread" is new messages OR the tail message that grew meanwhile.
+      let n = Math.max(0, messages.length - seen.current.len);
+      if (n === 0 && keyOfMessage(lastMsg) !== seen.current.key) n = 1;
+      setUnread((u) => (u === n ? u : n));
+    }
     prev.current = { first, last, height: el.scrollHeight, top: el.scrollTop };
-  }, [messages]);
+  }, [messages, turn.notices]);
+
+  // Content that grows inside a message (streamed text, highlighting, a tool
+  // row) doesn't change `messages`; keep pinned through resizes too.
+  // Also watch the container itself: the bot-speaking bar (and the composer
+  // growing) change how tall the transcript is, and a following reader must
+  // stay at the bottom through that too (WIN-536).
+  useEffect(() => {
+    const content = contentRef.current;
+    const container = scrollRef.current;
+    if (!content || !container) return;
+    const ro = new ResizeObserver(() => {
+      if (following.current) pin();
+    });
+    ro.observe(content);
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [pin]);
+
+  // ResizeObserver delivers before layout, so a resize that lands in the
+  // same frame (the bot-speaking bar appearing, a line wrapping) can still
+  // leave the reader off the bottom for one frame. While following, re-pin
+  // after every layout — this is what "following" means.
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      if (following.current) pin();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [pin]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.clientHeight - el.scrollTop;
+    const near = distance <= FOLLOW_SLACK;
+    if (near && !following.current) follow();
+    else if (!near && following.current) following.current = false;
+    if (!near !== awayFromBottom) setAwayFromBottom(!near);
+    prev.current = { ...prev.current, height: el.scrollHeight, top: el.scrollTop };
+  };
+
+  // Scrolling up with the wheel or trackpad releases the pin on that event,
+  // before any scroll (or the next token) happens.
+  const onWheel = (e: React.WheelEvent) => {
+    if (e.deltaY < 0) following.current = false;
+  };
+
+  const jumpToLatest = () => {
+    follow();
+    pin();
+  };
 
   const loadingOlder = useRef(false);
   const pageOlder = useCallback(async () => {
@@ -332,65 +748,150 @@ function ConversationMessages({
     return () => io.disconnect();
   }, [hasOlder, pageOlder]);
 
+  // Notices sit after the message they belong to, in the session they were
+  // raised on (a notice from another convo stays hidden until it's back).
+  const noticesAfter = useMemo(() => {
+    const m = new Map<number, Notice[]>();
+    for (const n of turn.notices) {
+      // null convo = raised while no session was bound (e.g. the turn that
+      // created this convo); show it here rather than losing it.
+      if (n.convo !== null && n.convo !== openId) continue;
+      const at = Math.min(n.after, messages.length);
+      m.set(at, [...(m.get(at) ?? []), n]);
+    }
+    return m;
+  }, [turn.notices, messages.length, openId]);
+
+  const lastIndex = messages.length - 1;
+  const showEmpty = !loading && messages.length === 0 && turn.notices.length === 0 && !turn.running;
+
   return (
-    <div className="relative h-full flex flex-col">
+    <div className="relative h-full flex flex-col min-h-0">
+      <h2 id="transcript-heading" className="sr-only">Conversation</h2>
       <div
         ref={scrollRef}
-        className="relative flex-1 overflow-y-auto px-5 pt-2"
+        className="transcript relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-5 pt-2"
         data-testid="transcript-list"
-        onScroll={(e) => {
-          prev.current = { ...prev.current, height: e.currentTarget.scrollHeight, top: e.currentTarget.scrollTop };
-        }}
+        role="log"
+        aria-live="polite"
+        aria-labelledby="transcript-heading"
+        aria-busy={loading || undefined}
+        onScroll={onScroll}
+        onWheel={onWheel}
       >
-        {hasOlder && (
-          <button
-            ref={sentinelRef}
-            type="button"
-            data-testid="transcript-load-older"
-            className="block w-full py-2 text-center text-[12px] hover:underline"
-            style={{ color: 'var(--color-text-mute)' }}
-            onClick={() => void pageOlder()}
-          >
-            Earlier messages…
-          </button>
-        )}
-        {messages.map((m) => (
-          <MessageRow key={m.id} message={m} />
-        ))}
-      </div>
-      <div
-        className="px-3 pt-2 pb-3 border-t"
-        style={{
-          borderColor: 'var(--color-border-soft)',
-          backgroundColor: 'var(--color-card)',
-        }}
-      >
-        {botSpeaking && (
-          <BotSpeakingBar
-            onStop={() => {
-              // Cancel in-flight TTS by sending an 'interrupt' app-message over
-              // the existing WebRTC data channel. The daemon's on_app_message
-              // handler queues one InterruptionFrame — the same frame a VAD
-              // speech-onset produces. Rides the audio connection (no separate
-              // HTTP round-trip); the bar clears when botStoppedSpeaking arrives.
-              client?.sendClientMessage('interrupt');
-            }}
-          />
-        )}
-        <div className="flex items-center gap-2">
-          <SteerModeChip activeProfile={activeProfile} />
-          {/* Mic + speaker mute both live in the header right cluster now
-              (shown only when connected). Composer keeps steer + text + connect. */}
-          <TalkyTextInput connected={connected} />
-          <ConverseButton
-            voiceState={voiceState}
-            connected={chrome.connected}
-            connecting={chrome.connecting}
-            error={chrome.error}
-            onConnect={chrome.onConnect}
-            onDisconnect={chrome.onDisconnect}
-          />
+        <div ref={contentRef}>
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 py-16 text-[13px]" data-testid="transcript-loading" style={{ color: 'var(--color-text-mute)' }}>
+              <Loader2Icon size={14} className="animate-spin" aria-hidden="true" />
+              Loading conversation…
+            </div>
+          ) : showEmpty ? (
+            <EmptyState onConnect={chrome.onConnect} />
+          ) : (
+            <>
+              {hasOlder && (
+                <button
+                  ref={sentinelRef}
+                  type="button"
+                  data-testid="transcript-load-older"
+                  className="block w-full py-2 text-center text-[12px] hover:underline"
+                  style={{ color: 'var(--color-text-mute)' }}
+                  onClick={() => void pageOlder()}
+                >
+                  Earlier messages…
+                </button>
+              )}
+              {noticesAfter.get(0)?.map((n) => <NoticeRow key={`n${n.id}`} notice={n} />)}
+              {messages.map((m, i) => (
+                <Fragment key={m.id}>
+                  <MessageRow message={m} live={turn.running && i === lastIndex} />
+                  {noticesAfter.get(i + 1)?.map((n) => <NoticeRow key={`n${n.id}`} notice={n} />)}
+                </Fragment>
+              ))}
+              <ThinkingIndicator />
+            </>
+          )}
         </div>
+      </div>
+      {awayFromBottom && !loading && (
+        <button
+          type="button"
+          data-testid="jump-to-latest"
+          data-unread={unread}
+          aria-label={unread ? `Scroll to latest, ${unread} new` : 'Scroll to latest'}
+          onClick={jumpToLatest}
+          className="absolute left-1/2 -translate-x-1/2 z-10 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px]"
+          style={{
+            bottom: 'calc(var(--composer-height, 96px) + 8px)',
+            border: '1px solid var(--color-border)',
+            backgroundColor: 'var(--color-panel-2)',
+            color: 'var(--color-foreground)',
+          }}
+        >
+          <ArrowDownIcon size={13} aria-hidden="true" />
+          Scroll to latest
+          {unread > 0 && (
+            <span className="rounded-full px-1.5 font-mono text-[10px]" style={{ backgroundColor: 'var(--color-panel-3)' }}>
+              {unread}
+            </span>
+          )}
+        </button>
+      )}
+      <ComposerArea activeProfile={activeProfile} chrome={chrome} botSpeaking={botSpeaking} onStop={() => client?.sendClientMessage('interrupt')} />
+    </div>
+  );
+}
+
+function ComposerArea({
+  activeProfile,
+  chrome,
+  botSpeaking,
+  onStop,
+}: {
+  activeProfile: string;
+  chrome: ConversationChromeProps;
+  botSpeaking: boolean;
+  onStop: () => void;
+}) {
+  // The jump-to-latest button sits just above the composer, whatever its height.
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const set = () => el.parentElement?.style.setProperty('--composer-height', `${el.offsetHeight}px`);
+    set();
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <div
+      ref={ref}
+      className="px-3 pt-2 pb-2 border-t"
+      style={{
+        borderColor: 'var(--color-border-soft)',
+        backgroundColor: 'var(--color-card)',
+      }}
+    >
+      {botSpeaking && (
+        // Cancel in-flight TTS by sending an 'interrupt' app-message over the
+        // existing WebRTC data channel; the daemon queues one InterruptionFrame.
+        <BotSpeakingBar onStop={onStop} />
+      )}
+      <div className="flex items-start gap-2">
+        <SteerModeChip activeProfile={activeProfile} />
+        <TalkyTextInput />
+        <ConverseButton
+          voiceState={chrome.voiceState}
+          connected={chrome.connected}
+          connecting={chrome.connecting}
+          error={chrome.error}
+          onConnect={chrome.onConnect}
+          onDisconnect={chrome.onDisconnect}
+        />
+      </div>
+      <div className="flex justify-end pr-1 -mt-4 h-4 pointer-events-none">
+        <TaskTimer />
       </div>
     </div>
   );
@@ -404,6 +905,3 @@ export const ConversationPanelWithReasoning = memo(
     return <ConversationMessages activeProfile={activeProfile} chrome={chrome} />;
   },
 );
-
-// Suppress unused-imports — kept for next phase (collapsible tool detail).
-void ChevronRightIcon;

@@ -140,3 +140,57 @@ async def test_user_sink_persists_user_turn_text_frame(tmp_path):
     turns = store.read_transcript(session.record.id)
     assert [(t.role, t.content) for t in turns] == [("user", "hello world")]
     assert pushed == [frame]
+
+
+def test_in_progress_marker_and_interrupted_scan(tmp_path):
+    """A user turn marks its convo in_progress; completion clears it (WIN-536)."""
+    from talky.convos.session import ConvoSession
+
+    store = ConvoStore(root=tmp_path)
+    session = ConvoSession(store, backend="script", profile="script")
+    session.append("user", "[[tool migrate 6]] [[say migration finished.]]")
+    assert store.get(session.record.id).in_progress is True
+    assert [r.id for r in store.find_interrupted()] == [session.record.id]
+
+    session.append("assistant", "▶ migrate")
+    assert store.get(session.record.id).in_progress is True  # still streaming
+    session.mark_turn_complete()
+    assert store.get(session.record.id).in_progress is False
+    assert store.find_interrupted() == []
+
+
+def test_in_progress_marker_survives_reopen(tmp_path):
+    """The marker is persisted, so a fresh store instance (a new daemon) sees it."""
+    store = ConvoStore(root=tmp_path)
+    rec = store.create(backend="script", profile="script")
+    store.append_turn(rec.id, "user", "resume me")
+    store.set_in_progress(rec.id, True)
+
+    reopened = ConvoStore(root=tmp_path)
+    found = reopened.find_interrupted()
+    assert [r.id for r in found] == [rec.id]
+    assert reopened.get(rec.id).in_progress is True
+
+
+@pytest.mark.asyncio
+async def test_replay_turn_is_not_resent_to_the_user_processor(tmp_path):
+    """A replayed turn (daemon restart) must not duplicate the user message."""
+    from pipecat.processors.frame_processor import FrameDirection
+
+    from talky.convos.session import ConvoSession
+    from talky.convos.transcript_sink import TalkyUserTranscriptProcessor
+    from talky.server.turn import UserTurnTextFrame
+
+    store = ConvoStore(root=tmp_path)
+    session = ConvoSession(store, backend="script", profile="script")
+    sink = TalkyUserTranscriptProcessor(session)
+
+    async def _push(frame, direction=None):  # noqa: ANN001
+        pass
+
+    sink.push_frame = _push  # type: ignore[assignment]
+
+    await sink.process_frame(UserTurnTextFrame(text="first send", replay=False), FrameDirection.DOWNSTREAM)
+    assert len(store.read_transcript(session.record.id)) == 1
+    await sink.process_frame(UserTurnTextFrame(text="first send", replay=True), FrameDirection.DOWNSTREAM)
+    assert len(store.read_transcript(session.record.id)) == 1  # not duplicated

@@ -9,6 +9,11 @@ talky_profiles:
     description: "Echo (E2E test backend)"
     llm_backend: "echo"
 
+  # Script — UI conformance test profile (WIN-536). See backends/script.py.
+  script:
+    description: "Script (UI test backend)"
+    llm_backend: "script"
+
   # OpenClaw
   openclaw:
     description: "OpenClaw"

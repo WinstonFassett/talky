@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { useDaemonEvent } from '../lib/daemonEvents';
 
 interface PermissionRequest {
   tool_name: string;
@@ -82,25 +83,11 @@ function Banner({ request, onResolve }: Props) {
 
 export function PermissionBanner() {
   const [pending, setPending] = useState<PermissionRequest | null>(null);
-  const esRef = useRef<EventSource | null>(null);
-
-  useEffect(() => {
-    const es = new EventSource('/api/events');
-    esRef.current = es;
-
-    es.addEventListener('permissionRequest', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data) as PermissionRequest;
-        setPending(data);
-        playPermissionAlert();
-      } catch { /* ignore malformed */ }
-    });
-
-    return () => {
-      es.close();
-      esRef.current = null;
-    };
-  }, []);
+  useDaemonEvent('permissionRequest', (data: PermissionRequest) => {
+    if (!data) return;
+    setPending(data);
+    playPermissionAlert();
+  });
 
   const handleResolve = async (allow: boolean) => {
     setPending(null);

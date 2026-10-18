@@ -92,6 +92,7 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -109,7 +110,7 @@ from talky.convos.transcript_sink import (
 from talky.server.agent_ext import AgentExtensionLLMService
 from talky.server.event_bus import event_bus
 from talky.server.mcp_driver import MCPDriverLLMService
-from talky.server.turn import TalkyUserTurnDetector
+from talky.server.turn import TalkyUserTurnDetector, UserTurnTextFrame
 
 
 def _resolve_backend_adapter_class(pm: Any, backend_name: str) -> Any:
@@ -250,6 +251,12 @@ class VoiceChannel:
         self._convo_session: Optional[ConvoSession] = None
         self._assistant_sink: Optional[ConvoAssistantTranscriptProcessor] = None
         self._pending_resume: Optional[dict] = None
+        # WIN-536: a turn that a previous daemon process died mid-way through.
+        # Found at startup; replayed (with a turnResumed notice) once its convo
+        # is bound again after the client reconnects.
+        self._interrupted_replay: Optional[dict] = None
+        self._pending_interrupted_replay: Optional[str] = None
+        self._detect_interrupted_turn()
         event_bus.add_listener(self._on_bus_event)
 
         # Speech-onset sentinel — set when VAD detects the user started
@@ -319,6 +326,25 @@ class VoiceChannel:
 
         # Voice Provider Status — STT/TTS parallel (ticket 4b1c).
         self._refresh_voice_provider_status()
+
+        # Preload the local TTS model so the first pipeline build never blocks
+        # the event loop on a multi-hundred-MB model download/load (WIN-536):
+        # a daemon that says it's ready should be ready. Per-build services
+        # re-load the onnx session (fast once the file is cached); the slow
+        # part — the download — happens here, before we serve anything.
+        try:
+            vp = pm.get_voice_profile(self._warm_profile_name)
+            if vp is not None and getattr(vp, "tts_provider", None):
+                from talky.shared.service_factory import create_tts_service_from_config
+
+                create_tts_service_from_config(
+                    vp.tts_provider,
+                    voice_id=vp.tts_voice,
+                    skip_aggregator_types=["tool_start", "tool_end", "thinking", "info", "error"],
+                )
+                logger.info(f"VoiceChannel: preloaded TTS model for {vp.tts_provider} ({vp.tts_voice})")
+        except Exception as e:  # noqa: BLE001 — never block startup on a preload
+            logger.warning(f"VoiceChannel: TTS preload failed (will load at first connect): {e}")
 
         self._warm = True
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -1331,6 +1357,88 @@ class VoiceChannel:
         if ev.type == "backendError" and self._convo_session is not None:
             self._convo_session.set_failed()
 
+    # ── interrupted-turn resume (WIN-536) ────────────────────────────────
+
+    def _detect_interrupted_turn(self) -> None:
+        """Find the turn a previous daemon process died mid-way through.
+
+        The convo's ``in_progress`` marker is set when a user turn is
+        received and cleared when its reply completes; a marker still set
+        at startup means the daemon died mid-turn. The newest such convo is
+        resumed once its session is bound again; older stale markers clear.
+        """
+        try:
+            interrupted = self._convo_store.find_interrupted()
+        except Exception as e:  # noqa: BLE001 — a corrupt store must not block startup
+            logger.warning(f"VoiceChannel: interrupted-turn scan failed: {e}")
+            return
+        if not interrupted:
+            return
+        for rec in interrupted[1:]:
+            try:
+                self._convo_store.set_in_progress(rec.id, False)
+            except Exception:  # noqa: BLE001
+                pass
+        newest = interrupted[0]
+        text = ""
+        try:
+            for turn in reversed(self._convo_store.read_transcript(newest.id)):
+                if turn.role == "user":
+                    text = turn.content
+                    break
+        except Exception:  # noqa: BLE001
+            text = ""
+        if not text:
+            return
+        self._interrupted_replay = {
+            "convo_id": newest.id,
+            "backend": newest.backend,
+            "profile": newest.profile,
+            "text": text,
+        }
+        logger.info(f"VoiceChannel: found interrupted turn in {newest.id} — will resume on reconnect")
+
+    def _maybe_resume_interrupted_turn(self, convo_id: str) -> None:
+        """Once the interrupted convo is bound again, replay its turn.
+
+        When no peer is connected yet (the resume was applied at pipeline
+        build), the replay waits for ``on_connected`` so the frames reach
+        the browser instead of a dead transport.
+        """
+        if self._interrupted_replay is None or self._interrupted_replay["convo_id"] != convo_id:
+            return
+        if not self.is_live():
+            self._pending_interrupted_replay = convo_id
+            return
+        replay = self._interrupted_replay
+        self._interrupted_replay = None
+        self._pending_interrupted_replay = None
+        try:
+            asyncio.get_running_loop().create_task(self._resume_interrupted_turn(replay))
+        except RuntimeError:
+            pass  # no running loop (unit tests)
+
+    async def _resume_interrupted_turn(self, replay: dict) -> None:
+        """Tell the client the turn is being resumed, then re-run it on its backend."""
+        logger.info(f"VoiceChannel: resuming interrupted turn {replay['convo_id']} on {replay['backend']}")
+        svc = self._llm_services.get(replay["backend"])
+        if svc is None:
+            logger.warning(f"VoiceChannel: {replay['backend']} not loaded — interrupted turn not replayed")
+            return
+        if self._active_profile != replay["profile"]:
+            try:
+                await self.switch_to_profile(replay["profile"], announce=False)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"VoiceChannel: interrupted-turn profile switch failed: {e}")
+        # Only claim the turn is resuming once the replay can actually run.
+        await event_bus.emit("turnResumed", {"convo_id": replay["convo_id"]})
+        try:
+            # A replay is a user turn re-run: the user processor skips it (replay=True),
+            # so the transcript doesn't duplicate the message the user already sent.
+            await svc.process_frame(UserTurnTextFrame(text=replay["text"], replay=True), FrameDirection.DOWNSTREAM)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"VoiceChannel: interrupted-turn replay failed: {e}")
+
     def resume_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
         """Continue a saved convo, optionally on a different profile.
 
@@ -1346,6 +1454,8 @@ class VoiceChannel:
         if self.is_live() and self._convo_session is not None:
             self._apply_replay(self._llm_services.get(plan["backend"]), {**plan, "replay": True})
             self._convo_session.bind(plan["convo_id"])
+            # A daemon restart mid-turn: once this convo is bound again, replay the turn.
+            self._maybe_resume_interrupted_turn(plan["convo_id"])
             # Not a snapshot: the live call keeps adding turns (and may get a new
             # native id), so the next build re-reads the record.
             self._pending_resume = {"convo_id": plan["convo_id"], "follow_active": True, "expires_at": plan["expires_at"]}
@@ -1675,6 +1785,10 @@ class VoiceChannel:
             native_id_reader=lambda svc=profile_map.get(build_backend): native_session_id_of(svc),
             on_change=self._emit_convo_changed,
         )
+        # A daemon restart mid-turn, resumed through a pending plan: replay the
+        # turn once the peer connects (the build path defers to on_connected).
+        if pending is not None:
+            self._maybe_resume_interrupted_turn(pending["convo_id"])
         assistant_sink = ConvoAssistantTranscriptProcessor(session)
         self._convo_session = session
         self._assistant_sink = assistant_sink
@@ -1712,6 +1826,9 @@ class VoiceChannel:
         async def on_connected(transport, client):  # noqa: ANN001, ARG001
             elapsed_ms = (time.monotonic() - t0) * 1000
             logger.info(f"VoiceChannel: client connected ({elapsed_ms:.0f}ms to build)")
+            # A restart mid-turn resumed through the pipeline build: now that the
+            # peer is here, replay the interrupted turn (WIN-536).
+            self._maybe_resume_interrupted_turn(self._pending_interrupted_replay or "")
 
         # Browser app-messages → channel actions. The client sends these via
         # the Pipecat JS `sendClientMessage(type, data)` over the WebRTC data

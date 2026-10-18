@@ -702,9 +702,16 @@ def _build_webrtc_routes():
 
         result: dict = {"sessionId": session_id}
         if request_data.get("enableDefaultIceServers"):
-            result["iceConfig"] = {
-                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-            }
+            # Loopback peers connect over host candidates; an external STUN
+            # server there only makes gathering hang on a flaky network, and
+            # the offer can't go out until gathering completes (WIN-536).
+            host = (request.headers.get("host") or "").split(":")[0].strip("[]")
+            if host in ("127.0.0.1", "localhost", "::1"):
+                result["iceConfig"] = {"iceServers": []}
+            else:
+                result["iceConfig"] = {
+                    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+                }
 
         logger.info(f"Voice session created: {session_id}")
         return JSONResponse(result)

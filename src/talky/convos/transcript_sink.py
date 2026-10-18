@@ -13,7 +13,12 @@ Both pass every frame through unchanged.
 from __future__ import annotations
 
 from loguru import logger
-from pipecat.frames.frames import Frame, TranscriptionUpdateFrame
+from pipecat.frames.frames import (
+    Frame,
+    InterruptionFrame,
+    LLMFullResponseEndFrame,
+    TranscriptionUpdateFrame,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.transcript_processor import AssistantTranscriptProcessor
 from pipecat.utils.string import concatenate_aggregated_text
@@ -29,7 +34,7 @@ class TalkyUserTranscriptProcessor(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        if isinstance(frame, UserTurnTextFrame):
+        if isinstance(frame, UserTurnTextFrame) and not frame.replay:
             self._session.append("user", frame.text, timestamp=frame.timestamp)
         await self.push_frame(frame, direction)
 
@@ -44,6 +49,13 @@ class ConvoAssistantTranscriptProcessor(AssistantTranscriptProcessor):
             for msg in frame.messages or []:
                 if msg.role == "assistant":
                     self._session.append("assistant", msg.content or "")
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        # The reply is done (or cancelled): clear the interrupted-turn marker
+        # so a daemon crash afterwards doesn't resume a finished turn (WIN-536).
+        if isinstance(frame, (LLMFullResponseEndFrame, InterruptionFrame)):
+            self._session.mark_turn_complete()
+        await super().process_frame(frame, direction)
 
     def flush(self) -> None:
         """Persist whatever the bot had said so far; safe to call after teardown."""

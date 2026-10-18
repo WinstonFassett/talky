@@ -145,6 +145,11 @@ function RowMenu({
 }
 
 // ─── ROW ───────────────────────────────────────────────────────────────
+// Every row has a dot: pulsing while a response is in progress, green when
+// idle, red when the last turn failed. Only the daemon's current session can
+// be working or failed; the others are idle.
+const STATUS_LABEL = { working: 'Response in progress', idle: 'Idle', failed: 'Failed' } as const;
+
 function StatusDot({ status }: { status: 'idle' | 'working' | 'failed' }) {
   const color =
     status === 'working'
@@ -156,7 +161,9 @@ function StatusDot({ status }: { status: 'idle' | 'working' | 'failed' }) {
     <span
       data-testid="session-status"
       data-status={status}
-      title={status === 'working' ? 'Working…' : status === 'failed' ? 'Failed' : 'Current session'}
+      role={status === 'working' ? 'status' : 'img'}
+      aria-label={STATUS_LABEL[status]}
+      title={STATUS_LABEL[status]}
       className={`inline-block size-1.5 shrink-0 rounded-full ${status === 'working' ? 'animate-pulse' : ''}`}
       style={{ backgroundColor: color }}
     />
@@ -222,7 +229,7 @@ function SessionRow({
         }
       }}
     >
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 overflow-hidden">
         {editing ? (
           <input
             ref={inputRef}
@@ -237,7 +244,7 @@ function SessionRow({
           />
         ) : (
           <div
-            className="truncate text-[13px]"
+            className="break-words text-[13px] leading-snug"
             data-testid="session-title"
             style={{ color: isOpen ? 'var(--color-foreground)' : 'var(--color-text-dim)' }}
             title={row.title || 'Untitled'}
@@ -245,11 +252,11 @@ function SessionRow({
             {row.title || 'Untitled'}
           </div>
         )}
-        <div className="mt-0.5 flex items-center gap-1.5">
-          {isCurrent && <StatusDot status={current!.status} />}
+        <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+          <StatusDot status={isCurrent ? current!.status : 'idle'} />
           <span
             data-testid="session-backend"
-            className="rounded px-1 font-mono text-[10px] leading-4"
+            className="rounded px-1 font-mono text-[10px] leading-4 truncate max-w-[45%] shrink-0"
             style={{ color: 'var(--color-text-mute)', border: '1px solid var(--color-border-soft)' }}
           >
             {row.profile}
@@ -261,7 +268,7 @@ function SessionRow({
           )}
         </div>
       </div>
-      <span className="shrink-0 self-start pt-0.5 font-mono text-[10px]" style={{ color: 'var(--color-text-mute)' }}>
+      <span className="shrink-0 self-start pt-0.5 font-mono text-[10px] whitespace-nowrap" style={{ color: 'var(--color-text-mute)' }}>
         {relativeTime(row.last_active_at)}
       </span>
       <RowMenu
@@ -418,6 +425,12 @@ function SessionList({ onPicked, onCollapse }: { onPicked?: () => void; onCollap
 
 // ─── SHELLS ────────────────────────────────────────────────────────────
 const RAIL_KEY = 'talky.sessionsRail';
+const RAIL_WIDTH_KEY = 'talky.sessionsRailWidth';
+export const RAIL_DEFAULT = 256;
+const RAIL_MIN = 200;
+const RAIL_MAX = 480;
+/** The conversation never gets narrower than this beside the rail. */
+const CONVERSATION_MIN = 420;
 
 export function useRailOpen(): [boolean, (v: boolean) => void] {
   const [open, setOpen] = useState(() => {
@@ -436,15 +449,74 @@ export function useRailOpen(): [boolean, (v: boolean) => void] {
   return [open, set];
 }
 
-/** Desktop: a fixed-width left rail. */
+const railMax = () => Math.max(RAIL_MIN, Math.min(RAIL_MAX, window.innerWidth - CONVERSATION_MIN));
+const clampRail = (w: number) => Math.round(Math.min(railMax(), Math.max(RAIL_MIN, w)));
+
+function useRailWidth(): [number, (w: number) => void] {
+  const [width, setWidth] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(RAIL_WIDTH_KEY));
+      return saved ? clampRail(saved) : RAIL_DEFAULT;
+    } catch {
+      return RAIL_DEFAULT;
+    }
+  });
+  // A narrower window can push the saved width past the max.
+  useEffect(() => {
+    const onResize = () => setWidth((w) => clampRail(w));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const set = (w: number) => {
+    const c = clampRail(w);
+    setWidth(c);
+    try {
+      localStorage.setItem(RAIL_WIDTH_KEY, String(c));
+    } catch { /* private mode */ }
+  };
+  return [width, set];
+}
+
+/** Desktop: a left rail the reader can resize (drag the edge, or arrow keys on it). */
 export function SessionRail({ onCollapse }: { onCollapse: () => void }) {
+  const [width, setWidth] = useRailWidth();
+  const drag = useRef<{ x: number; w: number } | null>(null);
   return (
     <aside
-      className="hidden h-full w-64 shrink-0 sm:flex sm:flex-col"
-      style={{ borderRight: '1px solid var(--color-border-soft)', backgroundColor: 'var(--color-card)' }}
+      className="relative hidden h-full shrink-0 sm:flex sm:flex-col"
+      style={{ width, borderRight: '1px solid var(--color-border-soft)', backgroundColor: 'var(--color-card)' }}
       data-testid="session-rail"
     >
       <SessionList onCollapse={onCollapse} />
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sessions"
+        aria-valuemin={RAIL_MIN}
+        aria-valuemax={RAIL_MAX}
+        aria-valuenow={width}
+        tabIndex={0}
+        data-testid="session-rail-resize"
+        className="absolute right-0 top-0 z-20 h-full w-2 cursor-col-resize outline-none hover:bg-[var(--color-border)] focus-visible:bg-[var(--color-ring)]"
+        style={{ touchAction: 'none' }}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          drag.current = { x: e.clientX, w: width };
+        }}
+        onPointerMove={(e) => {
+          if (drag.current) setWidth(drag.current.w + e.clientX - drag.current.x);
+        }}
+        onPointerUp={(e) => {
+          drag.current = null;
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }}
+        onDoubleClick={() => setWidth(RAIL_DEFAULT)}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowLeft') setWidth(width - 16);
+          if (e.key === 'ArrowRight') setWidth(width + 16);
+        }}
+      />
     </aside>
   );
 }
@@ -474,8 +546,8 @@ export function SessionsToggle({ onClick, className }: { onClick: () => void; cl
     <button
       type="button"
       data-testid="sessions-toggle"
-      title="Sessions"
-      aria-label="Sessions"
+      title="Show sessions"
+      aria-label="Show sessions"
       className={`inline-flex size-7 shrink-0 items-center justify-center rounded hover:bg-[var(--color-muted)] ${className ?? ''}`}
       style={{ color: 'var(--color-text-dim)' }}
       onClick={onClick}

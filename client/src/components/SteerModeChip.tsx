@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useDaemonEvent } from '../lib/daemonEvents';
 
 type SteerMode = 'steer' | 'interrupt';
 
@@ -16,23 +17,12 @@ export const SteerModeChip = ({ activeProfile }: Props) => {
 
   const isHermes = activeProfile === 'hermes';
 
-  useEffect(() => {
-    if (!isHermes) return;
-    const es = new EventSource('/api/events');
-    es.addEventListener('init', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.steerMode) setMode(data.steerMode as SteerMode);
-      } catch { /* ignore */ }
-    });
-    es.addEventListener('steerModeChanged', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.mode) setMode(data.mode as SteerMode);
-      } catch { /* ignore */ }
-    });
-    return () => es.close();
-  }, [isHermes]);
+  useDaemonEvent('init', (data: { steerMode?: SteerMode }) => {
+    if (data?.steerMode) setMode(data.steerMode);
+  });
+  useDaemonEvent('steerModeChanged', (data: { mode?: SteerMode }) => {
+    if (data?.mode) setMode(data.mode);
+  });
 
   if (!isHermes) return null;
 
