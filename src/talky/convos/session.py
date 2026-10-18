@@ -19,6 +19,8 @@ NativeIdReader = Callable[[], Optional[str]]
 ChangeListener = Callable[[str, str, str], None]
 
 NATIVE_ID_RECHECK_SECS = 2.0
+# Same value as VoiceChannel.MCP_DRIVER_PROFILE (kept here to avoid importing channel.py).
+MCP_DRIVER_PROFILE = "__mcp__"
 
 
 class ConvoSession:
@@ -55,6 +57,9 @@ class ConvoSession:
         return self.record.id if self.record else self.resume_into
 
     def set_active(self, *, backend: str, profile: str, native_id_reader: Optional[NativeIdReader]) -> None:
+        if profile == MCP_DRIVER_PROFILE:
+            # MCP mode is a driver, not a backend a session can resume into; keep the last real one.
+            return
         self.backend = backend
         self.profile = profile
         self._native_id_reader = native_id_reader
