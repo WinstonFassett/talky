@@ -7,7 +7,8 @@
 //
 //   disconnected → connecting → connected
 //                       ↘ reconnecting (an unexpected drop; a few tries with backoff)
-//                              ↘ offline (gave up; Retry starts over)
+//                              ↘ offline (gave up; Retry starts over, and so
+//                                does the daemon coming back)
 //
 // A drop is noticed from the transport state, or sooner when the daemon's
 // event stream drops and the daemon doesn't answer a request. Every
@@ -192,6 +193,16 @@ export function CallProvider({
           });
       }),
     [client, dropped],
+  );
+
+  // Offline, and the daemon is back (its event stream reconnected and sent
+  // `init`): reconnect without waiting for Retry.
+  useEffect(
+    () =>
+      onDaemonEvent('init', () => {
+        if (modeRef.current === 'offline' && wanted.current) void reconnect();
+      }),
+    [reconnect],
   );
 
   // Coming back to a backgrounded tab: if the call died while it was hidden, reconnect.

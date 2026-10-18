@@ -75,6 +75,9 @@ import time
 from typing import Any, Optional
 
 from loguru import logger
+
+# Only a turn interrupted this recently is resumed after a restart (WIN-536).
+INTERRUPTED_TURN_MAX_AGE_SECS = 10 * 60
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     InterruptionFrame,
@@ -1464,6 +1467,16 @@ class VoiceChannel:
         except Exception as e:  # noqa: BLE001 — a corrupt store must not block startup
             logger.warning(f"VoiceChannel: interrupted-turn scan failed: {e}")
             return
+        # A turn cut off long ago (the browser closed mid-turn, then the daemon
+        # restarted hours later) is not one to resume: replaying it whenever
+        # that session is next opened would surprise the user.
+        cutoff = time.time() - INTERRUPTED_TURN_MAX_AGE_SECS
+        for rec in [r for r in interrupted if r.last_active_at < cutoff]:
+            try:
+                self._convo_store.set_in_progress(rec.id, False)
+            except Exception:  # noqa: BLE001
+                pass
+        interrupted = [r for r in interrupted if r.last_active_at >= cutoff]
         if not interrupted:
             return
         for rec in interrupted[1:]:

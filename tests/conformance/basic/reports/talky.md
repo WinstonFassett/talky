@@ -9,13 +9,13 @@ pass 48 · fail 1 · n/a 7 · untested 0
 | Following the stream while at the bottom | @must | pass | 20 updates, every one pinned on the next frame, scroll-behavior auto |
 | Reading history while the agent streams | @must | pass | 20 updates (thinking, tool rows, text), scrollTop held at 2115 |
 | A scroll-wheel up releases the pin at once | @must | pass | after one wheel tick the next update left the view 379px from the bottom |
-| Scrolling up during a real reply is never pulled back | @must | pass | 5 renders while scrolled up left scrollTop at 2492; following resumed 40px from the bottom |
+| Scrolling up during a real reply is never pulled back | @must | pass | 4 renders while scrolled up left scrollTop at 2517; following resumed 40px from the bottom |
 | A way back to the newest message | @must | pass | "Scroll to latest, 1 new" showed 1 unread above the composer and jumped to the bottom |
-| Opening a conversation lands at the bottom | @must | pass | every painted frame with messages (30) was at the bottom |
+| Opening a conversation lands at the bottom | @must | pass | every painted frame with messages (18) was at the bottom |
 | An existing conversation never flashes the empty state | @must | pass | the address showed a loading state, then the messages, and never the empty state |
 | My own message always pins | @must | pass |  |
 | Enter sends, Shift+Enter breaks a line, on desktop | @must | pass | Shift+Enter inserted a newline; Enter sent both lines and cleared the composer |
-| Enter during IME composition never sends | @must | pass | a composing Enter (isComposing, keyCode 229) sent nothing in 2s; a plain Enter then sent in 6459ms |
+| Enter during IME composition never sends | @must | pass | a composing Enter (isComposing, keyCode 229) sent nothing in 2s; a plain Enter then sent in 4720ms |
 | On a phone, Enter is a newline | @must | pass | Return inserted a newline; the Send button sent |
 | The shortcut is written down | @must | pass | Enter to send, Shift + Enter for new line |
 | The composer is focused and ready on load | @must | pass |  |
@@ -31,10 +31,10 @@ pass 48 · fail 1 · n/a 7 · untested 0
 | A stuck tool row never runs forever | @must @agent | pass | ✗ NO RESULT fetch 2s |
 | A turn that ends with nothing visible says so | @must | pass |  |
 | Reasoning is folded | @must @agent | pass |  |
-| A new chat appears in the list at once | @must | pass | listed under Today before the reply; URL is /?session=f9a0d53e-c9b8-4833-a739-83d240c14d2b |
+| A new chat appears in the list at once | @must | pass | listed under Today before the reply; URL is /?session=6fb18fb7-3360-4644-9f6b-a03f995239bb |
 | Each chat shows whether it is working | @must | pass |  |
-| Each chat shows working, idle, or failed at a glance | @must @agent | pass | 280 rows with dots: working animated, failed red, idle green |
-| The list is grouped by time and searchable | @must | pass | groups Today / Yesterday / Last 7 days / Older; search narrowed to one title in 432ms |
+| Each chat shows working, idle, or failed at a glance | @must @agent | pass | 331 rows with dots: working animated, failed red, idle green |
+| The list is grouped by time and searchable | @must | pass | groups Today / Yesterday / Last 7 days / Older; search narrowed to one title in 611ms |
 | Copy a message | @must | pass | the clipboard got the message's markdown |
 | Copy a code block | @must | pass | "copy" → "copied" → "copy" |
 | Retry, edit, and branch | @must | pass | Retry re-sent it, Edit put it back in the composer, Branch off opened a new chat with it in the composer |
@@ -59,6 +59,6 @@ pass 48 · fail 1 · n/a 7 · untested 0
 | After signing out, nothing private is reachable | @must | n/a | Talky has no accounts and no sign-in: it is a single-user app the owner runs on their own machine. The local listener binds loopback; the optional remote listener is HTTPS on the owner's network. There is no identity to sign in or out of. (The remote listener has no access control at all — tracked in WIN-555.) |
 | The transcript is a polite live region | @must | pass | role=log aria-live=polite, heading "Conversation" |
 | Motion respects the system setting | @must | pass | with reduced motion on, nothing animated while thinking, while a tool ran, or while text streamed |
-| Every icon button has a name | @must | pass | 319 icon-only buttons, all named |
+| Every icon button has a name | @must | pass | 370 icon-only buttons, all named |
 | No text sits on top of other text | @must | pass | no overlapping text on desktop and phone, idle and mid-turn |
 | The empty state offers starters | @must | pass | "What do you want to talk about?" with 4 starters; one click sent "What can you help me with?" |

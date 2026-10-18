@@ -510,6 +510,8 @@ const checks = {
 				if ((await messageCount(page)) !== 0) fail("Return sent the message on a touch device");
 				await page.tap(sel.send);
 				await page.waitForFunction((m) => [...document.querySelectorAll(m)].some((e) => e.innerText.includes("two")), sel.message, { timeout: 30000 });
+				// Let the reply finish: closing the tab mid-turn would leave the daemon a turn to clean up.
+				await waitTurnDone(page);
 				return "Return inserted a newline; the Send button sent";
 			}),
 
@@ -931,9 +933,11 @@ const checks = {
 			} finally {
 				daemon("start");
 			}
-			await page.click(sel.retry);
-			await page.waitForFunction(isConnected, sel.voice, { timeout: 30000 }).catch(() => fail("Retry did not reconnect"));
-			return "Reconnecting, then Offline with Retry; Retry reconnected once the daemon was back";
+			// Once the daemon is back the page may reconnect by itself; if it's still offline, Retry must.
+			const viaRetry = await page.locator(sel.retry).isVisible().catch(() => false);
+			if (viaRetry) await page.click(sel.retry);
+			await page.waitForFunction(isConnected, sel.voice, { timeout: 30000 }).catch(() => fail("it never reconnected after the daemon came back"));
+			return `Reconnecting, then Offline with Retry (no spinner); reconnected ${viaRetry ? "on Retry" : "by itself"} once the daemon was back`;
 		},
 
 		"A stale close cannot undo a good connection": async ({ page, base }) => {
