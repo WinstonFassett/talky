@@ -118,7 +118,11 @@ def main() -> int:
                 rec = next((c for c in cv["convos"] if (c.get("title") or "").startswith("Hermes")), {})
                 check(prof.get("t3") is True, "Hermes unavailable: pipeline stays on t3")
                 check(rec.get("backend") == "hermes", "Hermes chat record not re-tagged as t3")
-                check(page.get_by_text(re.compile("isn.t available", re.I)).count() > 0, "an error says why the Hermes chat can't open")
+                page.wait_for_timeout(1500)
+                if a.mobile:
+                    check(page.get_by_test_id("sidebar-tabs").count() == 0 or not page.get_by_test_id("sidebar-tabs").is_visible(), "phone: drawer closed after pick")
+                    check(page.get_by_test_id("session-error-banner").is_visible(), "phone: error is visible outside the drawer")
+                check(page.get_by_text(re.compile("isn.t available", re.I)).first.is_visible(), "an error says why the Hermes chat can't open")
                 r = ask("after-fail-q", None)
                 check("ack:" in r and not (get("/api/convos")["current"] or {}).get("id") == rec.get("id"), "a T3 reply never lands in the Hermes chat")
                 br.close()
@@ -159,7 +163,7 @@ def main() -> int:
         r = ask("claude-q", None)
         shot("3-claude-opened")
         check(CLAUDE_MARKER in r and f"claude:{CLAUDE_ID}" in r, "Claude chat: reply from Claude session about ITS history")
-        check(HERMES_MARKER not in " ".join(texts()) .replace("remember the word " + HERMES_MARKER, "") or True, "claude chat shows no hermes history")
+        check(HERMES_MARKER not in " ".join(texts()) .replace("remember the word " + HERMES_MARKER, ""), "claude chat shows no hermes history")
         check("T3 is working" not in " ".join(texts()), "no 'T3 is working' lines in the Claude chat")
 
         pick("t3")
