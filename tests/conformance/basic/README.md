@@ -33,7 +33,7 @@ checks survive the kit rip-out.
 ## How to run
 
 ```bash
-# 1. Isolated daemon (never Winston's ~/.talky / ports 8765):
+# 1. Isolated daemon (never your real ~/.talky / ports 8765):
 mkdir -p iso-home/.talky
 cp ~/.talky/*.yaml iso-home/.talky/          # talky-profiles, llm-backends, voice-profiles
 cp -R ~/.talky/credentials ~/.talky/ssl iso-home/.talky/   # if present

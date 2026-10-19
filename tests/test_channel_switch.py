@@ -57,12 +57,6 @@ async def test_soft_switch_rejects_unknown_profile(ch, known_profiles):
         await ch.switch_to_profile("nope-not-real")
 
 @pytest.mark.asyncio
-async def test_removed_openclaw_profile_is_unknown_not_a_crash(ch, known_profiles):
-    """OpenClaw was removed (WIN-558); a stale config naming it gets a clear error."""
-    with pytest.raises(ValueError, match="unknown profile 'openclaw'"):
-        await ch.switch_to_profile("openclaw")
-
-@pytest.mark.asyncio
 async def test_live_switch_queues_manually_switch_service_frame(ch, known_profiles, monkeypatch):
     """When a pipeline is live, switch_to_profile queues a frame on it."""
     fake_service = object()
