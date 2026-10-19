@@ -424,6 +424,17 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     }, [bind, loadHistory]),
   );
 
+  // WIN-587: T3 is truth. The daemon re-reads a T3 chat's thread on every GET, so while a T3 chat is open
+  // outside a call, re-read it every 10 s (the sidebar's T3 poll is unmounted while the phone drawer is closed).
+  const openIsT3 = rows.some((r) => r.id === openId && r.backend === 't3');
+  useEffect(() => {
+    if (!openIsT3 || !openId) return;
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible' && !inCallRef.current) void loadHistory(openId).catch(() => {});
+    }, 10_000);
+    return () => clearInterval(t);
+  }, [openIsT3, openId, loadHistory]);
+
   const mark = liveMark > liveMessages.length ? 0 : liveMark;
   const messages = useMemo(
     () => (history.length ? [...history, ...liveMessages.slice(mark)] : liveMessages.slice(mark)),

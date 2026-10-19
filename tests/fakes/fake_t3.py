@@ -111,6 +111,14 @@ async def h_log(request: web.Request) -> web.Response:
     return web.json_response(request.app["state"].log)
 
 
+async def h_say(request: web.Request) -> web.Response:
+    """POST /__say?thread=ID&text=... — a message typed in the T3 web client (not via Talky)."""
+    st: State = request.app["state"]
+    tid = request.query["thread"]
+    st.append_turn(tid, request.query["text"])
+    return web.json_response({"ok": True})
+
+
 async def h_stop(request: web.Request) -> web.Response:
     asyncio.get_running_loop().call_later(0.1, request.app["stop"].set)
     return web.json_response({"stopping": True})
@@ -187,6 +195,7 @@ async def main(port: int, fixture: Path) -> None:
             web.post("/api/auth/websocket-ticket", h_ticket),
             web.get("/ws", h_ws),
             web.get("/__log", h_log),
+            web.post("/__say", h_say),
             web.post("/__stop", h_stop),
         ]
     )

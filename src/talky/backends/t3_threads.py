@@ -285,6 +285,7 @@ async def attach_thread(thread_id: str, store=None) -> dict:  # noqa: ANN001
             raise LookupError(f"T3 thread {thread_id!r} not found")
         existing = store.find_by_link("t3", thread_id)
         if existing is not None:
+            await _sync_with(store, existing.id, thread_id, c, thread)
             return {"convo_id": existing.id, "thread": thread, "created": False}
         msgs = await recent_messages(thread_id, client=c)
     finally:
@@ -293,3 +294,56 @@ async def attach_thread(thread_id: str, store=None) -> dict:  # noqa: ANN001
     for m in msgs:
         store.append_turn(rec.id, m["role"], m["text"])
     return {"convo_id": rec.id, "thread": thread, "created": True, "context_messages": len(msgs)}
+
+
+def _ts(iso: Optional[str]) -> Optional[float]:
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp() if iso else None
+    except ValueError:
+        return None
+
+
+def _missing_tail(stored: list, t3_msgs: list[dict]) -> list[dict]:
+    """T3 messages after the newest one matching a recent stored turn (role+text); [] if none match."""
+    if not stored:
+        return t3_msgs
+    for turn in reversed(stored[-4:]):
+        for j in range(len(t3_msgs) - 1, -1, -1):
+            if t3_msgs[j]["role"] == turn.role and t3_msgs[j]["text"] == turn.content.strip():
+                return t3_msgs[j + 1 :]
+    return []
+
+
+async def _sync_with(store, convo_id: str, thread_id: str, c: T3Client, thread: dict) -> int:  # noqa: ANN001
+    """Append T3 turns the stored transcript lacks and set ``in_progress`` from T3's run status."""
+    msgs = await recent_messages(thread_id, 10_000, client=c)
+    added = _missing_tail(store.read_transcript(convo_id), msgs)
+    for m in added:
+        store.append_turn(convo_id, m["role"], m["text"], timestamp=_ts(m["created_at"]))
+    store.set_in_progress(convo_id, thread["status"] == "running")
+    return len(added)
+
+
+async def sync_convo(store, convo_id: str) -> int:  # noqa: ANN001
+    """Refresh a T3-linked Chat from its thread (T3 is truth, the transcript a cache); idempotent.
+
+    Returns the number of turns appended. T3 being unreachable is logged and leaves the stored data alone.
+    """
+    from loguru import logger
+
+    rec = store.get(convo_id)
+    if rec is None or rec.backend != "t3" or not rec.native_session_id:
+        return 0
+    thread_id = rec.native_session_id
+    try:
+        c = T3Client(base_url(), await asyncio.to_thread(ensure_token))
+        try:
+            thread = next((r for r in normalise(await _shell(c)) if r["id"] == thread_id), None)
+            if thread is None:
+                return 0
+            return await _sync_with(store, convo_id, thread_id, c, thread)
+        finally:
+            await c.close()
+    except Exception as e:  # noqa: BLE001 — T3 down/auth: keep the cache as is
+        logger.warning(f"t3 sync {convo_id}: {e}")
+        return 0
