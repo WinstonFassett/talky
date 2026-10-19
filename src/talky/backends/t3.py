@@ -97,7 +97,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         from talky.backends import BackendStatus
 
         if not available():
-            return BackendStatus.MISCONFIGURED, "run `talky t3 login` (or set T3_TOKEN / T3_TOKEN_FILE)"
+            return BackendStatus.MISCONFIGURED, "T3 Code CLI not found (set T3_BIN or install T3 Code)"
         return BackendStatus.READY, ""
 
     def __init__(
@@ -149,7 +149,11 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
 
     async def start(self, frame: StartFrame):
         await super().start(frame)
-        self._client = T3Client(self._base_url, self._load_token())
+        try:
+            self._client = T3Client(self._base_url, await asyncio.to_thread(self._load_token))
+        except T3AuthError as e:  # a failed T3 must not stop the pipeline build; _run_turn reports it
+            logger.warning(f"T3LLMService: no token at start ({e.code}); will retry on the first turn")
+            self._client = T3Client(self._base_url, "")
         logger.info(f"T3LLMService started — base_url={self._base_url} thread={self._thread_id}")
 
     async def stop(self, frame: EndFrame):
@@ -189,7 +193,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         cue = asyncio.create_task(self._working_cue(lambda: started))
         try:
             try:
-                c._token = self._load_token()  # noqa: SLF001 — picks up a refreshed session
+                c._token = await asyncio.to_thread(self._load_token)  # noqa: SLF001 — picks up a refreshed session
             except T3AuthError as e:
                 await self._emit_backend_error(str(e))
                 return

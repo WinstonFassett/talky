@@ -205,3 +205,37 @@ def test_token_refresh_reissues_near_expiry_and_keeps_mode_600(tmp_path, monkeyp
     # a fresh token is used as-is, no further CLI calls
     calls.clear()
     assert t3_auth.ensure_token(token_file=str(path)) == "tok-new" and calls == []
+
+
+# --- WIN-575: auto-connect ---
+
+
+@pytest.mark.asyncio
+async def test_run_turn_loads_token_off_the_event_loop(monkeypatch):
+    import threading
+
+    seen: list[bool] = []
+
+    def load(self):
+        seen.append(threading.current_thread() is not threading.main_thread())
+        return "tok"
+
+    monkeypatch.setattr(T3LLMService, "_load_token", load)
+    svc = T3LLMService(poll_interval=0)
+    svc._client = FakeClient()  # type: ignore[assignment]
+    await _collect(svc)
+    await svc._run_turn("hi")
+    assert seen == [True]
+
+
+def test_status_is_ready_with_cli_but_no_token_and_misconfigured_without(monkeypatch, tmp_path):
+    from talky.backends import BackendStatus
+
+    monkeypatch.delenv("T3_TOKEN", raising=False)
+    monkeypatch.setenv("T3_TOKEN_FILE", str(tmp_path / "none.json"))
+    monkeypatch.setenv("T3_BIN", "/bin/true")
+    assert T3LLMService.status()[0] == BackendStatus.READY
+    monkeypatch.delenv("T3_BIN")
+    monkeypatch.setattr(t3_auth, "t3_bin", lambda: None)
+    st, msg = T3LLMService.status()
+    assert st == BackendStatus.MISCONFIGURED and "CLI not found" in msg

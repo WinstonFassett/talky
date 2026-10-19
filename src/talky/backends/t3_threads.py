@@ -8,10 +8,14 @@ with the thread's recent messages so the transcript shows context.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any, Optional
 
-from talky.backends.t3_auth import ensure_token
+import httpx
+
+from talky.backends import t3_auth
+from talky.backends.t3_auth import T3AuthError, ensure_token
 from talky.backends.t3_client import T3Client
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3773"
@@ -22,6 +26,23 @@ _STATUS = {"running": "running", "idle": "idle", "completed": "completed", "fail
 
 def base_url() -> str:
     return os.environ.get("T3_BASE_URL") or DEFAULT_BASE_URL
+
+
+async def _shell(c: T3Client) -> dict:
+    """The shell snapshot; a 401 (revoked/expired session) re-issues once and retries once."""
+    try:
+        return await c.shell()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code != 401:
+            raise
+    rec = await asyncio.to_thread(t3_auth.issue)
+    c._token = rec["token"]  # noqa: SLF001
+    try:
+        return await c.shell()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            raise T3AuthError("T3 rejected the new session", "denied") from e
+        raise
 
 
 def short_id(thread_id: str) -> str:
@@ -66,9 +87,9 @@ def normalise(snapshot: dict) -> list[dict]:
 
 async def list_threads(limit: Optional[int] = None, *, client: Optional[T3Client] = None) -> list[dict]:
     own = client is None
-    c = client or T3Client(base_url(), ensure_token())
+    c = client or T3Client(base_url(), await asyncio.to_thread(ensure_token))
     try:
-        rows = normalise(await c.shell())
+        rows = normalise(await _shell(c))
     finally:
         if own:
             await c.close()
@@ -78,7 +99,7 @@ async def list_threads(limit: Optional[int] = None, *, client: Optional[T3Client
 async def recent_messages(thread_id: str, n: int = CONTEXT_MESSAGES, *, client: Optional[T3Client] = None) -> list[dict]:
     """The thread's last ``n`` user/assistant messages as ``{role, text, created_at}``."""
     own = client is None
-    c = client or T3Client(base_url(), ensure_token())
+    c = client or T3Client(base_url(), await asyncio.to_thread(ensure_token))
     try:
         proj: dict[str, Any] = await c.thread_projection(thread_id)
     finally:
@@ -112,9 +133,9 @@ async def attach_thread(thread_id: str, store=None) -> dict:  # noqa: ANN001
     from talky.convos import default_store
 
     store = store or default_store()
-    c = T3Client(base_url(), ensure_token())
+    c = T3Client(base_url(), await asyncio.to_thread(ensure_token))
     try:
-        rows = normalise(await c.shell())
+        rows = normalise(await _shell(c))
         thread = next((r for r in rows if r["id"] == thread_id), None)
         if thread is None:
             raise LookupError(f"T3 thread {thread_id!r} not found")

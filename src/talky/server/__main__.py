@@ -951,8 +951,57 @@ def _build_webrtc_routes():
         try:
             rows = await t3_threads.list_threads()
         except Exception as e:  # noqa: BLE001 — no token, T3 down, 401…
-            return JSONResponse({"error": f"T3 unavailable: {e}"}, status_code=502)
+            return _t3_error(e)
         return JSONResponse({"threads": rows})
+
+    def _t3_error(e: Exception) -> JSONResponse:
+        """503 + ``code`` for connection-state errors the UI can act on; 502 for anything else."""
+        import httpx
+
+        from talky.backends import t3_threads
+        from talky.backends.t3_auth import T3AuthError
+
+        if isinstance(e, T3AuthError):
+            msg = f"T3 Code isn't running at {t3_threads.base_url()}" if e.code == "t3_down" else str(e)
+            return JSONResponse({"error": msg, "code": e.code}, status_code=503)
+        if isinstance(e, (httpx.ConnectError, httpx.TimeoutException)):
+            return JSONResponse({"error": f"T3 Code isn't running at {t3_threads.base_url()}", "code": "t3_down"}, status_code=503)
+        return JSONResponse({"error": f"T3 unavailable: {e}"}, status_code=502)
+
+    async def handle_t3_status(request: Request):  # noqa: ARG001
+        """GET /api/t3/status — connection state; a first call auto-issues a session (see ``t3_auth.status``)."""
+        from talky.backends import t3_auth
+
+        return JSONResponse(await asyncio.to_thread(t3_auth.status))
+
+    async def handle_t3_connect(request: Request):  # noqa: ARG001
+        """POST /api/t3/connect — force a fresh session (Connect / Retry); resets the failure cooldown."""
+        from talky.backends import t3_auth, t3_threads
+
+        def _go() -> dict:
+            try:
+                t3_auth.connect()
+            except t3_auth.T3AuthError as e:
+                return {"state": "needs_connect", "code": e.code, "detail": str(e), "session": None,
+                        "expires_at": None, "scopes": [], "base_url": t3_threads.base_url()}
+            return t3_auth.status()
+
+        return JSONResponse(await asyncio.to_thread(_go))
+
+    async def handle_t3_disconnect(request: Request):  # noqa: ARG001
+        """POST /api/t3/disconnect — revoke the stored session and delete the token file."""
+        from talky.backends import t3_auth, t3_threads
+
+        def _go() -> dict:
+            try:
+                t3_auth.disconnect()
+            except t3_auth.T3AuthError as e:
+                logger.warning(f"t3 disconnect: revoke failed ({e.code}); removing the token file anyway")
+                t3_auth.token_path().unlink(missing_ok=True)
+            return {"state": "needs_connect", "code": None, "detail": "disconnected", "session": None,
+                    "expires_at": None, "scopes": [], "base_url": t3_threads.base_url()}
+
+        return JSONResponse(await asyncio.to_thread(_go))
 
     async def handle_t3_attach(request: Request):
         """POST /api/t3/attach — JSON ``{"thread_id": str}``.
@@ -977,7 +1026,7 @@ def _build_webrtc_routes():
         except LookupError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
         except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"T3 unavailable: {e}"}, status_code=502)
+            return _t3_error(e)
         svc = voice_channel._llm_services.get("t3")  # noqa: SLF001
         if svc is not None and hasattr(svc, "set_resume"):
             svc.set_resume(thread["id"])
@@ -1375,6 +1424,9 @@ def _build_webrtc_routes():
         Route("/api/voices", handle_get_voices, methods=["GET"]),
         Route("/api/voices/switch", handle_switch_voice, methods=["POST"]),
         Route("/api/resume", handle_set_resume, methods=["POST"]),
+        Route("/api/t3/status", handle_t3_status, methods=["GET"]),
+        Route("/api/t3/connect", handle_t3_connect, methods=["POST"]),
+        Route("/api/t3/disconnect", handle_t3_disconnect, methods=["POST"]),
         Route("/api/t3/threads", handle_t3_threads, methods=["GET"]),
         Route("/api/t3/attach", handle_t3_attach, methods=["POST"]),
         Route("/api/convos/resume", handle_resume_convo, methods=["POST"]),

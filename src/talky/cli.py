@@ -906,7 +906,7 @@ def cmd_t3(args):
 
     if sub == "login":
         try:
-            rec = t3_auth.issue(ttl=args.ttl)
+            rec = t3_auth.connect(ttl=args.ttl)
         except t3_auth.T3AuthError as e:
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(1)
@@ -1535,7 +1535,7 @@ def main():
     t3_at = t3_sub.add_parser("attach", help="Talk to an existing T3 thread (id prefix or title text)")
     t3_at.add_argument("thread", help="Thread id, id prefix, or part of the title")
     t3_at.add_argument("--no-open", action="store_true", help="Don't open the Talky app/browser when no call is live")
-    t3_lg = t3_sub.add_parser("login", help="Issue a narrow T3 session (read+operate) into ~/.talky/credentials/t3.json (mode 600)")
+    t3_lg = t3_sub.add_parser("login", help="Optional — Talky connects by itself. Issue a narrow T3 session (read+operate) into ~/.talky/credentials/t3.json (mode 600)")
     t3_lg.add_argument("--ttl", default="8h", help="Session lifetime, e.g. 8h (default)")
     t3_sub.add_parser("logout", help="Revoke the stored T3 session and delete the token file")
     t3_parser.set_defaults(func=cmd_t3)

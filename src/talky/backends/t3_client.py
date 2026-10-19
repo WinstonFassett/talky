@@ -166,7 +166,7 @@ class T3Client:
         )
 
     async def interrupt(self, thread_id: str) -> None:
-        """Interrupt the thread's active run (``thread.stop`` is not accepted from clients)."""
+        """Interrupt the thread's active run (the stop command is not accepted from clients)."""
         p = await self.thread_projection(thread_id)
         active = [r for r in p["runs"] if r["status"] in ("preparing", "queued", "starting", "running", "waiting")]
         for r in active:
