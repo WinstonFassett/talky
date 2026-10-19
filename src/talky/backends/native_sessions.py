@@ -56,6 +56,45 @@ def _is_noise(text: str) -> bool:
     return not t or t.startswith("<") or t.startswith("Caveat:")
 
 
+AUTOMATED_PREFIXES = ("you are running as a local coding agent", "act as the implementation sub-agent")
+TITLE_LEN = 60
+MAX_SCAN = 400  # session files inspected per listing, so hidden automated ones can't starve the page
+
+
+def _is_automated(first_prompt: str, project: str = "") -> bool:
+    """Multica worker / sub-agent sessions: boilerplate first prompt, or a daemon ``workdir`` project."""
+    return project == "workdir" or first_prompt.lstrip().lower().startswith(AUTOMATED_PREFIXES)
+
+
+def _title_from(prompt: str) -> str:
+    """First user message, one line, ~60 chars, with a leading automated-boilerplate sentence stripped."""
+    t = " ".join(prompt.split())
+    if t.lower().startswith(AUTOMATED_PREFIXES):
+        # Boilerplate first sentence is useless as a title; keep whatever follows it.
+        t = t.split(". ", 1)[1] if ". " in t else t
+    return t[:TITLE_LEN].rstrip()
+
+
+def _claude_ai_title(path: Path) -> Optional[str]:
+    """Last ``ai-title`` / ``custom-title`` entry of a session file, if any (cheap substring pre-filter)."""
+    title = None
+    try:
+        with path.open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"ai-title"' not in line and '"custom-title"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                t = d.get("aiTitle") if d.get("type") == "ai-title" else d.get("customTitle")
+                if isinstance(t, str) and t.strip():
+                    title = t.strip()
+    except OSError:
+        pass
+    return title
+
+
 def _claude_turns(path: Path, limit: Optional[int] = None) -> tuple[list[dict], Optional[str]]:
     """``(turns, cwd)`` of one session file: real user/assistant text only (no tool results)."""
     turns: list[dict] = []
@@ -85,16 +124,18 @@ def _list_claude(limit: int) -> list[dict]:
     files = [p for p in _claude_root().glob("*/*.jsonl") if not p.name.startswith("agent-")]
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     rows = []
-    for p in files:
-        if len(rows) >= limit:
+    for p in files[:MAX_SCAN]:
+        if sum(1 for r in rows if not r["automated"]) >= limit:
             break
         turns, cwd = _claude_turns(p, 1)
         if not turns:
             continue
-        title = turns[0]["text"].replace("\n", " ")[:90]
         project = Path(cwd).name if cwd else p.parent.name
+        first = turns[0]["text"]
+        title = _claude_ai_title(p) or _title_from(first)
         rows.append({"id": p.stem, "title": title, "project": project, "project_id": project,
-                     "last_activity": _iso(p.stat().st_mtime), "model": ""})
+                     "last_activity": _iso(p.stat().st_mtime), "model": "",
+                     "automated": _is_automated(first, project) or p.parent.name.endswith("-workdir")})
     return rows
 
 
@@ -108,17 +149,18 @@ def _list_hermes(limit: int) -> list[dict]:
     c = _hermes_conn()
     try:
         q = (
-            "SELECT s.id, s.source, s.model, COALESCE(s.ended_at, s.started_at), "
+            "SELECT s.id, s.source, s.model, COALESCE(s.ended_at, s.started_at), s.title, "
             "(SELECT content FROM messages m WHERE m.session_id = s.id AND m.role = 'user' "
             " AND m.content IS NOT NULL AND m.content != '' ORDER BY m.id LIMIT 1) "
-            "FROM sessions s WHERE s.message_count > 0 ORDER BY 4 DESC LIMIT ?"
+            "FROM sessions s WHERE s.message_count > 0 AND COALESCE(s.hidden, 0) = 0 ORDER BY 4 DESC LIMIT ?"
         )
         rows = []
-        for sid, source, model, ts, first in c.execute(q, (limit,)):
+        for sid, source, model, ts, name, first in c.execute(q, (limit * 3,)):
             if not first:
                 continue
-            rows.append({"id": sid, "title": first.replace("\n", " ")[:90], "project": source or "hermes",
-                         "project_id": source or "hermes", "last_activity": _iso(ts), "model": model or ""})
+            title = (name or "").strip() or _title_from(first)
+            rows.append({"id": sid, "title": title, "project": source or "hermes", "project_id": source or "hermes",
+                         "last_activity": _iso(ts), "model": model or "", "automated": _is_automated(first)})
         return rows
     finally:
         c.close()

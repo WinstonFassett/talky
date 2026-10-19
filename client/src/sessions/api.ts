@@ -98,6 +98,7 @@ export type T3Thread = {
   model: string;
   pinned: boolean;
   convo_id: string | null;
+  automated?: boolean;
 };
 
 export type T3Project = {

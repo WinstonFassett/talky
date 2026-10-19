@@ -82,6 +82,7 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
   const { open } = useSessions();
   const [source, setSource] = useState<Source>('t3');
   const [nativeProject, setNativeProject] = useState<string | null>(null);
+  const [showAutomated, setShowAutomated] = useState(false);
   const tool: NativeTool | null = source === 't3' ? null : source;
   const native = useNativeSessions(tool);
   const [attaching, setAttaching] = useState<string | null>(null);
@@ -109,9 +110,11 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
     }
   };
 
-  const nativeRows = native.sessions?.filter((t) => !nativeProject || t.project_id === nativeProject) ?? null;
+  const automatedCount = native.sessions?.filter((t) => t.automated).length ?? 0;
+  const nativeVisible = native.sessions?.filter((t) => showAutomated || !t.automated) ?? null;
+  const nativeRows = nativeVisible?.filter((t) => !nativeProject || t.project_id === nativeProject) ?? null;
   const nativeOptions = Object.values(
-    (native.sessions ?? []).reduce<Record<string, { id: string; title: string; count: number }>>((acc, t) => {
+    (nativeVisible ?? []).reduce<Record<string, { id: string; title: string; count: number }>>((acc, t) => {
       const k = t.project_id ?? t.project;
       (acc[k] ??= { id: k, title: t.project, count: 0 }).count++;
       return acc;
@@ -228,6 +231,22 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
         {err && (
           <div className="px-2 pb-2 text-[12px]" style={{ color: 'var(--color-destructive)' }} data-testid="t3-error">
             {err}
+          </div>
+        )}
+        {tool && automatedCount > 0 && (
+          <label className="flex items-center gap-1.5 px-2 pb-1.5 text-[11px]" style={mute}>
+            <input
+              type="checkbox"
+              data-testid="intools-show-automated"
+              checked={showAutomated}
+              onChange={(e) => setShowAutomated(e.target.checked)}
+            />
+            Show automated ({automatedCount})
+          </label>
+        )}
+        {tool && native.sessions && native.sessions.length > 0 && nativeRows?.length === 0 && !native.error && (
+          <div className="px-3 py-6 text-center text-[12px] leading-snug" style={mute} data-testid="intools-empty-filtered">
+            Only automated sessions here. Tick “Show automated” to see them.
           </div>
         )}
         {tool && native.sessions?.length === 0 && !native.error && (
