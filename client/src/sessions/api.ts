@@ -131,12 +131,13 @@ export const t3Api = {
     const body = await json<{ projects: T3Project[] }>(r);
     return { notModified: false, etag: r.headers.get('ETag'), projects: body.projects };
   },
-  threads: (opts: { project?: string; cursor?: string | null; limit?: number } = {}) => {
+  threads: (opts: { project?: string; cursor?: string | null; limit?: number; q?: string } = {}) => {
     const p = new URLSearchParams({ limit: String(opts.limit ?? 20) });
     if (opts.project) p.set('project', opts.project);
     if (opts.cursor) p.set('cursor', opts.cursor);
+    if (opts.q) p.set('q', opts.q);
     return fetch(`/api/t3/threads?${p}`).then((r) =>
-      json<{ threads: T3Thread[]; total: number; next_cursor: string | null }>(r),
+      json<{ threads: T3Thread[]; recent?: T3Thread[]; total: number; next_cursor: string | null }>(r),
     );
   },
   attach: (threadId: string) =>

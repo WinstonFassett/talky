@@ -2,7 +2,7 @@
 // opens that Chat (`in a chat ↔`); any other attaches one first (`chat ›`). No project headers: the project is a
 // small tag on each row and a filter chip above the list.
 import { useState } from 'react';
-import { MoreHorizontalIcon, PinIcon, RefreshCwIcon, XIcon } from 'lucide-react';
+import { MoreHorizontalIcon, PinIcon, RefreshCwIcon, SearchIcon, XIcon } from 'lucide-react';
 
 import { nativeApi, t3Api, type NativeTool, type T3Status, type T3Thread, type T3ThreadStatus } from './api';
 import { relativeTime } from './groups';
@@ -26,8 +26,18 @@ const SOURCES = [
   { id: 'hermes', label: 'Hermes' },
 ] as const;
 type Source = (typeof SOURCES)[number]['id'];
+const RECENT_MAX = 5;
+const RECENT_MS = 3 * 3600_000;
 const NATIVE_WHERE: Record<NativeTool, string> = { claude: '~/.claude/projects', hermes: '~/.hermes/state.db' };
 const NATIVE_NAME: Record<NativeTool, string> = { claude: 'Claude Code', hermes: 'Hermes' };
+
+function GroupLabel({ children }: { children: string }) {
+  return (
+    <div className="px-2 pb-0.5 pt-2 font-mono text-[10px] uppercase tracking-wide" style={mute} data-testid="intools-group">
+      {children}
+    </div>
+  );
+}
 
 function ThreadRow({ t, busy, disabled, onPick }: { t: T3Thread; busy: boolean; disabled: boolean; onPick: (t: T3Thread) => void }) {
   const linked = !!t.convo_id;
@@ -85,6 +95,7 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
   const [showAutomated, setShowAutomated] = useState(false);
   const tool: NativeTool | null = source === 't3' ? null : source;
   const native = useNativeSessions(tool);
+  const [nativeQuery, setNativeQuery] = useState('');
   const [attaching, setAttaching] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [legend, setLegend] = useState(() => {
@@ -112,7 +123,9 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
 
   const automatedCount = native.sessions?.filter((t) => t.automated).length ?? 0;
   const nativeVisible = native.sessions?.filter((t) => showAutomated || !t.automated) ?? null;
-  const nativeRows = nativeVisible?.filter((t) => !nativeProject || t.project_id === nativeProject) ?? null;
+  const needle = nativeQuery.trim().toLowerCase();
+  const nativeRows =
+    nativeVisible?.filter((t) => (!nativeProject || t.project_id === nativeProject) && (!needle || t.title.toLowerCase().includes(needle))) ?? null;
   const nativeOptions = Object.values(
     (nativeVisible ?? []).reduce<Record<string, { id: string; title: string; count: number }>>((acc, t) => {
       const k = t.project_id ?? t.project;
@@ -122,6 +135,19 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
   ).sort((a, b) => b.count - a.count);
   const options = tool ? nativeOptions : s.projects.filter((p) => p.thread_count > 0).map((p) => ({ id: p.id, title: p.title, count: p.thread_count }));
   const rows = tool ? nativeRows : s.threads;
+  const query = tool ? nativeQuery : s.query;
+  // Recent (running or touched in the last few hours, max 5) → Pinned → the rest; a thread shows in the first group it fits.
+  const recent = tool
+    ? [...(nativeRows ?? [])]
+        .filter((t) => t.status === 'running' || Date.now() - Date.parse(t.last_activity) < RECENT_MS)
+        .sort((a, b) => Date.parse(b.last_activity) - Date.parse(a.last_activity))
+        .slice(0, RECENT_MAX)
+    : s.recent;
+  const recentIds = new Set(recent.map((t) => t.id));
+  const rest = rows?.filter((t) => !recentIds.has(t.id)) ?? null;
+  const pinned = rest?.filter((t) => t.pinned) ?? [];
+  const others = rest?.filter((t) => !t.pinned) ?? [];
+  const grouped = recent.length > 0 || pinned.length > 0;
   const err = tool ? native.error : s.error;
   const showList = tool ? true : connected;
   return (
@@ -143,6 +169,7 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
               onClick={() => {
                 setSource(src.id);
                 setNativeProject(null);
+                setNativeQuery('');
               }}
             >
               {src.label}
@@ -226,6 +253,22 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
         </div>
       )}
 
+      {showList && (
+        <div className="relative shrink-0 px-2 pt-2">
+          <SearchIcon size={12} className="pointer-events-none absolute left-4 top-1/2 mt-1 -translate-y-1/2" style={mute} />
+          <input
+            type="search"
+            data-testid="intools-search"
+            aria-label="Search threads by title"
+            placeholder="Search threads"
+            value={query}
+            className="w-full rounded-md bg-transparent py-1 pl-7 pr-2 text-[13px]"
+            style={{ border: '1px solid var(--color-border-soft)', color: 'var(--color-foreground)' }}
+            onChange={(e) => (tool ? setNativeQuery(e.target.value) : s.setQuery(e.target.value))}
+          />
+        </div>
+      )}
+
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2" data-testid="t3-thread-list">
         {!tool && s.status && !connected && <ConnectionCard status={s.status} onStatus={(st: T3Status) => s.onStatus(st)} />}
         {err && (
@@ -263,9 +306,25 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
             Start one in T3 Code and it shows up here; open it to get a Chat.
           </div>
         )}
-        {rows?.map((t) => (
-          <ThreadRow key={t.id} t={t} busy={attaching === t.id} disabled={attaching !== null} onPick={(x) => void pick(x)} />
-        ))}
+        {query.trim() && rows?.length === 0 && recent.length === 0 && (
+          <div className="px-3 py-6 text-center text-[12px]" style={mute} data-testid="intools-no-match">
+            No threads match “{query.trim()}”.
+          </div>
+        )}
+        {[
+          ['Recent', recent],
+          ['Pinned', pinned],
+          [grouped ? 'All threads' : '', others],
+        ].map(([label, list]) =>
+          (list as T3Thread[]).length === 0 ? null : (
+            <div key={label as string}>
+              {label && <GroupLabel>{label as string}</GroupLabel>}
+              {(list as T3Thread[]).map((t) => (
+                <ThreadRow key={t.id} t={t} busy={attaching === t.id} disabled={attaching !== null} onPick={(x) => void pick(x)} />
+              ))}
+            </div>
+          ),
+        )}
         {!tool && s.cursor && (
           <button
             type="button"

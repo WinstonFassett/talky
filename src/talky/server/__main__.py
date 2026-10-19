@@ -975,7 +975,8 @@ def _build_webrtc_routes():
         try:
             snap = await t3_threads.fetch_shell()
             out = t3_threads.flat_threads(
-                snap, default_store().link_index("t3"), project, limit, request.query_params.get("cursor")
+                snap, default_store().link_index("t3"), project, limit, request.query_params.get("cursor"),
+                request.query_params.get("q"),
             )
         except LookupError as e:
             return JSONResponse({"error": str(e)}, status_code=404)

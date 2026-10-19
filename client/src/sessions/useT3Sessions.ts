@@ -14,6 +14,9 @@ export function useT3Sessions() {
   const [projects, setProjects] = useState<T3Project[]>([]);
   const [threads, setThreads] = useState<T3Thread[] | null>(null);
   const [total, setTotal] = useState(0);
+  const [recent, setRecent] = useState<T3Thread[]>([]);
+  const [query, setQueryState] = useState('');
+  const queryRef = useRef('');
   const [cursor, setCursor] = useState<string | null>(null);
   const [filter, setFilterState] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,8 +43,9 @@ export function useT3Sessions() {
   const loadThreads = useCallback(
     async (project: string | null, limit: number) => {
       try {
-        const out = await t3Api.threads({ project: project ?? undefined, limit });
+        const out = await t3Api.threads({ project: project ?? undefined, limit, q: queryRef.current });
         setThreads(out.threads);
+        setRecent(out.recent ?? []);
         setTotal(out.total);
         setCursor(out.next_cursor);
         loadedRef.current = Math.max(PAGE, out.threads.length);
@@ -111,10 +115,19 @@ export function useT3Sessions() {
     void loadThreads(id, PAGE);
   };
 
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const setQuery = (q: string) => {
+    setQueryState(q);
+    queryRef.current = q;
+    loadedRef.current = PAGE;
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => void loadThreads(filterRef.current, PAGE), 250);
+  };
+
   const loadMore = async () => {
     if (!cursor) return;
     try {
-      const out = await t3Api.threads({ project: filterRef.current ?? undefined, cursor });
+      const out = await t3Api.threads({ project: filterRef.current ?? undefined, cursor, q: queryRef.current });
       setThreads((prev) => [...(prev ?? []), ...out.threads]);
       setCursor(out.next_cursor);
       loadedRef.current += out.threads.length;
@@ -140,7 +153,7 @@ export function useT3Sessions() {
   };
 
   const running = projects.reduce((n, p) => n + p.running, 0);
-  return { status, projects, threads, total, cursor, filter, setFilter, error, setError, loading, running, refresh, loadMore, onStatus, disconnect };
+  return { status, projects, threads, total, recent, query, setQuery, cursor, filter, setFilter, error, setError, loading, running, refresh, loadMore, onStatus, disconnect };
 }
 
 export type T3Sessions = ReturnType<typeof useT3Sessions>;
