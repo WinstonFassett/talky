@@ -92,6 +92,9 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
       poll_interval:  seconds between projection polls
     """
 
+    # A live call can be re-pointed at another thread via ``set_resume`` (WIN-576).
+    live_attach = True
+
     @staticmethod
     def status() -> tuple["BackendStatus", str]:
         from talky.backends import BackendStatus

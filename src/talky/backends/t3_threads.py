@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import Any, Optional
 
 import httpx
@@ -73,6 +74,7 @@ def normalise(snapshot: dict) -> list[dict]:
                 "short": short_id(t["id"]),
                 "title": t.get("title") or "(untitled)",
                 "project": projects.get(t.get("projectId"), "No project"),
+                "project_id": t.get("projectId"),
                 "status": _status(t),
                 "last_activity": t.get("updatedAt") or t.get("createdAt"),
                 "model": m.get("model") or "",
@@ -83,6 +85,100 @@ def normalise(snapshot: dict) -> list[dict]:
     rows.sort(key=lambda r: r["last_activity"] or "", reverse=True)
     rows.sort(key=lambda r: r["status"] != "running")  # stable: running floats to the top
     return rows
+
+
+_SHELL_TTL = 3.0
+_shell_memo: dict[str, tuple[float, dict]] = {}
+
+
+async def cached_shell(client: T3Client, ttl: float = _SHELL_TTL) -> dict:
+    """``_shell`` memoized per base URL for ``ttl`` seconds (the 10 s client poll + page loads share one fetch)."""
+    key = client._base  # noqa: SLF001
+    hit = _shell_memo.get(key)
+    now = time.monotonic()
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    snap = await _shell(client)
+    _shell_memo[key] = (time.monotonic(), snap)
+    return snap
+
+
+def _home_rel(path: str) -> str:
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if home != "~" and path.startswith(home) else path
+
+
+def group_projects(snapshot: dict, link_index: Optional[dict] = None) -> dict:  # noqa: ARG001
+    """``{"seq", "projects": [...]}`` with live (non-archived, non-deleted) thread counts.
+
+    Running projects first, then newest activity; empty projects last.
+    """
+    rows = normalise(snapshot)
+    by_project: dict[Optional[str], list[dict]] = {}
+    for r in rows:
+        by_project.setdefault(r["project_id"], []).append(r)
+    out = []
+    for p in snapshot.get("projects", []):
+        if p.get("archivedAt") or p.get("deletedAt"):
+            continue
+        ts = by_project.get(p["id"], [])
+        root = p.get("workspaceRoot") or p.get("root") or ""
+        out.append(
+            {
+                "id": p["id"],
+                "title": p.get("title") or "No project",
+                "root": _home_rel(root),
+                "root_name": os.path.basename(root.rstrip("/")) if root else "",
+                "thread_count": len(ts),
+                "running": sum(1 for r in ts if r["status"] == "running"),
+                "last_activity": max((r["last_activity"] or "" for r in ts), default="") or None,
+            }
+        )
+    out.sort(key=lambda x: x["last_activity"] or "", reverse=True)
+    out.sort(key=lambda x: x["running"] == 0)
+    out.sort(key=lambda x: x["thread_count"] == 0)
+    return {"seq": snapshot.get("snapshotSequence"), "projects": out}
+
+
+def project_threads(
+    snapshot: dict, project_id: str, link_index: Optional[dict] = None, limit: int = 20, cursor: Optional[str] = None
+) -> dict:
+    """One page of a project's threads (running first, newest first) with ``convo_id`` joined from ``link_index``."""
+    if not any(p["id"] == project_id for p in snapshot.get("projects", [])):
+        raise LookupError(f"T3 project {project_id!r} not found")
+    link_index = link_index or {}
+    rows = [r for r in normalise(snapshot) if r["project_id"] == project_id]
+    try:
+        offset = int(cursor[2:]) if cursor and cursor.startswith("o:") else 0
+    except ValueError:
+        offset = 0
+    offset = max(offset, 0)
+    page = rows[offset : offset + limit]
+    nxt = f"o:{offset + limit}" if offset + limit < len(rows) else None
+    return {
+        "seq": snapshot.get("snapshotSequence"),
+        "threads": [{**r, "convo_id": link_index.get(r["id"])} for r in page],
+        "next_cursor": nxt,
+    }
+
+
+async def fetch_shell(*, client: Optional[T3Client] = None) -> dict:
+    """The (3 s memoized) shell snapshot, opening and closing its own client unless one is given."""
+    own = client is None
+    c = client or T3Client(base_url(), await asyncio.to_thread(ensure_token))
+    try:
+        return await cached_shell(c)
+    finally:
+        if own:
+            await c.close()
+
+
+def etag_for(seq: Any) -> str:
+    return f'"{seq}"'
+
+
+def etag_matches(header: Optional[str], seq: Any) -> bool:
+    return bool(header) and any(p.strip().removeprefix("W/") == etag_for(seq) for p in header.split(","))
 
 
 async def list_threads(limit: Optional[int] = None, *, client: Optional[T3Client] = None) -> list[dict]:
@@ -139,9 +235,7 @@ async def attach_thread(thread_id: str, store=None) -> dict:  # noqa: ANN001
         thread = next((r for r in rows if r["id"] == thread_id), None)
         if thread is None:
             raise LookupError(f"T3 thread {thread_id!r} not found")
-        existing = next(
-            (r for r in store.list() if r.backend == "t3" and r.native_session_id == thread_id), None
-        )
+        existing = store.find_by_link("t3", thread_id)
         if existing is not None:
             return {"convo_id": existing.id, "thread": thread, "created": False}
         msgs = await recent_messages(thread_id, client=c)

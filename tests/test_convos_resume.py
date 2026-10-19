@@ -523,3 +523,49 @@ def test_mcp_mode_does_not_take_over_the_session_profile(tmp_path):
     assert (session.backend, session.profile) == ("claude", "claude")
     rec = store.get(rec_id)
     assert (rec.backend, rec.profile) == ("claude", "claude")
+
+
+# --- WIN-576: live re-point of a live_attach backend (B2) --------------------
+
+
+def _live_t3(channel, monkeypatch, thread: str):
+    from talky.backends.t3 import T3LLMService
+
+    svc = T3LLMService(resume=thread)
+    monkeypatch.setattr(channel, "is_live", lambda: True)
+    channel._llm_services = {"t3": svc}
+    channel._convo_session = ConvoSession(channel._convo_store, backend="t3", profile="t3")
+    return svc
+
+
+def test_live_resume_repoints_live_attach_backend(channel, monkeypatch):
+    rec = channel._convo_store.create(backend="t3", profile="t3", native_session_id="thread-B")
+    channel._convo_store.append_turn(rec.id, "user", "hello B")
+    svc = _live_t3(channel, monkeypatch, "thread-A")
+
+    out = channel.resume_convo(rec.id)
+
+    assert out["applied"] == "live" and out["replay_turns"] == 0
+    assert svc._thread_id == "thread-B"
+    assert svc._replay_preamble == "", "B's transcript must not be sent into a thread"
+
+
+def test_live_resume_clears_a_stale_preamble_on_repoint(channel, monkeypatch):
+    rec = channel._convo_store.create(backend="t3", profile="t3", native_session_id="thread-B")
+    svc = _live_t3(channel, monkeypatch, "thread-A")
+    svc.set_history([{"role": "user", "content": "left over from an earlier resume"}])
+
+    channel.resume_convo(rec.id)
+
+    assert svc._thread_id == "thread-B" and svc._replay_preamble == ""
+
+
+def test_live_resume_of_unlinked_convo_never_lands_in_the_live_thread(channel, monkeypatch):
+    rec = channel._convo_store.create(backend="t3", profile="t3")
+    channel._convo_store.append_turn(rec.id, "user", "no link yet")
+    svc = _live_t3(channel, monkeypatch, "thread-A")
+
+    channel.resume_convo(rec.id)
+
+    assert svc._thread_id is None, "next message must launch a new thread"
+    assert "no link yet" in svc._replay_preamble

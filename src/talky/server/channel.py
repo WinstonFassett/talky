@@ -1581,6 +1581,14 @@ class VoiceChannel:
                 # Not started yet (WIN-556): the switch the caller makes next
                 # starts it, natively resumed or with this replay applied.
                 self._deferred_resumes[plan["backend"]] = plan
+            elif getattr(live_svc, "live_attach", False) and callable(getattr(live_svc, "set_resume", None)):
+                # The backend can re-point a running call: aim it at the convo's native
+                # session (or none, so the next message starts a fresh one) and drop any
+                # queued preamble that was meant for the previous session.
+                native = plan["native_session_id"]
+                live_svc.set_resume(native)
+                if callable(getattr(live_svc, "set_history", None)):
+                    live_svc.set_history([] if native else plan["turns"])
             else:
                 self._apply_replay(live_svc, {**plan, "replay": True})
             self._convo_session.bind(plan["convo_id"])

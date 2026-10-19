@@ -954,6 +954,48 @@ def _build_webrtc_routes():
             return _t3_error(e)
         return JSONResponse({"threads": rows})
 
+    async def handle_t3_projects(request: Request):
+        """GET /api/t3/projects — projects with live thread counts; ``ETag`` = shell snapshotSequence (304 on match)."""
+        from starlette.responses import Response
+
+        from talky.backends import t3_threads
+        from talky.convos import default_store
+
+        try:
+            snap = await t3_threads.fetch_shell()
+        except Exception as e:  # noqa: BLE001
+            return _t3_error(e)
+        seq = snap.get("snapshotSequence")
+        headers = {"ETag": t3_threads.etag_for(seq)}
+        if t3_threads.etag_matches(request.headers.get("if-none-match"), seq):
+            return Response(status_code=304, headers=headers)
+        out = t3_threads.group_projects(snap, default_store().link_index("t3"))
+        return JSONResponse({"state": "connected", **out}, headers=headers)
+
+    async def handle_t3_project_threads(request: Request):
+        """GET /api/t3/threads?project=&limit=20&cursor=o:20 — one page of a project's threads."""
+        from talky.backends import t3_threads
+        from talky.convos import default_store
+
+        project = request.query_params.get("project")
+        if not project:
+            # Flat list kept until the client moves to the project routes (WIN-576 S1b).
+            return await handle_t3_threads(request)
+        try:
+            limit = max(1, min(int(request.query_params.get("limit", 20)), 100))
+        except ValueError:
+            limit = 20
+        try:
+            snap = await t3_threads.fetch_shell()
+            out = t3_threads.project_threads(
+                snap, project, default_store().link_index("t3"), limit, request.query_params.get("cursor")
+            )
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:  # noqa: BLE001
+            return _t3_error(e)
+        return JSONResponse(out)
+
     def _t3_error(e: Exception) -> JSONResponse:
         """503 + ``code`` for connection-state errors the UI can act on; 502 for anything else."""
         import httpx
@@ -1007,8 +1049,8 @@ def _build_webrtc_routes():
         """POST /api/t3/attach — JSON ``{"thread_id": str}``.
 
         Creates (or reuses) the Talky convo bound to that T3 thread, seeded with the thread's
-        recent messages. A live t3 backend is re-pointed at the thread right away; otherwise
-        the client's follow-up ``/api/convos/resume`` + profile switch picks it up natively.
+        recent messages. Re-pointing a live t3 backend happens in the client's follow-up
+        ``/api/convos/resume`` (``VoiceChannel.resume_convo``), not here.
         """
         from talky.backends import t3_threads
 
@@ -1027,9 +1069,6 @@ def _build_webrtc_routes():
             return JSONResponse({"error": str(e)}, status_code=404)
         except Exception as e:  # noqa: BLE001
             return _t3_error(e)
-        svc = voice_channel._llm_services.get("t3")  # noqa: SLF001
-        if svc is not None and hasattr(svc, "set_resume"):
-            svc.set_resume(thread["id"])
         return JSONResponse({"status": "ok", **out})
 
     # ── convo browsing (WIN-535) ─────────────────────────────────────────
@@ -1427,7 +1466,8 @@ def _build_webrtc_routes():
         Route("/api/t3/status", handle_t3_status, methods=["GET"]),
         Route("/api/t3/connect", handle_t3_connect, methods=["POST"]),
         Route("/api/t3/disconnect", handle_t3_disconnect, methods=["POST"]),
-        Route("/api/t3/threads", handle_t3_threads, methods=["GET"]),
+        Route("/api/t3/projects", handle_t3_projects, methods=["GET"]),
+        Route("/api/t3/threads", handle_t3_project_threads, methods=["GET"]),
         Route("/api/t3/attach", handle_t3_attach, methods=["POST"]),
         Route("/api/convos/resume", handle_resume_convo, methods=["POST"]),
         Route("/api/convos/new", handle_new_convo, methods=["POST"]),

@@ -138,6 +138,21 @@ class ConvoStore:
         out.sort(key=lambda r: r.last_active_at, reverse=True)
         return out
 
+    def find_by_link(self, backend: str, native_id: str) -> Optional[ConvoRecord]:
+        """The convo bound to ``native_id`` on ``backend`` (newest first), or None."""
+        for rec in self.list():
+            if rec.backend == backend and rec.native_session_id == native_id:
+                return rec
+        return None
+
+    def link_index(self, backend: str) -> dict[str, str]:
+        """``native id -> convo id`` for ``backend``; one ``list()`` pass serves a whole page."""
+        out: dict[str, str] = {}
+        for rec in self.list():  # newest first: the first convo for an id wins
+            if rec.backend == backend and rec.native_session_id:
+                out.setdefault(rec.native_session_id, rec.id)
+        return out
+
     # --- updates -----------------------------------------------------------
 
     def save(self, rec: ConvoRecord) -> None:
