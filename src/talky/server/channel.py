@@ -1463,7 +1463,7 @@ class VoiceChannel:
     # hours later starts fresh instead of appending to an old convo.
     PENDING_RESUME_TTL_SECS = 30 * 60
 
-    def _resume_plan(self, convo_id: str, profile: Optional[str]) -> dict:
+    def _resume_plan(self, convo_id: str, profile: Optional[str], *, dead_link: Optional[str] = None) -> dict:
         rec = self._convo_store.get(convo_id)
         if rec is None:
             raise ValueError(f"convo {convo_id!r} not found")
@@ -1472,8 +1472,9 @@ class VoiceChannel:
         target_profile = profile or rec.profile
         tp = get_profile_manager().get_talky_profile(target_profile)
         target_backend = (tp.llm_backend if tp and tp.llm_backend else None) or target_profile
-        native = rec.links().get(target_backend)
+        native = None if dead_link else rec.links().get(target_backend)
         return {
+            "hold_link": bool(dead_link),
             "convo_id": rec.id,
             "profile": target_profile,
             "backend": target_backend,
@@ -1492,7 +1493,7 @@ class VoiceChannel:
             return None
         if pending.get("follow_active"):
             try:
-                return self._resume_plan(pending["convo_id"], self._active_profile or self.MCP_DRIVER_PROFILE)
+                return self._resume_plan(pending["convo_id"], self._active_profile or self.MCP_DRIVER_PROFILE, dead_link=pending.get("dead_link"))
             except Exception as e:  # noqa: BLE001 — never block a browser from connecting
                 logger.warning(f"VoiceChannel: dropping pending resume of {pending['convo_id']}: {e}")
                 return None
@@ -1643,7 +1644,7 @@ class VoiceChannel:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"VoiceChannel: interrupted-turn replay failed: {e}")
 
-    def resume_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
+    def resume_convo(self, convo_id: str, profile: Optional[str] = None, *, dead_link: Optional[str] = None) -> dict:
         """Continue a saved convo, optionally on a different profile.
 
         Applied at the next pipeline build: native resume (same backend + a
@@ -1654,7 +1655,7 @@ class VoiceChannel:
         peer that just left still reads as live until ICE gives up. The caller
         switches the profile afterwards.
         """
-        plan = self._resume_plan(convo_id, profile)
+        plan = self._resume_plan(convo_id, profile, dead_link=dead_link)
         if self.is_live() and self._convo_session is not None:
             live_svc = self._llm_services.get(plan["backend"])
             if live_svc is None and plan["backend"] != self.MCP_DRIVER_PROFILE:
@@ -1673,11 +1674,12 @@ class VoiceChannel:
                 self._apply_replay(live_svc, {**plan, "replay": True})
             self._leave_current_convo(plan["convo_id"])
             self._convo_session.bind(plan["convo_id"])
+            self._convo_session.hold_link = plan["hold_link"]
             # A daemon restart mid-turn: once this convo is bound again, replay the turn.
             self._maybe_resume_interrupted_turn(plan["convo_id"])
             # Not a snapshot: the live call keeps adding turns (and may get a new
             # native id), so the next build re-reads the record.
-            self._pending_resume = {"convo_id": plan["convo_id"], "follow_active": True, "expires_at": plan["expires_at"]}
+            self._pending_resume = {"convo_id": plan["convo_id"], "follow_active": True, "dead_link": dead_link, "expires_at": plan["expires_at"]}
             when = "live"
         else:
             self._pending_resume = plan
@@ -1692,6 +1694,7 @@ class VoiceChannel:
             "native_session_id": plan["native_session_id"],
             "replay_turns": 0 if plan["native_session_id"] else len(plan["turns"]),
             "applied": when,
+            "notice": dead_link,
         }
 
     async def open_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
@@ -1712,7 +1715,14 @@ class VoiceChannel:
             entry = self._backend_status.get(backend) or {}
             if entry.get("status") != BackendStatus.READY.value:
                 raise RuntimeError(f"can't open this chat: {backend} isn't available ({entry.get('reason') or 'not configured'})")
-        result = self.resume_convo(convo_id, profile)
+        dead = await self._dead_link_notice(convo_id, plan)
+        if backend == "t3" and plan["native_session_id"] and not dead:
+            # Replies that landed in T3 while this chat was not the live one (a quick switch abandons the in-flight turn):
+            # pull them in before binding, because GET /api/convos/<id> skips the sync for the live chat (WIN-587).
+            from talky.backends.t3_threads import sync_convo
+
+            await sync_convo(self._convo_store, convo_id)
+        result = self.resume_convo(convo_id, profile, dead_link=dead)
         if plan["profile"] != self._active_profile:
             try:
                 await self.switch_to_profile(plan["profile"])
@@ -1724,6 +1734,41 @@ class VoiceChannel:
                     self._convo_session.start_fresh()
                 raise RuntimeError(f"can't open this chat: {e}") from e
         return result
+
+    async def _dead_link_notice(self, convo_id: str, plan: dict) -> Optional[str]:
+        """Why the chat's native session can't be resumed (archived/deleted/missing), else ``None`` (WIN-584).
+
+        An unreachable T3 or an unreadable store is not proof of death, so those return ``None``.
+        """
+        native, backend = plan["native_session_id"], plan["backend"]
+        if not native:
+            return None
+        try:
+            if backend == "t3":
+                from talky.backends.t3_threads import thread_state
+
+                state = await thread_state(native)
+                bad = state if state not in (None, "ok") else None
+            elif backend in ("claude-code", "hermes"):
+                from talky.backends.native_sessions import link_state
+
+                bad = await asyncio.to_thread(link_state, backend, native)
+                bad = bad if bad not in (None, "ok") else None
+            else:
+                return None
+        except Exception as e:  # noqa: BLE001 -- can't tell: keep the link and try it
+            logger.warning(f"VoiceChannel: link check for {convo_id} failed: {e}")
+            return None
+        if bad is None:
+            return None
+        if backend == "t3" and bad == "missing":
+            bad = "archived or deleted"  # a real T3 drops both from its shell snapshot
+        label = {"t3": "T3 thread", "claude-code": "Claude session", "hermes": "Hermes session"}[backend]
+        logger.warning(f"VoiceChannel: chat {convo_id} links {backend} session {native} which is {bad}")
+        return (
+            f"The linked {label} is {bad}, so this chat can't continue it. "
+            f"Continuing from Talky's saved transcript instead; the link is kept."
+        )
 
     def _leave_current_convo(self, next_convo_id: str) -> None:
         """Opening another chat mid-call: nothing the old chat's backend still says may reach the new one (WIN-582).
@@ -2045,6 +2090,7 @@ class VoiceChannel:
             backend=build_backend,
             profile=build_profile,
             resume_into=pending["convo_id"] if pending else None,
+            hold_link=bool(pending and pending.get("hold_link")),
             native_id_reader=lambda svc=profile_map.get(build_backend): native_session_id_of(svc),
             on_change=self._emit_convo_changed,
         )

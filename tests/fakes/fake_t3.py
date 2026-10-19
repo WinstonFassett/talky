@@ -119,6 +119,22 @@ async def h_say(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def h_mark(request: web.Request) -> web.Response:
+    """POST /__mark?thread=ID&state=archived|deleted|missing|ok — what T3 reports for a thread (WIN-584)."""
+    st: State = request.app["state"]
+    tid, state = request.query["thread"], request.query["state"]
+    t = st.thread(tid)
+    if t is None:
+        return web.json_response({"error": "unknown thread"}, status=404)
+    if state == "missing":
+        st.threads.remove(t)
+    else:
+        t["archivedAt"] = _now() if state == "archived" else None
+        t["deletedAt"] = _now() if state == "deleted" else None
+    st.seq += 1
+    return web.json_response({"ok": True})
+
+
 async def h_stop(request: web.Request) -> web.Response:
     asyncio.get_running_loop().call_later(0.1, request.app["stop"].set)
     return web.json_response({"stopping": True})
@@ -196,6 +212,7 @@ async def main(port: int, fixture: Path) -> None:
             web.get("/ws", h_ws),
             web.get("/__log", h_log),
             web.post("/__say", h_say),
+            web.post("/__mark", h_mark),
             web.post("/__stop", h_stop),
         ]
     )

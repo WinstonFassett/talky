@@ -19,6 +19,7 @@ import httpx
 from talky.backends import t3_auth
 from talky.backends.t3_auth import T3AuthError, ensure_token
 from talky.backends.t3_client import T3Client
+from talky.convos.store import TranscriptTurn
 
 DEFAULT_BASE_URL = "http://127.0.0.1:3773"
 CONTEXT_MESSAGES = 12
@@ -240,6 +241,24 @@ async def list_threads(limit: Optional[int] = None, *, client: Optional[T3Client
     return rows[:limit] if limit else rows
 
 
+async def thread_state(thread_id: str, *, client: Optional[T3Client] = None) -> Optional[str]:
+    """``ok`` / ``archived`` / ``deleted`` / ``missing`` from the shell snapshot; ``None`` if T3 can't be asked (WIN-584)."""
+    own = client is None
+    try:
+        c = client or T3Client(base_url(), await asyncio.to_thread(ensure_token))
+        try:
+            snap = await _shell(c)
+        finally:
+            if own:
+                await c.close()
+    except Exception:  # noqa: BLE001 -- down/auth: say nothing rather than call a live thread dead
+        return None
+    t = next((t for t in snap.get("threads", []) if t["id"] == thread_id), None)
+    if t is None:
+        return "missing"
+    return "deleted" if t.get("deletedAt") else "archived" if t.get("archivedAt") else "ok"
+
+
 async def recent_messages(thread_id: str, n: int = CONTEXT_MESSAGES, *, client: Optional[T3Client] = None) -> list[dict]:
     """The thread's last ``n`` user/assistant messages as ``{role, text, created_at}``."""
     own = client is None
@@ -314,14 +333,44 @@ def _missing_tail(stored: list, t3_msgs: list[dict]) -> list[dict]:
     return []
 
 
+def _merge_gaps(stored: list, t3_msgs: list[dict]) -> Optional[list]:
+    """The T3 messages from the first stored turn on, reusing each stored turn; ``None`` unless every stored turn is in T3 in order.
+
+    A quick switch abandons an in-flight turn, so the reply can be missing from the MIDDLE of the transcript
+    (user turns after it were stored), which ``_missing_tail`` cannot see.
+    """
+    if not stored:
+        return None
+    out: list = []
+    j = 0
+    for m in t3_msgs:
+        hit = j < len(stored) and stored[j].role == m["role"] and stored[j].content == m["text"]
+        if not out and not hit:
+            continue  # T3 history older than what this Chat ever stored
+        if hit:
+            out.append(stored[j])
+            j += 1
+        else:
+            ts = _ts(m["created_at"])
+            out.append(TranscriptTurn(role=m["role"], content=m["text"], timestamp=ts if ts is not None else stored[j - 1].timestamp))
+    return out if j == len(stored) else None
+
+
 async def _sync_with(store, convo_id: str, thread_id: str, c: T3Client, thread: dict) -> int:  # noqa: ANN001
     """Append T3 turns the stored transcript lacks and set ``in_progress`` from T3's run status."""
     msgs = await recent_messages(thread_id, 10_000, client=c)
-    added = _missing_tail(store.read_transcript(convo_id), msgs)
-    for m in added:
-        store.append_turn(convo_id, m["role"], m["text"], timestamp=_ts(m["created_at"]))
+    stored = store.read_transcript(convo_id)
+    merged = _merge_gaps(stored, msgs)
+    if merged is not None and len(merged) > len(stored):
+        store.replace_transcript(convo_id, merged)
+        added = len(merged) - len(stored)
+    else:
+        tail = _missing_tail(stored, msgs)
+        for m in tail:
+            store.append_turn(convo_id, m["role"], m["text"], timestamp=_ts(m["created_at"]))
+        added = len(tail)
     store.set_in_progress(convo_id, thread["status"] == "running")
-    return len(added)
+    return added
 
 
 async def sync_convo(store, convo_id: str) -> int:  # noqa: ANN001

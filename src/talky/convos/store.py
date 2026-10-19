@@ -293,6 +293,17 @@ class ConvoStore:
             rec.title = _derive_title(content)
         self._write_meta(rec)
 
+    def replace_transcript(self, convo_id: str, turns: list[TranscriptTurn]) -> None:
+        """Rewrite the whole transcript atomically (a T3 sync that fills a gap in the middle, WIN-584)."""
+        self._ensure_dir(convo_id)
+        path = self._transcript_path(convo_id)
+        tmp = path.with_suffix(".jsonl.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for t in turns:
+                f.write(json.dumps(asdict(t), ensure_ascii=False) + "\n")
+        os.replace(tmp, path)
+
     def read_transcript(self, convo_id: str) -> list[TranscriptTurn]:
         p = self._transcript_path(convo_id)
         if not p.exists():

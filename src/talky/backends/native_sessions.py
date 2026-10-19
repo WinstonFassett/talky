@@ -218,3 +218,23 @@ def attach_session(tool: str, session_id: str, store=None) -> dict:  # noqa: ANN
     for m in msgs:
         store.append_turn(rec.id, m["role"], m["text"])
     return {"convo_id": rec.id, "created": True, "context_messages": len(msgs)}
+
+
+def link_state(backend: str, session_id: str) -> Optional[str]:
+    """``ok`` / ``missing`` for a Claude Code or Hermes session id; ``None`` when the store can't be read (WIN-584)."""
+    if backend == "claude-code":
+        root = _claude_root()
+        if not root.is_dir():
+            return None
+        return "ok" if any(root.glob(f"*/{session_id}.jsonl")) else "missing"
+    if backend == "hermes":
+        if not _hermes_db().exists():
+            return None
+        c = _hermes_conn()
+        try:
+            return "ok" if c.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone() else "missing"
+        except sqlite3.Error:
+            return None
+        finally:
+            c.close()
+    return None
