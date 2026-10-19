@@ -70,6 +70,20 @@ llm_backends:
       cwd: null
       binary: null
       cloud: false
+  t3:
+    description: "T3 Code thread via orchestration RPC (spike, WIN-563)"
+    service_class: "talky.backends.t3.T3LLMService"
+    announcement: "T3 Code channel."
+    config:
+      base_url: "http://127.0.0.1:3773"
+      # Scoped bearer: t3 auth session issue --scope orchestration:read --scope orchestration:operate
+      token_env: "T3_TOKEN"
+      token_file: null
+      project_id: null   # null = T3 "No project" scratch project
+      thread_id: null    # set to talk to an existing thread
+      instance_id: "claudeAgent"
+      model: "claude-sonnet-5-5"
+      runtime_mode: "approval-required"
   opencode:
     description: "Opencode (sst/opencode) via HTTP server, streaming + permission asks"
     service_class: "talky.backends.opencode.OpencodeLLMService"
