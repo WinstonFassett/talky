@@ -1542,16 +1542,6 @@ def _build_app():
 
     @asynccontextmanager
     async def _composed_lifespan(app):
-        # Pre-warm the voice channel synchronously in startup. Config-only,
-        # fast (~tens of ms).
-        try:
-            voice_channel.warmup()
-        except Exception as e:  # noqa: BLE001
-            # Don't let a misconfigured voice profile block the MCP server
-            # from starting — log and continue. Convo tools will fail with a
-            # clear error if the channel isn't warm.
-            logger.error(f"VoiceChannel warmup failed: {e}")
-
         # Start background health polling (ticket 73b9).
         voice_channel.start_health_polling(interval=30.0)
 
@@ -1567,6 +1557,17 @@ def _build_app():
         from talky.server.readiness import readiness as _readiness
 
         async def _prewarm_then_signal_ready():
+            # WIN-583: warm the voice channel (profile config + local TTS model
+            # load) here, not in the blocking lifespan, so the listener is up
+            # and /api/ready reports it as an open task while it loads. The
+            # ready file stays gated on it, so "ready" still means warm. A
+            # misconfigured voice profile must not block the MCP server:
+            # log and continue; convo tools fail clearly if the channel isn't warm.
+            try:
+                with _readiness.track("Warming voice channel"):
+                    await asyncio.to_thread(voice_channel.warmup)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"VoiceChannel warmup failed: {e}")
             try:
                 from talky.server.prewarm import prewarm_hf_assets
                 await asyncio.to_thread(prewarm_hf_assets)
