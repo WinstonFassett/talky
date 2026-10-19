@@ -126,3 +126,31 @@ def test_get_convo_api_syncs_unless_live(tmp_path, t3, monkeypatch):
         assert store.get(rec.id).in_progress is False
         t3.down = True
         assert client.get(f"/api/convos/{rec.id}").status_code == 200
+
+
+def test_replies_missing_from_the_middle_are_filled_in_order(tmp_path, t3):
+    """WIN-584: quick switches abandoned 3 of 4 turns; later user turns were stored, so the tail logic saw no gap."""
+    store, rec = _linked(tmp_path, ("user", "q0"), ("user", "q1"), ("user", "q2"), ("user", "q3"), ("assistant", "ack q3"))
+    t3.messages = [
+        _m("user", "q0", "2026-10-19T10:00:00.000Z"), _m("assistant", "ack q0", "2026-10-19T10:00:04.000Z"),
+        _m("user", "q1", "2026-10-19T10:00:05.000Z"), _m("assistant", "ack q1", "2026-10-19T10:00:09.000Z"),
+        _m("user", "q2", "2026-10-19T10:00:10.000Z"), _m("assistant", "ack q2", "2026-10-19T10:00:14.000Z"),
+        _m("user", "q3", "2026-10-19T10:00:15.000Z"), _m("assistant", "ack q3", "2026-10-19T10:00:19.000Z"),
+    ]
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 3
+    assert _turns(store, rec) == [(r, x) for r, x in [(m["role"], m["text"]) for m in t3.messages]]
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 0  # idempotent
+
+
+def test_gap_fill_ignores_t3_history_older_than_the_chat(tmp_path, t3):
+    store, rec = _linked(tmp_path, ("user", "q2"), ("user", "q3"))
+    t3.messages = [_m("user", "ancient"), _m("assistant", "ancient reply"), _m("user", "q2"), _m("assistant", "ack q2"), _m("user", "q3")]
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 1
+    assert _turns(store, rec) == [("user", "q2"), ("assistant", "ack q2"), ("user", "q3")]
+
+
+def test_unmatched_stored_turn_falls_back_to_the_tail_append(tmp_path, t3):
+    store, rec = _linked(tmp_path, ("user", "hi"), ("assistant", "half a rep"))
+    t3.messages = [_m("user", "hi"), _m("assistant", "half a reply, in full"), _m("user", "next")]
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 2
+    assert _turns(store, rec)[-1] == ("user", "next")

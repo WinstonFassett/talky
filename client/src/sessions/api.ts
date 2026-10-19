@@ -76,7 +76,7 @@ export const convosApi = {
   remove: (id: string) => send(`/api/convos/${id}`, 'DELETE').then((r) => json<unknown>(r)),
   resume: (id: string, profile?: string) =>
     send('/api/convos/resume', 'POST', { convo_id: id, profile: profile ?? null }).then((r) =>
-      json<{ convo_id: string; profile: string }>(r),
+      json<{ convo_id: string; profile: string; notice?: string | null }>(r),
     ),
   startNew: () => send('/api/convos/new', 'POST', {}).then((r) => json<unknown>(r)),
   profiles: () => fetch('/api/profiles').then((r) => json<{ profiles: ProfileInfo[] }>(r)),

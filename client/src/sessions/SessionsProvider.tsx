@@ -210,7 +210,9 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const bind = useCallback(async (id: string, profile?: string) => {
     try {
       // The daemon switches the live pipeline to the chat's profile itself (WIN-582); it answers 409 if it can't.
-      await convosApi.resume(id, profile);
+      const res = await convosApi.resume(id, profile);
+      // A dead linked session isn't a failure: the chat opened from its transcript, but say so (WIN-584).
+      if (res.notice) setError(res.notice);
       // Read the active profile fresh: the cached one is stale after a daemon restart.
       const now = await convosApi.profiles();
       activeProfileRef.current = now.profiles.find((p) => p.active)?.name ?? '';

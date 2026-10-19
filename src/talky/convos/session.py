@@ -32,6 +32,7 @@ class ConvoSession:
         backend: str,
         profile: str,
         resume_into: Optional[str] = None,
+        hold_link: bool = False,
         native_id_reader: Optional[NativeIdReader] = None,
         on_change: Optional[ChangeListener] = None,
     ) -> None:
@@ -40,6 +41,8 @@ class ConvoSession:
         self.backend = backend
         self.profile = profile
         self.resume_into = resume_into
+        # The stored native link is dead (WIN-584): never stamp a replacement over it; a thread may be un-archived.
+        self.hold_link = hold_link
         self._native_id_reader = native_id_reader
         self.record: Optional[ConvoRecord] = None
         self._ignored: list[str] = []
@@ -70,12 +73,14 @@ class ConvoSession:
         """Next turn opens a new record."""
         self.shutdown()
         self.resume_into = None
+        self.hold_link = False
         self.record = None
         self.status = "idle"
 
     def bind(self, convo_id: str) -> None:
         """Point this call at an existing record (live resume)."""
         self.resume_into = convo_id
+        self.hold_link = False
         self.record = None
         self.status = "idle"
 
@@ -173,7 +178,7 @@ class ConvoSession:
             rec.backend, rec.profile = self.backend, self.profile
             rec.native_session_id = nsid or rec.native_sessions.get(self.backend)
             changed = True
-        elif nsid and nsid != rec.native_session_id:
+        elif nsid and nsid != rec.native_session_id and not self.hold_link:
             owner = self._store.find_by_link(rec.backend, nsid)
             if owner is not None and owner.id != rec.id:
                 logger.warning(
