@@ -771,9 +771,10 @@ function ConversationMessages({
       <h2 id="transcript-heading" className="sr-only">Conversation</h2>
       {/* Phone: the sessions drawer closes on pick, so a failed switch must show here too (desktop shows it in the sidebar). */}
       {sessionError && attempt !== dismissedAttempt && (
+        <div className="min-[641px]:hidden">
         <div
           role="alert"
-          className="min-[641px]:hidden flex items-start gap-2 mx-3 mt-2 px-3 py-2 rounded-md text-[12px]"
+          className="flex items-start gap-2 mx-3 mt-2 px-3 py-2 rounded-md text-[12px]"
           style={{ color: 'var(--color-destructive)', border: '1px solid var(--color-destructive)' }}
           data-testid="session-error-banner"
         >
@@ -781,6 +782,7 @@ function ConversationMessages({
           <button type="button" aria-label="Dismiss error" className="shrink-0 cursor-pointer bg-transparent" style={{ color: 'inherit' }} onClick={() => setDismissedAttempt(attempt)}>
             ✕
           </button>
+        </div>
         </div>
       )}
       <div

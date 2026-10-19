@@ -123,6 +123,8 @@ def main() -> int:
                     check(page.get_by_test_id("sidebar-tabs").count() == 0 or not page.get_by_test_id("sidebar-tabs").is_visible(), "phone: drawer closed after pick")
                     check(page.get_by_test_id("session-error-banner").is_visible(), "phone: error is visible outside the drawer")
                 check(page.get_by_text(re.compile("isn.t available", re.I)).first.is_visible(), "an error says why the Hermes chat can't open")
+                if not a.mobile:  # the phone-only banner must not duplicate the sidebar error at desktop width
+                    check(not page.get_by_test_id("session-error-banner").is_visible(), "desktop: phone-only error banner is hidden (sidebar shows the error)")
                 if a.mobile:  # dismissal must not stick: every new failed switch shows the banner again
                     banner = page.get_by_test_id("session-error-banner")
                     page.get_by_label("Dismiss error").click(); page.wait_for_timeout(400)
