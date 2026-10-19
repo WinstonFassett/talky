@@ -70,3 +70,23 @@ export const convosApi = {
   switchProfile: (profile: string) =>
     send('/api/profiles/switch', 'POST', { profile }).then((r) => json<unknown>(r)),
 };
+
+// T3 Code threads (WIN-564): read-only list + attach (binds a Talky session to a T3 thread).
+export type T3ThreadStatus = 'running' | 'idle' | 'completed' | 'failed';
+
+export type T3Thread = {
+  id: string;
+  title: string;
+  project: string;
+  status: T3ThreadStatus;
+  last_activity: string;
+  model: string;
+};
+
+export const t3Api = {
+  threads: () => fetch('/api/t3/threads').then((r) => json<{ threads: T3Thread[] }>(r)),
+  attach: (threadId: string) =>
+    send('/api/t3/attach', 'POST', { thread_id: threadId }).then((r) =>
+      json<{ convo_id: string; created: boolean; thread: T3Thread }>(r),
+    ),
+};

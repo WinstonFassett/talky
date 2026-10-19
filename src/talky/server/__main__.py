@@ -941,6 +941,48 @@ def _build_webrtc_routes():
         voice_channel.new_convo()
         return JSONResponse({"status": "ok"})
 
+    # ── T3 Code threads (WIN-564) ────────────────────────────────────────
+    # Read-only list of T3 threads for the picker, and attach = bind a convo to one.
+
+    async def handle_t3_threads(request: Request):
+        """GET /api/t3/threads — T3 threads, running first then newest activity."""
+        from talky.backends import t3_threads
+
+        try:
+            rows = await t3_threads.list_threads()
+        except Exception as e:  # noqa: BLE001 — no token, T3 down, 401…
+            return JSONResponse({"error": f"T3 unavailable: {e}"}, status_code=502)
+        return JSONResponse({"threads": rows})
+
+    async def handle_t3_attach(request: Request):
+        """POST /api/t3/attach — JSON ``{"thread_id": str}``.
+
+        Creates (or reuses) the Talky convo bound to that T3 thread, seeded with the thread's
+        recent messages. A live t3 backend is re-pointed at the thread right away; otherwise
+        the client's follow-up ``/api/convos/resume`` + profile switch picks it up natively.
+        """
+        from talky.backends import t3_threads
+
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        ref = body.get("thread_id")
+        if not ref:
+            return JSONResponse({"error": "missing 'thread_id'"}, status_code=400)
+        try:
+            rows = await t3_threads.list_threads()
+            thread = t3_threads.resolve_thread(rows, ref)
+            out = await t3_threads.attach_thread(thread["id"])
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"error": f"T3 unavailable: {e}"}, status_code=502)
+        svc = voice_channel._llm_services.get("t3")  # noqa: SLF001
+        if svc is not None and hasattr(svc, "set_resume"):
+            svc.set_resume(thread["id"])
+        return JSONResponse({"status": "ok", **out})
+
     # ── convo browsing (WIN-535) ─────────────────────────────────────────
     # The app's session sidebar reads these; the CLI reads the store directly.
 
@@ -1333,6 +1375,8 @@ def _build_webrtc_routes():
         Route("/api/voices", handle_get_voices, methods=["GET"]),
         Route("/api/voices/switch", handle_switch_voice, methods=["POST"]),
         Route("/api/resume", handle_set_resume, methods=["POST"]),
+        Route("/api/t3/threads", handle_t3_threads, methods=["GET"]),
+        Route("/api/t3/attach", handle_t3_attach, methods=["POST"]),
         Route("/api/convos/resume", handle_resume_convo, methods=["POST"]),
         Route("/api/convos/new", handle_new_convo, methods=["POST"]),
         Route("/api/convos", handle_list_convos, methods=["GET"]),

@@ -24,9 +24,11 @@ Interrupt
 """
 
 import asyncio
-import json
+import math
 import os
+import struct
 import uuid
+from collections import deque
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -34,23 +36,44 @@ if TYPE_CHECKING:
 
 from loguru import logger
 from pipecat.frames.frames import (
+    AggregatedTextFrame,
     CancelFrame,
     EndFrame,
     Frame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
+    OutputAudioRawFrame,
     StartFrame,
     TextFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 
+from talky.backends.t3_auth import T3AuthError, available, ensure_token
 from talky.backends.t3_client import T3Client
 from talky.convos.replay import HistoryPreambleMixin
 from talky.server.turn import UserTurnTextFrame
 
 _TERMINAL = {"completed", "failed", "cancelled", "interrupted", "rolled_back"}
+
+# "Working" cue (WIN-564): T3's first reply takes 8-14 s. After CUE_DELAY of silence the
+# UI gets a status block and the user hears a soft double tick, repeated every CUE_EVERY.
+CUE_DELAY = 2.0
+CUE_EVERY = 6.0
+CUE_RATE = 24000
+
+
+def _working_earcon(rate: int = CUE_RATE) -> bytes:
+    """Two quiet 880 Hz ticks (~150 ms total), 16-bit mono PCM."""
+    def tick(ms: int) -> bytes:
+        n = rate * ms // 1000
+        return b"".join(
+            struct.pack("<h", int(3500 * math.sin(math.pi * i / n) * math.sin(2 * math.pi * 880 * i / rate)))
+            for i in range(n)
+        )
+
+    return tick(50) + b"\x00\x00" * (rate * 40 // 1000) + tick(50)
 
 
 class T3LLMService(HistoryPreambleMixin, LLMService):
@@ -62,6 +85,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
       token_file:     alternative: path to JSON from ``t3 auth session issue --json``
       project_id:     T3 project to launch the thread in (default: the "No project" scratch project)
       thread_id:      existing thread to talk to instead of launching a new one
+                      (``talky t3 attach`` / the web picker set it via the convo's native session id)
       instance_id:    provider instance, e.g. "claudeAgent"
       model:          model on that instance
       runtime_mode:   approval-required | auto-accept-edits | auto | full-access
@@ -72,8 +96,8 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
     def status() -> tuple["BackendStatus", str]:
         from talky.backends import BackendStatus
 
-        if not (os.environ.get("T3_TOKEN") or os.environ.get("T3_TOKEN_FILE")):
-            return BackendStatus.MISCONFIGURED, "set T3_TOKEN or T3_TOKEN_FILE (t3 auth session issue)"
+        if not available():
+            return BackendStatus.MISCONFIGURED, "run `talky t3 login` (or set T3_TOKEN / T3_TOKEN_FILE)"
         return BackendStatus.READY, ""
 
     def __init__(
@@ -95,7 +119,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         super().__init__(**kwargs)
         self._base_url = base_url
         self._token_env = token_env
-        self._token_file = token_file or os.environ.get("T3_TOKEN_FILE")
+        self._token_file = token_file  # None → $T3_TOKEN_FILE or ~/.talky/credentials/t3.json
         self._project_id = project_id
         # ``resume`` (a convo's native session id) wins over the configured ``thread_id``.
         # Either way the backend ATTACHES to that existing T3 thread instead of launching one.
@@ -107,6 +131,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         self._run_timeout = run_timeout
         self._client: Optional[T3Client] = None
         self._turn_task: Optional[asyncio.Task] = None
+        self._queued: deque[str] = deque()  # turns spoken while one is running (WIN-564)
 
     def set_resume(self, thread_id: Optional[str]) -> None:
         self._thread_id = thread_id
@@ -117,13 +142,8 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         return self._thread_id
 
     def _load_token(self) -> str:
-        tok = os.environ.get(self._token_env)
-        if not tok and self._token_file:
-            with open(os.path.expanduser(self._token_file)) as f:
-                tok = json.load(f)["token"]
-        if not tok:
-            raise RuntimeError(f"no T3 token: set ${self._token_env} or token_file")
-        return tok
+        """The current bearer; re-issues the stored session shortly before it expires."""
+        return ensure_token(self._token_env, self._token_file)
 
     # --- Lifecycle ---
 
@@ -141,6 +161,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         await self._shutdown()
 
     async def _shutdown(self):
+        self._queued.clear()
         if self._turn_task:
             self._turn_task.cancel()
             self._turn_task = None
@@ -165,7 +186,13 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         assert self._client is not None
         c = self._client
         started = False
+        cue = asyncio.create_task(self._working_cue(lambda: started))
         try:
+            try:
+                c._token = self._load_token()  # noqa: SLF001 — picks up a refreshed session
+            except T3AuthError as e:
+                await self._emit_backend_error(str(e))
+                return
             if self._thread_id is None:
                 res = await c.launch_thread(
                     project_id=await self._scratch_project(),
@@ -212,8 +239,36 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
             logger.error(f"t3 turn failed: {e}", exc_info=True)
             await self._emit_backend_error(f"T3 turn failed: {e}")
         finally:
+            cue.cancel()
             if started:
                 await self.push_frame(LLMFullResponseEndFrame())
+
+    async def _working_cue(self, reply_started) -> None:  # noqa: ANN001
+        """Fill the silence before T3's first words: a status block now, a soft earcon on a repeat."""
+        try:
+            await asyncio.sleep(CUE_DELAY)
+            first = True
+            while not reply_started():
+                await self.push_frame(
+                    AggregatedTextFrame(text="⏳ T3 is working…" if first else "⏳ still working…", aggregated_by="info")
+                )
+                await self.push_frame(OutputAudioRawFrame(audio=_working_earcon(), sample_rate=CUE_RATE, num_channels=1))
+                first = False
+                await asyncio.sleep(CUE_EVERY)
+        except asyncio.CancelledError:
+            pass
+
+    def _turn_finished(self, task: asyncio.Task) -> None:
+        """Serialize turns: run the next queued one only after the previous poll loop is done."""
+        if task is not self._turn_task:
+            return
+        self._turn_task = None
+        if self._queued and self._client:
+            self._start_turn(self._queued.popleft())
+
+    def _start_turn(self, text: str) -> None:
+        self._turn_task = asyncio.create_task(self._run_turn(text))
+        self._turn_task.add_done_callback(self._turn_finished)
 
     async def _emit_backend_error(self, message: str) -> None:
         try:
@@ -237,6 +292,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, InterruptionFrame):
+            self._queued.clear()  # spoken before the barge-in: superseded
             if self._turn_task and not self._turn_task.done():
                 self._turn_task.cancel()
                 await self._stop_thread()
@@ -249,7 +305,11 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
                 return
             logger.info(f"t3 ← user: {frame.text[:80]}")
             text = self._consume_preamble(frame.text)
-            self._turn_task = asyncio.create_task(self._run_turn(text))
+            if self._turn_task and not self._turn_task.done():
+                self._queued.append(text)  # one poll loop at a time: run after the current reply
+                logger.info(f"t3: turn queued behind a running one ({len(self._queued)} waiting)")
+            else:
+                self._start_turn(text)
             return
 
         await self.push_frame(frame, direction)

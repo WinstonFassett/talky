@@ -29,6 +29,7 @@ import {
 import type { ConvoRow } from './api';
 import { groupSessions, relativeTime } from './groups';
 import { useSessions } from './SessionsProvider';
+import { T3Threads } from './T3Threads';
 
 const label = {
   fontSize: 10,
@@ -374,6 +375,8 @@ function SessionList({ onPicked, onCollapse }: { onPicked?: () => void; onCollap
           </div>
         ))}
       </div>
+
+      <T3Threads onPicked={onPicked} />
 
       <div className="shrink-0 px-3 py-2" style={{ borderTop: '1px solid var(--color-border-soft)' }}>
         <button
