@@ -1138,6 +1138,12 @@ def _build_webrtc_routes():
             limit = int(request.query_params.get("limit", "200"))
         except ValueError:
             return JSONResponse({"error": "before/limit must be integers"}, status_code=400)
+        live = getattr(voice_channel, "_convo_session", None)
+        if rec.backend == "t3" and getattr(live, "convo_id", None) != convo_id:
+            from talky.backends.t3_threads import sync_convo  # WIN-587: T3 is truth
+
+            await sync_convo(store, convo_id)
+            rec = store.get(convo_id) or rec
         turns, start, total = await asyncio.to_thread(store.read_transcript_page, convo_id, before=before, limit=limit)
         return JSONResponse({
             "convo": _convo_row(rec),
