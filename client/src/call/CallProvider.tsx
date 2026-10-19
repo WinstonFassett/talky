@@ -40,6 +40,28 @@ type CallValue = {
   disconnect: () => void;
   /** After giving up: try again now. */
   retry: () => void;
+  /** Why the mic can't be heard, or null. `silent`: connected but no audio for >5 s. */
+  micIssue: MicIssue | null;
+  /** Ask for the mic again (re-prompts if the browser allows) and re-enable it. */
+  retryMic: () => Promise<void>;
+  /** One line on why the last call ended without the user ending it. */
+  dropReason: string | null;
+};
+
+export type MicIssue = { kind: 'blocked' | 'nodevice' | 'silent' | 'ended'; label: string };
+
+const SILENT_AFTER_MS = 5000;
+const LOUD = 0.002;
+
+const noMicPlugged = () =>
+  navigator.mediaDevices
+    .enumerateDevices()
+    .then((d) => !d.some((x) => x.kind === 'audioinput'))
+    .catch(() => false);
+
+const micErrorKind = (err: unknown): 'blocked' | 'nodevice' => {
+  const name = (err as { name?: string })?.name ?? '';
+  return name === 'NotFoundError' || name === 'OverconstrainedError' ? 'nodevice' : 'blocked';
 };
 
 const CallContext = createContext<CallValue | null>(null);
@@ -80,6 +102,9 @@ export function CallProvider({
   const muted = useRef(false);
   const transportRef = useRef(transportState);
   transportRef.current = transportState;
+  const [micIssue, setMicIssue] = useState<MicIssue | null>(null);
+  const [dropReason, setDropReason] = useState<string | null>(null);
+  const lastError = useRef<string | null>(null);
 
   const connectOnce = useCallback(async (): Promise<boolean> => {
     if (!(await reachable())) return false;
@@ -90,10 +115,12 @@ export function CallProvider({
       } catch { /* already gone */ }
       leaving.current = false;
     }
+    setMicIssue(null);
     try {
       await client.initDevices();
     } catch (err) {
       console.warn('initDevices failed (mic permission denied?):', err);
+      setMicIssue({ kind: micErrorKind(err), label: '' });
     }
     try {
       await Promise.race([
@@ -103,6 +130,12 @@ export function CallProvider({
         }),
       ]);
       if (muted.current) client.enableMic(false);
+      setDropReason(null);
+      const track = client.tracks()?.local?.audio;
+      if (!track) {
+        const none = await noMicPlugged();
+        setMicIssue((m) => m ?? { kind: none ? 'nodevice' : 'blocked', label: '' });
+      }
       return true;
     } catch (err) {
       console.warn('connect failed:', err);
@@ -139,6 +172,8 @@ export function CallProvider({
   );
 
   const disconnect = useCallback(() => {
+    setDropReason(null);
+    setMicIssue(null);
     epoch.current++;
     wanted.current = false;
     leaving.current = true;
@@ -152,6 +187,7 @@ export function CallProvider({
 
   const dropped = useCallback(() => {
     if (!wanted.current || modeRef.current !== 'normal') return;
+    setDropReason(lastError.current || 'The call was closed by the server.');
     if (dropCue) {
       dropCue.currentTime = 0;
       dropCue.play().catch(() => {});
@@ -218,6 +254,77 @@ export function CallProvider({
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [reconnect]);
 
+  // The server's own words for why it ended the call, kept for `dropped`.
+  useEffect(() => {
+    const onError = (msg: unknown) => {
+      const data = (msg as { data?: { message?: string; error?: string } })?.data;
+      lastError.current = data?.message || data?.error || null;
+    };
+    const onBotGone = () => {
+      lastError.current ||= 'The bot left the call.';
+    };
+    client.on('error', onError);
+    client.on('botDisconnected', onBotGone);
+    return () => {
+      client.off('error', onError);
+      client.off('botDisconnected', onBotGone);
+    };
+  }, [client]);
+
+  // Connected with an open mic, but no sound for 5 s, or the track ended/muted.
+  useEffect(() => {
+    if (transportState !== 'ready') return;
+    const track = client.tracks()?.local?.audio;
+    if (!track) return;
+    const label = track.label || 'Default mic';
+    const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new AC();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    ctx.createMediaStreamSource(new MediaStream([track])).connect(analyser);
+    const buf = new Float32Array(analyser.fftSize);
+    let lastLoud = Date.now();
+    const tick = () => {
+      if (track.readyState === 'ended') {
+        setMicIssue({ kind: 'ended', label });
+        return;
+      }
+      if (!client.isMicEnabled) {
+        lastLoud = Date.now();
+        setMicIssue((m) => (m?.kind === 'silent' ? null : m));
+        return;
+      }
+      analyser.getFloatTimeDomainData(buf);
+      let peak = 0;
+      for (const v of buf) peak = Math.max(peak, Math.abs(v));
+      if (peak > LOUD && !track.muted) {
+        lastLoud = Date.now();
+        setMicIssue((m) => (m?.kind === 'silent' || m?.kind === 'ended' ? null : m));
+      } else if (Date.now() - lastLoud > SILENT_AFTER_MS) {
+        setMicIssue((m) => (m?.kind === 'silent' ? m : { kind: 'silent', label }));
+      }
+    };
+    const id = setInterval(tick, 250);
+    return () => {
+      clearInterval(id);
+      void ctx.close().catch(() => {});
+    };
+  }, [transportState, client]);
+
+  const retryMic = useCallback(async () => {
+    try {
+      await client.initDevices();
+      client.enableMic(true);
+      muted.current = false;
+      setMicIssue(null);
+      if (!client.tracks()?.local?.audio) {
+        setMicIssue({ kind: (await noMicPlugged()) ? 'nodevice' : 'blocked', label: '' });
+      }
+    } catch (err) {
+      setMicIssue({ kind: micErrorKind(err), label: '' });
+    }
+  }, [client]);
+
   const retry = useCallback(() => {
     wanted.current = true;
     void reconnect();
@@ -232,7 +339,10 @@ export function CallProvider({
     return 'disconnected';
   }, [mode, transportState]);
 
-  const value = useMemo(() => ({ state, connect, disconnect, retry }), [state, connect, disconnect, retry]);
+  const value = useMemo(
+    () => ({ state, connect, disconnect, retry, micIssue, retryMic, dropReason }),
+    [state, connect, disconnect, retry, micIssue, retryMic, dropReason],
+  );
   return <CallContext.Provider value={value}>{children}</CallContext.Provider>;
 }
 

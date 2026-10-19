@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
 import { ConversationPanelWithReasoning } from './ConversationPanelWithReasoning';
-import { Loader2Icon, WifiOffIcon } from 'lucide-react';
+import { Loader2Icon, MicOffIcon, WifiOffIcon } from 'lucide-react';
 
 import type { TransportType } from '../config';
 import { PermissionBanner } from './PermissionBanner';
@@ -92,6 +92,57 @@ function ConnectionBanner() {
           <Loader2Icon size={13} className="animate-spin" aria-hidden="true" />
           <span>Reconnecting…</span>
         </>
+      )}
+    </div>
+  );
+}
+
+// Mic trouble and why a call ended, under the header. Blocked/no-device show
+// Retry; a call that connected but hears nothing names the selected device.
+function MicBanner() {
+  const call = useCall();
+  const { micIssue: m, dropReason } = call;
+  let text: string | null = null;
+  let retry = false;
+  if (m && (call.state === 'connected' || call.state === 'connecting')) {
+    retry = true;
+    text =
+      m.kind === 'blocked'
+        ? 'Microphone blocked — allow it for this site, then retry.'
+        : m.kind === 'nodevice'
+          ? 'No microphone found — plug one in, then retry.'
+          : m.kind === 'ended'
+            ? `Microphone disconnected${m.label ? `: ${m.label}` : ''}. Retry to pick it up again.`
+            : `No mic audio detected${m.label ? ` from ${m.label}` : ''}.`;
+    if (m.kind === 'silent') retry = false;
+  } else if (dropReason && (call.state === 'disconnected' || call.state === 'offline')) {
+    text = `Call ended: ${dropReason}`;
+  }
+  if (!text) return null;
+  return (
+    <div
+      role="alert"
+      data-testid="mic-banner"
+      data-kind={m?.kind ?? 'dropped'}
+      className="flex items-center justify-center gap-2 px-3 py-1.5 text-[12px] shrink-0"
+      style={{
+        borderBottom: '1px solid var(--color-border-soft)',
+        backgroundColor: 'var(--color-panel-2)',
+        color: 'var(--color-destructive)',
+      }}
+    >
+      <MicOffIcon size={13} className="shrink-0" aria-hidden="true" />
+      <span className="min-w-0">{text}</span>
+      {retry && (
+        <button
+          type="button"
+          data-testid="mic-retry"
+          onClick={() => void call.retryMic()}
+          className="rounded px-2 py-0.5 font-medium shrink-0"
+          style={{ border: '1px solid var(--color-border)', color: 'var(--color-foreground)' }}
+        >
+          Retry
+        </button>
       )}
     </div>
   );
@@ -199,6 +250,7 @@ const AppShell = ({ client, autoconnect = false }: AppProps) => {
       </header>
       <HeaderChips isNarrow={isNarrow} linkLabel={linkLabel} />
       <ConnectionBanner />
+      <MicBanner />
 
       <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
         <div className="h-full mx-auto flex flex-col w-full min-w-0" style={{ maxWidth: 600 }}>
