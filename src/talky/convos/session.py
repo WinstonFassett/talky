@@ -167,9 +167,11 @@ class ConvoSession:
         changed = False
         nsid = self._read_native_id()
         if (rec.backend, rec.profile) != (self.backend, self.profile):
+            # A session id only means something to the backend that issued it: park the
+            # old backend's link and reactivate the new backend's, if the Chat had one.
+            rec.native_sessions = rec.links()
             rec.backend, rec.profile = self.backend, self.profile
-            # A session id only means something to the backend that issued it.
-            rec.native_session_id = nsid
+            rec.native_session_id = nsid or rec.native_sessions.get(self.backend)
             changed = True
         elif nsid and nsid != rec.native_session_id:
             owner = self._store.find_by_link(rec.backend, nsid)

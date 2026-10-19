@@ -1472,7 +1472,7 @@ class VoiceChannel:
         target_profile = profile or rec.profile
         tp = get_profile_manager().get_talky_profile(target_profile)
         target_backend = (tp.llm_backend if tp and tp.llm_backend else None) or target_profile
-        native = rec.native_session_id if rec.native_session_id and target_backend == rec.backend else None
+        native = rec.links().get(target_backend)
         return {
             "convo_id": rec.id,
             "profile": target_profile,

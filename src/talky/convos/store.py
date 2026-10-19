@@ -50,14 +50,27 @@ class ConvoRecord:
     last_active_at: float
     title: str = ""
     native_session_id: Optional[str] = None  # backend's own session id, when it has one
+    # One native session link per backend the Chat has used (WIN-584), so switching
+    # backend and back reconnects to the original session. ``backend`` +
+    # ``native_session_id`` stay the active pair; read links through ``links()``.
+    native_sessions: dict[str, str] = field(default_factory=dict)
     pinned: bool = False
     archived: bool = False
     # A user turn was received and its reply never completed (daemon died
     # mid-turn). The daemon resumes this turn after a restart (WIN-536).
     in_progress: bool = False
 
+    def links(self) -> dict[str, str]:
+        """``backend -> native id`` for every backend this Chat is linked on; the active pair wins."""
+        out = dict(self.native_sessions)
+        if self.native_session_id:
+            out[self.backend] = self.native_session_id
+        return out
+
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d["native_sessions"] = {k: v for k, v in self.links().items() if k != self.backend}  # parked links only
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "ConvoRecord":
@@ -69,6 +82,7 @@ class ConvoRecord:
             last_active_at=float(d["last_active_at"]),
             title=d.get("title", "") or "",
             native_session_id=d.get("native_session_id") or None,
+            native_sessions={str(k): str(v) for k, v in (d.get("native_sessions") or {}).items() if v},
             pinned=bool(d.get("pinned", False)),
             archived=bool(d.get("archived", False)),
             in_progress=bool(d.get("in_progress", False)),
@@ -141,7 +155,7 @@ class ConvoStore:
     def find_by_link(self, backend: str, native_id: str) -> Optional[ConvoRecord]:
         """The convo bound to ``native_id`` on ``backend`` (newest first), or None."""
         for rec in self.list():
-            if rec.backend == backend and rec.native_session_id == native_id:
+            if rec.links().get(backend) == native_id:
                 return rec
         return None
 
@@ -149,8 +163,9 @@ class ConvoStore:
         """``native id -> convo id`` for ``backend``; one ``list()`` pass serves a whole page."""
         out: dict[str, str] = {}
         for rec in self.list():  # newest first: the first convo for an id wins
-            if rec.backend == backend and rec.native_session_id:
-                out.setdefault(rec.native_session_id, rec.id)
+            nid = rec.links().get(backend)
+            if nid:
+                out.setdefault(nid, rec.id)
         return out
 
     # --- updates -----------------------------------------------------------
