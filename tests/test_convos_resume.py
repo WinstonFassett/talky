@@ -714,3 +714,66 @@ def test_sync_meta_refuses_a_native_id_already_linked_to_another_convo(channel):
     assert store.get(session.record.id).native_session_id is None
     assert store.find_by_link("t3", "t-shared").id == original.id
     assert any("already linked" in m for m in logs)
+
+
+# ── WIN-584: a Chat remembers one native session link per backend ────────────
+
+
+def test_native_sessions_round_trip_and_old_records_seed_the_map(tmp_path):
+    store = ConvoStore(tmp_path)
+    rec = store.create(backend="t3", profile="t3", native_session_id="t-1")
+    rec.native_sessions = {"claude": "c-1"}
+    store.save(rec)
+    got = store.get(rec.id)
+    assert got.links() == {"t3": "t-1", "claude": "c-1"}
+    assert got.native_session_id == "t-1" and got.backend == "t3"
+
+    # a record written before the map existed loads and seeds it from backend + id
+    meta = store._meta_path(rec.id)
+    d = json.loads(meta.read_text())
+    del d["native_sessions"]
+    meta.write_text(json.dumps(d))
+    old = store.get(rec.id)
+    assert old.native_sessions == {} and old.links() == {"t3": "t-1"}
+    assert store.find_by_link("t3", "t-1").id == rec.id
+
+
+def test_switching_backend_and_back_returns_the_original_native_session(channel, tmp_path):
+    store = channel._convo_store
+    rec = store.create(backend="t3", profile="t3", native_session_id="t-orig")
+
+    def run(backend, nsid):
+        s = ConvoSession(store, backend=backend, profile=backend, resume_into=rec.id, native_id_reader=lambda: nsid)
+        s.append("user", "hi")
+        return s
+
+    cb = channel._resume_plan(rec.id, "claude")["backend"]  # the backend the claude profile resolves to
+    run(cb, "c-1")
+    got = store.get(rec.id)
+    assert (got.backend, got.native_session_id) == (cb, "c-1")
+    assert got.links() == {"t3": "t-orig", cb: "c-1"}
+    assert store.find_by_link("t3", "t-orig").id == rec.id  # the parked link still resolves
+
+    assert channel._resume_plan(rec.id, "t3")["native_session_id"] == "t-orig"
+    assert channel._resume_plan(rec.id, "claude")["native_session_id"] == "c-1"
+
+    run("t3", "t-orig")  # the resumed T3 backend reports the original thread
+    got = store.get(rec.id)
+    assert (got.backend, got.native_session_id) == ("t3", "t-orig")
+    assert got.links() == {"t3": "t-orig", cb: "c-1"}
+
+
+def test_the_duplicate_guard_works_per_backend_and_id(channel):
+    store = channel._convo_store
+    a = store.create(backend="t3", profile="t3", native_session_id="t-x")
+    a.native_sessions = {"claude": "c-x"}
+    store.save(a)
+    # claude id "t-x" is a different (backend, id) pair: allowed
+    s = ConvoSession(store, backend="claude", profile="claude", native_id_reader=lambda: "t-x")
+    s.append("user", "hi")
+    assert store.get(s.record.id).native_session_id == "t-x"
+    # a parked link on another Chat is still guarded
+    s2 = ConvoSession(store, backend="claude", profile="claude", native_id_reader=lambda: "c-x")
+    s2.append("user", "hi")
+    assert store.get(s2.record.id).native_session_id is None
+    assert store.find_by_link("claude", "c-x").id == a.id
