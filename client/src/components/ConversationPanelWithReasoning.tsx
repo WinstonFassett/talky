@@ -607,8 +607,8 @@ function ConversationMessages({
     (!voiceStateOverride && connected && voiceState === 'speaking');
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const { hasOlder, loadOlder, loading, openId, error: sessionError } = useSessions();
-  const [dismissedError, setDismissedError] = useState<string | null>(null);
+  const { hasOlder, loadOlder, loading, openId, error: sessionError, attempt } = useSessions();
+  const [dismissedAttempt, setDismissedAttempt] = useState<number | null>(null);
 
   // ── Follow the reader, never the stream ──
   // `following` is true while the reader is within FOLLOW_SLACK of the bottom.
@@ -770,7 +770,7 @@ function ConversationMessages({
     <div className="relative h-full flex flex-col min-h-0">
       <h2 id="transcript-heading" className="sr-only">Conversation</h2>
       {/* Phone: the sessions drawer closes on pick, so a failed switch must show here too (desktop shows it in the sidebar). */}
-      {sessionError && sessionError !== dismissedError && (
+      {sessionError && attempt !== dismissedAttempt && (
         <div
           role="alert"
           className="min-[641px]:hidden flex items-start gap-2 mx-3 mt-2 px-3 py-2 rounded-md text-[12px]"
@@ -778,7 +778,7 @@ function ConversationMessages({
           data-testid="session-error-banner"
         >
           <span className="flex-1 min-w-0 break-words">{sessionError}</span>
-          <button type="button" aria-label="Dismiss error" className="shrink-0 cursor-pointer bg-transparent" style={{ color: 'inherit' }} onClick={() => setDismissedError(sessionError)}>
+          <button type="button" aria-label="Dismiss error" className="shrink-0 cursor-pointer bg-transparent" style={{ color: 'inherit' }} onClick={() => setDismissedAttempt(attempt)}>
             ✕
           </button>
         </div>
