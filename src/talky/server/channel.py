@@ -1720,7 +1720,7 @@ class VoiceChannel:
     def _leave_current_convo(self, next_convo_id: str) -> None:
         """Opening another chat mid-call: nothing the old chat's backend still says may reach the new one (WIN-582).
 
-        Persists the half-spoken reply into the old convo, stops the old backend's in-flight turn
+        Persists the half-spoken reply into the old convo (and fences off the rest of it), stops the old backend's in-flight turn
         (a T3 poll loop would otherwise keep pushing its "working" cue and reply text into whatever
         convo is bound next) and cuts the bot's speech.
         """
@@ -1728,7 +1728,7 @@ class VoiceChannel:
         if session is None or session.convo_id == next_convo_id:
             return
         if self._assistant_sink is not None:
-            self._assistant_sink.flush()
+            self._assistant_sink.fence()
         old = self._llm_services.get(session.backend)
         abandon = getattr(old, "abandon_turn", None)
         if callable(abandon):

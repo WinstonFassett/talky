@@ -617,3 +617,30 @@ def test_open_convo_switches_the_live_profile(channel, monkeypatch):
 
     assert switched == ["hermes"] and out["backend"] == "hermes"
     assert channel._convo_session.convo_id == rec.id
+
+
+def test_assistant_sink_fence_keeps_old_reply_out_of_the_next_chat(tmp_path):
+    import asyncio
+
+    from pipecat.frames.frames import InterruptionFrame, LLMFullResponseStartFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    from pipecat.utils.string import TextPartForConcatenation
+
+    from talky.convos.transcript_sink import ConvoAssistantTranscriptProcessor
+
+    store = ConvoStore(root=tmp_path)
+    old = store.create(backend="t3", profile="t3")
+    new = store.create(backend="hermes", profile="hermes")
+    session = ConvoSession(store, backend="t3", profile="t3", resume_into=old.id)
+    sink = ConvoAssistantTranscriptProcessor(session)
+    sink._current_assistant_text_parts = [TextPartForConcatenation("first half", includes_inter_part_spaces=False)]
+
+    sink.fence()  # opening the next chat
+    session.bind(new.id)
+    # the old reply's remaining words and its close land after the rebind
+    sink._current_assistant_text_parts = [TextPartForConcatenation("second half", includes_inter_part_spaces=False)]
+    asyncio.run(sink.process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM))
+
+    assert [t.content for t in store.read_transcript(old.id)] == ["first half"]
+    assert store.read_transcript(new.id) == []
+    assert sink._fenced is False  # the next backend's reply is recorded again

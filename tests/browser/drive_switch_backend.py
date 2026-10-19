@@ -131,6 +131,9 @@ def main() -> int:
             check(prof.get("hermes") is True, "live pipeline switched to the hermes profile")
             check(rec.get("backend") == "hermes" and rec.get("profile") == "hermes", "bound chat is still a hermes chat (not re-tagged t3)")
             check(not page.get_by_text(re.compile("Couldn.t continue", re.I)).count(), "no 'Couldn't continue session' error banner")
+            page.wait_for_timeout(4000)  # the T3 reply was still being spoken when the chat opened
+            saved = " ".join(t["content"] for t in get(f"/api/convos/{cur['id']}?limit=100")["turns"])
+            check("ack:" not in saved, "the T3 reply that was playing isn't saved into the Hermes chat")
             pick("t3")
             prof = {p["name"]: p.get("active") for p in get("/api/profiles")["profiles"]}
             check(prof.get("t3") is True, "opening a T3 chat switches back to t3")
