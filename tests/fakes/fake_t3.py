@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import copy
 import json
+import os
 import re
 import uuid
 from datetime import datetime, timezone
@@ -51,9 +52,26 @@ class State:
         now = _now()
         msgs = self.messages.setdefault(thread_id, [])
         msgs.append({"id": str(uuid.uuid4()), "role": "user", "text": text, "createdAt": now, "runId": run})
-        msgs.append({"id": str(uuid.uuid4()), "role": "assistant", "text": f"ack: {text}", "createdAt": now, "runId": run})
+        reply = {"id": str(uuid.uuid4()), "role": "assistant", "text": f"ack: {text}", "createdAt": now, "runId": run}
         runs = self.runs.setdefault(thread_id, [])
-        runs.append({"id": run, "status": "completed"})
+        run_rec = {"id": run, "status": "completed"}
+        # FAKE_T3_REPLY_DELAY_FILE (WIN-582): seconds a reply takes, read per turn, so a drive can
+        # switch chats while a T3 turn is still in flight.
+        try:
+            delay = float(Path(os.environ["FAKE_T3_REPLY_DELAY_FILE"]).read_text().strip() or 0)
+        except (KeyError, OSError, ValueError):
+            delay = 0.0
+        if delay > 0:
+            run_rec["status"] = "running"
+
+            def finish() -> None:
+                msgs.append(reply)
+                run_rec["status"] = "completed"
+
+            asyncio.get_running_loop().call_later(delay, finish)
+        else:
+            msgs.append(reply)
+        runs.append(run_rec)
         t = self.thread(thread_id)
         if t:
             t["updatedAt"] = now

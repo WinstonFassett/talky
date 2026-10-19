@@ -1663,6 +1663,7 @@ class VoiceChannel:
                     live_svc.set_history([] if native else plan["turns"])
             else:
                 self._apply_replay(live_svc, {**plan, "replay": True})
+            self._leave_current_convo(plan["convo_id"])
             self._convo_session.bind(plan["convo_id"])
             # A daemon restart mid-turn: once this convo is bound again, replay the turn.
             self._maybe_resume_interrupted_turn(plan["convo_id"])
@@ -1684,6 +1685,27 @@ class VoiceChannel:
             "replay_turns": 0 if plan["native_session_id"] else len(plan["turns"]),
             "applied": when,
         }
+
+    def _leave_current_convo(self, next_convo_id: str) -> None:
+        """Opening another chat mid-call: nothing the old chat's backend still says may reach the new one (WIN-582).
+
+        Persists the half-spoken reply into the old convo, stops the old backend's in-flight turn
+        (a T3 poll loop would otherwise keep pushing its "working" cue and reply text into whatever
+        convo is bound next) and cuts the bot's speech.
+        """
+        session = self._convo_session
+        if session is None or session.convo_id == next_convo_id:
+            return
+        if self._assistant_sink is not None:
+            self._assistant_sink.flush()
+        old = self._llm_services.get(session.backend)
+        abandon = getattr(old, "abandon_turn", None)
+        if callable(abandon):
+            abandon()
+        try:
+            asyncio.get_running_loop().create_task(self.interrupt())
+        except RuntimeError:
+            pass  # no loop (unit tests)
 
     @staticmethod
     def _convos_enabled(pm: Any) -> bool:

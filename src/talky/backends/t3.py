@@ -266,6 +266,15 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         except asyncio.CancelledError:
             pass
 
+    def abandon_turn(self) -> None:
+        """Stop reading the current turn's reply (the call was rebound to another chat, WIN-582).
+
+        Unlike an ``InterruptionFrame`` this leaves T3's own run alone: the user only left the chat.
+        """
+        self._queued.clear()
+        if self._turn_task and not self._turn_task.done():
+            self._turn_task.cancel()
+
     def _turn_finished(self, task: asyncio.Task) -> None:
         """Serialize turns: run the next queued one only after the previous poll loop is done."""
         if task is not self._turn_task:

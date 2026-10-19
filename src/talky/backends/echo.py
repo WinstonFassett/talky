@@ -227,3 +227,36 @@ class StreamingEchoLLMService(EchoLLMService):
             return
 
         await self.push_frame(frame, direction)
+
+
+class SessionEchoLLMService(EchoLLMService):
+    """Stand-in for a session-owning backend (Hermes / Claude Code) in browser rigs (WIN-582).
+
+    Like the real ones it binds to one native session at construction (``resume=``) and has no
+    ``live_attach``/``set_resume``. Each reply names the session and quotes that session's marker, read
+    from the JSON file ``$TALKY_FAKE_SESSIONS`` (``{session_id: marker}``), so a test can tell which
+    session answered and that it saw ITS history. A transcript replay (``set_history``) is quoted instead.
+    """
+
+    def __init__(self, *, kind: str = "fake", resume: str | None = None, **kwargs: Any) -> None:
+        super().__init__(name=kind, **kwargs)
+        self._kind = kind
+        self.session_id: str | None = resume
+        self._replayed: str | None = None
+
+    def set_history(self, turns: list[dict]) -> None:
+        super().set_history(turns)
+        self._replayed = " | ".join(t.get("content", "") for t in turns if isinstance(t, dict))[:200] or None
+
+    def render(self, text: str) -> str:
+        import json
+        import os
+
+        marker = self._replayed or ""
+        path = os.environ.get("TALKY_FAKE_SESSIONS")
+        if self.session_id and path:
+            try:
+                marker = json.load(open(path)).get(self.session_id, marker)
+            except (OSError, ValueError):
+                pass
+        return f"[{self._kind}:{self.session_id or 'new'}] history says {marker or 'nothing'}. you said: {text}"
