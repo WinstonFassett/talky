@@ -644,3 +644,73 @@ def test_assistant_sink_fence_keeps_old_reply_out_of_the_next_chat(tmp_path):
     assert [t.content for t in store.read_transcript(old.id)] == ["first half"]
     assert store.read_transcript(new.id) == []
     assert sink._fenced is False  # the next backend's reply is recorded again
+
+
+# ── WIN-583: New chat must not keep sending into the old native session ──────
+
+
+class _LaunchClient:
+    """Fake T3 client: records launches/sends, hands out t-1, t-2, ... Everything else about T3 is real."""
+
+    def __init__(self):
+        self.launched: list[str] = []
+        self.sent: list[tuple[str, str]] = []
+
+    async def shell(self):
+        return {"projects": [{"id": "p", "title": "No project"}]}
+
+    async def launch_thread(self, *, text, **kw):
+        self.launched.append(text)
+        return {"threadId": f"t-{len(self.launched)}"}
+
+    async def send_message(self, thread_id, text):
+        self.sent.append((thread_id, text))
+
+    async def thread_projection(self, thread_id):
+        return {"runs": [{"id": "r", "status": "completed"}], "messages": [{"id": "m", "role": "assistant", "runId": "r", "text": "ok"}]}
+
+
+def test_new_convo_resets_the_live_t3_thread_so_the_next_turn_launches_a_new_one(channel, monkeypatch):
+    import asyncio
+
+    from talky.backends.t3 import T3LLMService
+    from talky.convos.session import native_session_id_of
+
+    monkeypatch.setattr(T3LLMService, "_load_token", lambda self: "tok")
+    svc = T3LLMService(poll_interval=0, resume="t-old")  # real class; only the client is fake
+    client = _LaunchClient()
+    svc._client = client  # type: ignore[assignment]
+    channel._llm_services = {"t3": svc}
+    rec = channel._convo_store.create(backend="t3", profile="t3", native_session_id="t-old")
+    session = ConvoSession(
+        channel._convo_store, backend="t3", profile="t3", resume_into=rec.id,
+        native_id_reader=lambda: native_session_id_of(svc),
+    )
+    channel._convo_session = session
+
+    channel.new_convo()
+    asyncio.run(svc._run_turn("hello"))
+    session.append("user", "hello")
+
+    assert client.launched == ["hello"] and client.sent == []  # NEW thread, not a send into t-old
+    assert session.record.id != rec.id
+    assert session.record.native_session_id == "t-1"
+    assert channel._convo_store.get(rec.id).native_session_id == "t-old"  # original Chat keeps its link
+    assert channel._convo_store.find_by_link("t3", "t-old").id == rec.id
+
+
+def test_sync_meta_refuses_a_native_id_already_linked_to_another_convo(channel):
+    from loguru import logger
+
+    logs: list[str] = []
+    sink = logger.add(logs.append, level="WARNING")
+    store = channel._convo_store
+    original = store.create(backend="t3", profile="t3", native_session_id="t-shared")
+    session = ConvoSession(store, backend="t3", profile="t3", native_id_reader=lambda: "t-shared")
+    session.append("user", "hi")
+    logger.remove(sink)
+
+    assert session.record.id != original.id
+    assert store.get(session.record.id).native_session_id is None
+    assert store.find_by_link("t3", "t-shared").id == original.id
+    assert any("already linked" in m for m in logs)

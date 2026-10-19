@@ -172,8 +172,15 @@ class ConvoSession:
             rec.native_session_id = nsid
             changed = True
         elif nsid and nsid != rec.native_session_id:
-            rec.native_session_id = nsid
-            changed = True
+            owner = self._store.find_by_link(rec.backend, nsid)
+            if owner is not None and owner.id != rec.id:
+                logger.warning(
+                    f"ConvoSession: native session {nsid} is already linked to convo {owner.id}; "
+                    f"not stamping it on {rec.id}"
+                )
+            else:
+                rec.native_session_id = nsid
+                changed = True
         if changed:
             self._store.save(rec)
         self.record = rec
