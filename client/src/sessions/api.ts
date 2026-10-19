@@ -143,3 +143,14 @@ export const t3Api = {
       json<{ convo_id: string; created: boolean; thread: unknown }>(r),
     ),
 };
+
+export type NativeTool = 'claude' | 'hermes';
+
+export const nativeApi = {
+  list: (tool: NativeTool) =>
+    fetch(`/api/native/sessions?tool=${tool}`).then((r) => json<{ sessions: T3Thread[]; total: number }>(r)),
+  attach: (tool: NativeTool, sessionId: string) =>
+    send('/api/native/attach', 'POST', { tool, session_id: sessionId }).then((r) =>
+      json<{ convo_id: string; created: boolean }>(r),
+    ),
+};

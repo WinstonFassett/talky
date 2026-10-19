@@ -4,10 +4,12 @@
 import { useState } from 'react';
 import { MoreHorizontalIcon, PinIcon, RefreshCwIcon, XIcon } from 'lucide-react';
 
-import { t3Api, type T3Status, type T3Thread, type T3ThreadStatus } from './api';
+import { nativeApi, t3Api, type NativeTool, type T3Status, type T3Thread, type T3ThreadStatus } from './api';
 import { relativeTime } from './groups';
 import { useSessions } from './SessionsProvider';
+import { ProjectCombobox } from './ProjectCombobox';
 import { ConnectionCard } from './t3/ConnectionCard';
+import { useNativeSessions } from './useNativeSessions';
 import type { T3Sessions } from './useT3Sessions';
 
 const COLOR: Record<T3ThreadStatus, string> = {
@@ -19,10 +21,13 @@ const COLOR: Record<T3ThreadStatus, string> = {
 const LEGEND_KEY = 'talky.inToolsLegend';
 const mute = { color: 'var(--color-text-mute)' } as const;
 const SOURCES = [
-  { id: 't3', label: 'T3', live: true },
-  { id: 'claude', label: 'Claude', live: false },
-  { id: 'hermes', label: 'Hermes', live: false },
+  { id: 't3', label: 'T3' },
+  { id: 'claude', label: 'Claude' },
+  { id: 'hermes', label: 'Hermes' },
 ] as const;
+type Source = (typeof SOURCES)[number]['id'];
+const NATIVE_WHERE: Record<NativeTool, string> = { claude: '~/.claude/projects', hermes: '~/.hermes/state.db' };
+const NATIVE_NAME: Record<NativeTool, string> = { claude: 'Claude Code', hermes: 'Hermes' };
 
 function ThreadRow({ t, busy, disabled, onPick }: { t: T3Thread; busy: boolean; disabled: boolean; onPick: (t: T3Thread) => void }) {
   const linked = !!t.convo_id;
@@ -75,6 +80,10 @@ function ThreadRow({ t, busy, disabled, onPick }: { t: T3Thread; busy: boolean; 
 
 export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void }) {
   const { open } = useSessions();
+  const [source, setSource] = useState<Source>('t3');
+  const [nativeProject, setNativeProject] = useState<string | null>(null);
+  const tool: NativeTool | null = source === 't3' ? null : source;
+  const native = useNativeSessions(tool);
   const [attaching, setAttaching] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [legend, setLegend] = useState(() => {
@@ -89,18 +98,29 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
   const pick = async (t: T3Thread) => {
     setAttaching(t.id);
     try {
-      const convoId = t.convo_id ?? (await t3Api.attach(t.id)).convo_id;
-      await open(convoId, 't3');
+      const convoId = t.convo_id ?? (await (tool ? nativeApi.attach(tool, t.id) : t3Api.attach(t.id))).convo_id;
+      await open(convoId, tool ? (tool === 'claude' ? 'claude' : 'hermes') : 't3');
       onPicked?.();
-      if (!t.convo_id) void s.refresh(true);
+      if (!t.convo_id) void (tool ? native.refresh() : s.refresh(true));
     } catch (e) {
-      s.setError(`Couldn't open: ${e instanceof Error ? e.message : e}`);
+      (tool ? native.setError : s.setError)(`Couldn't open: ${e instanceof Error ? e.message : e}`);
     } finally {
       setAttaching(null);
     }
   };
 
-  const chips = s.projects.filter((p) => p.thread_count > 0);
+  const nativeRows = native.sessions?.filter((t) => !nativeProject || t.project_id === nativeProject) ?? null;
+  const nativeOptions = Object.values(
+    (native.sessions ?? []).reduce<Record<string, { id: string; title: string; count: number }>>((acc, t) => {
+      const k = t.project_id ?? t.project;
+      (acc[k] ??= { id: k, title: t.project, count: 0 }).count++;
+      return acc;
+    }, {}),
+  ).sort((a, b) => b.count - a.count);
+  const options = tool ? nativeOptions : s.projects.filter((p) => p.thread_count > 0).map((p) => ({ id: p.id, title: p.title, count: p.thread_count }));
+  const rows = tool ? nativeRows : s.threads;
+  const err = tool ? native.error : s.error;
+  const showList = tool ? true : connected;
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="in-tools">
       <div className="flex shrink-0 items-center gap-1 px-2 pt-2">
@@ -110,21 +130,23 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
               key={src.id}
               type="button"
               data-testid={`intools-source-${src.id}`}
-              aria-pressed={src.live}
-              disabled={!src.live}
-              title={src.live ? undefined : 'coming soon'}
-              className="rounded px-2 py-0.5 font-mono text-[11px] disabled:cursor-not-allowed disabled:opacity-45"
+              aria-pressed={source === src.id}
+              className="rounded px-2 py-0.5 font-mono text-[11px]"
               style={{
                 border: '1px solid var(--color-border-soft)',
-                backgroundColor: src.live ? 'var(--color-muted)' : undefined,
-                color: src.live ? 'var(--color-foreground)' : 'var(--color-text-mute)',
+                backgroundColor: source === src.id ? 'var(--color-muted)' : undefined,
+                color: source === src.id ? 'var(--color-foreground)' : 'var(--color-text-mute)',
+              }}
+              onClick={() => {
+                setSource(src.id);
+                setNativeProject(null);
               }}
             >
               {src.label}
             </button>
           ))}
         </div>
-        {connected && (
+        {!tool && connected && (
           <div className="relative">
             <button
               type="button"
@@ -157,23 +179,23 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
         <button
           type="button"
           data-testid="t3-refresh"
-          title="Refresh T3 threads"
-          aria-label="Refresh T3 threads"
+          title="Refresh"
+          aria-label="Refresh"
           className="inline-flex size-6 items-center justify-center rounded hover:bg-[var(--color-muted)]"
           style={{ color: 'var(--color-text-dim)' }}
-          onClick={() => void s.refresh(true)}
+          onClick={() => void (tool ? native.refresh() : s.refresh(true))}
         >
-          <RefreshCwIcon size={12} className={s.loading ? 'animate-spin' : ''} />
+          <RefreshCwIcon size={12} className={(tool ? native.loading : s.loading) ? 'animate-spin' : ''} />
         </button>
       </div>
 
-      {connected && legend && (
+      {showList && legend && (
         <div
           data-testid="intools-legend"
           className="relative mx-2 mt-2 shrink-0 rounded-md py-1.5 pl-2 pr-6 text-[11px] leading-snug"
           style={{ ...mute, border: '1px solid var(--color-border-soft)' }}
         >
-          Chats live in Talky. T3 and Claude keep their own threads. Open one and Talky makes a Chat linked to it.
+          Threads these tools already have. Open one and Talky creates a Chat linked to it.
           <button
             type="button"
             data-testid="intools-legend-dismiss"
@@ -191,47 +213,41 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
         </div>
       )}
 
-      {connected && chips.length > 0 && (
-        <div className="flex shrink-0 gap-1 overflow-x-auto px-2 pt-2" data-testid="intools-chips">
-          {[{ id: null as string | null, title: 'All' }, ...chips].map((c) => (
-            <button
-              key={c.id ?? 'all'}
-              type="button"
-              data-testid="intools-chip"
-              data-project-id={c.id ?? ''}
-              aria-pressed={s.filter === c.id}
-              className="shrink-0 rounded-full px-2 py-0.5 text-[11px]"
-              style={{
-                border: '1px solid var(--color-border-soft)',
-                backgroundColor: s.filter === c.id ? 'var(--color-muted)' : undefined,
-                color: s.filter === c.id ? 'var(--color-foreground)' : 'var(--color-text-mute)',
-              }}
-              onClick={() => s.setFilter(c.id)}
-            >
-              {c.title}
-            </button>
-          ))}
+      {showList && options.length > 0 && (
+        <div className="shrink-0 px-2 pt-2" data-testid="intools-chips">
+          <ProjectCombobox
+            options={options}
+            value={tool ? nativeProject : s.filter}
+            onChange={(id) => (tool ? setNativeProject(id) : s.setFilter(id))}
+          />
         </div>
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2" data-testid="t3-thread-list">
-        {s.status && !connected && <ConnectionCard status={s.status} onStatus={(st: T3Status) => s.onStatus(st)} />}
-        {s.error && (
+        {!tool && s.status && !connected && <ConnectionCard status={s.status} onStatus={(st: T3Status) => s.onStatus(st)} />}
+        {err && (
           <div className="px-2 pb-2 text-[12px]" style={{ color: 'var(--color-destructive)' }} data-testid="t3-error">
-            {s.error}
+            {err}
           </div>
         )}
-        {connected && s.threads?.length === 0 && (
+        {tool && native.sessions?.length === 0 && !native.error && (
+          <div className="px-3 py-6 text-center text-[12px] leading-snug" style={mute} data-testid="intools-empty">
+            No {NATIVE_NAME[tool]} sessions found.
+            <br />
+            Talky reads them from {NATIVE_WHERE[tool]}.
+          </div>
+        )}
+        {!tool && connected && s.threads?.length === 0 && (
           <div className="px-3 py-6 text-center text-[12px] leading-snug" style={mute} data-testid="intools-empty">
             No T3 threads yet.
             <br />
             Start one in T3 Code and it shows up here; open it to get a Chat.
           </div>
         )}
-        {s.threads?.map((t) => (
+        {rows?.map((t) => (
           <ThreadRow key={t.id} t={t} busy={attaching === t.id} disabled={attaching !== null} onPick={(x) => void pick(x)} />
         ))}
-        {s.cursor && (
+        {!tool && s.cursor && (
           <button
             type="button"
             data-testid="t3-more"

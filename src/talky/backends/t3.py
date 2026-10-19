@@ -52,6 +52,7 @@ from pipecat.services.llm_service import LLMService
 
 from talky.backends.t3_auth import T3AuthError, available, ensure_token
 from talky.backends.t3_client import T3Client
+from talky.backends.t3_threads import base_url as t3_base_url
 from talky.convos.replay import HistoryPreambleMixin
 from talky.server.turn import UserTurnTextFrame
 
@@ -106,7 +107,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
     def __init__(
         self,
         *,
-        base_url: str = "http://127.0.0.1:3773",
+        base_url: Optional[str] = None,
         token_env: str = "T3_TOKEN",
         token_file: Optional[str] = None,
         project_id: Optional[str] = None,
@@ -120,7 +121,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self._base_url = base_url
+        self._base_url = base_url or t3_base_url()  # same $T3_BASE_URL the thread picker uses
         self._token_env = token_env
         self._token_file = token_file  # None → $T3_TOKEN_FILE or ~/.talky/credentials/t3.json
         self._project_id = project_id
@@ -244,7 +245,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
             raise
         except Exception as e:
             logger.error(f"t3 turn failed: {e}", exc_info=True)
-            await self._emit_backend_error(f"T3 turn failed: {e}")
+            await self._emit_backend_error(f"T3 turn failed: {e or type(e).__name__}")
         finally:
             cue.cancel()
             if started:

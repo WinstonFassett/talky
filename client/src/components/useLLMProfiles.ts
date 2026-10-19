@@ -17,6 +17,10 @@ interface ProfilesResponse {
   live: boolean;
 }
 
+/** The profile's display name: its human label ("T3 Code"), not the id it is keyed by ("t3"). */
+export const profileTitle = (p: Pick<LLMProfile, 'name' | 'label' | 'description'>) =>
+  p.label !== p.name ? p.label : p.description || p.label;
+
 // A profile is one backend + model (+ the voice active alongside it). Listed by
 // /api/profiles, switched with POST /api/profiles/switch.
 export function useLLMProfiles() {

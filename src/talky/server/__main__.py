@@ -1058,6 +1058,36 @@ def _build_webrtc_routes():
             return _t3_error(e)
         return JSONResponse({"status": "ok", **out})
 
+    async def handle_native_sessions(request: Request):
+        """GET /api/native/sessions?tool=claude|hermes — that tool's own saved sessions, newest first."""
+        from talky.backends import native_sessions
+
+        try:
+            rows = await asyncio.to_thread(native_sessions.list_sessions, request.query_params.get("tool", ""))
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"error": f"couldn't read sessions: {e}"}, status_code=502)
+        return JSONResponse({"sessions": rows, "total": len(rows)})
+
+    async def handle_native_attach(request: Request):
+        """POST /api/native/attach — JSON ``{"tool": "claude"|"hermes", "session_id": str}``; creates or reuses the linked Chat."""
+        from talky.backends import native_sessions
+
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        if not body.get("session_id"):
+            return JSONResponse({"error": "missing 'session_id'"}, status_code=400)
+        try:
+            out = await asyncio.to_thread(native_sessions.attach_session, body.get("tool", ""), body["session_id"])
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"error": f"couldn't attach: {e}"}, status_code=502)
+        return JSONResponse({"status": "ok", **out})
+
     # ── convo browsing (WIN-535) ─────────────────────────────────────────
     # The app's session sidebar reads these; the CLI reads the store directly.
 
@@ -1456,6 +1486,8 @@ def _build_webrtc_routes():
         Route("/api/t3/projects", handle_t3_projects, methods=["GET"]),
         Route("/api/t3/threads", handle_t3_project_threads, methods=["GET"]),
         Route("/api/t3/attach", handle_t3_attach, methods=["POST"]),
+        Route("/api/native/sessions", handle_native_sessions, methods=["GET"]),
+        Route("/api/native/attach", handle_native_attach, methods=["POST"]),
         Route("/api/convos/resume", handle_resume_convo, methods=["POST"]),
         Route("/api/convos/new", handle_new_convo, methods=["POST"]),
         Route("/api/convos", handle_list_convos, methods=["GET"]),

@@ -4,7 +4,7 @@ import { CheckIcon, ChevronDownIcon, Link2Icon } from 'lucide-react';
 
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { PickerTrigger } from './PickerTrigger';
-import { useLLMProfiles } from './useLLMProfiles';
+import { profileTitle, useLLMProfiles } from './useLLMProfiles';
 import { useVoiceProfiles } from './useVoiceProfiles';
 
 // Header row 2 (WIN-579): ONE profile chip (name ▾) + the link chip. The chip opens
@@ -57,10 +57,10 @@ function ProfilePanel({ onDone }: { onDone: () => void }) {
                 style={{ backgroundColor: unhealthy ? 'var(--color-warning)' : p.healthy === null ? 'var(--color-text-mute)' : 'var(--color-success)' }}
               />
               <span className="min-w-0 flex-1 truncate">
-                {p.label}
-                {p.description && p.description !== p.label && (
-                  <span className="ml-2 text-[11px]" style={{ color: 'var(--color-text-mute)' }}>
-                    {p.description}
+                {profileTitle(p)}
+                {profileTitle(p) !== p.name && (
+                  <span className="ml-2 font-mono text-[11px]" style={{ color: 'var(--color-text-mute)' }}>
+                    {p.name}
                   </span>
                 )}
               </span>
@@ -76,7 +76,7 @@ function ProfilePanel({ onDone }: { onDone: () => void }) {
       )}
       {current && (
         <div className="border-t pt-2" style={{ borderColor: 'var(--color-border-soft)' }} data-testid="profile-details">
-          <Detail name="Backend" value={current.backend || current.label} testId="profile-backend" />
+          <Detail name="Backend" value={current.backend || current.name} testId="profile-backend" />
           {current.model && <Detail name="Model" value={current.model} testId="profile-model" />}
           {voice && <Detail name="Voice" value={voice.description || voice.name} testId="profile-voice" />}
         </div>
@@ -90,9 +90,9 @@ function ProfileChip({ isNarrow }: { isNarrow: boolean }) {
   const { current } = useLLMProfiles();
   if (!current) return null;
   const trigger: ReactNode = (
-    <PickerTrigger variant="chip" open={open} data-testid="chip-profile" title={`Profile: ${current.label}`} className="shrink min-w-0">
+    <PickerTrigger variant="chip" open={open} data-testid="chip-profile" title={`Profile: ${profileTitle(current)}`} className="shrink min-w-0">
       <span className="truncate" data-testid="chip-profile-label">
-        {current.label}
+        {profileTitle(current)}
       </span>
       <ChevronDownIcon size={11} style={{ color: 'var(--color-text-mute)' }} className="shrink-0" />
     </PickerTrigger>

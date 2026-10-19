@@ -75,7 +75,7 @@ llm_backends:
     service_class: "talky.backends.t3.T3LLMService"
     announcement: "T3 Code channel."
     config:
-      base_url: "http://127.0.0.1:3773"
+      base_url: null     # null = $T3_BASE_URL or http://127.0.0.1:3773 (same as the thread picker)
       # Scoped bearer: t3 auth session issue --scope orchestration:read --scope orchestration:operate
       token_env: "T3_TOKEN"
       token_file: null

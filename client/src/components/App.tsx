@@ -130,7 +130,8 @@ const AppShell = ({ client, autoconnect = false }: AppProps) => {
   const sessions = useOptionalSessions();
   const openRow = sessions?.rows.find((r) => r.id === sessions.openId);
   const chatTitle = openRow?.title || activeProfileLabel;
-  const linkLabel = openRow?.backend === 't3' && openRow.native_session_id ? 'T3' : null;
+  const LINK_LABEL: Record<string, string> = { t3: 'T3', 'claude-code': 'Claude', hermes: 'Hermes' };
+  const linkLabel = (openRow?.native_session_id && openRow.backend && LINK_LABEL[openRow.backend]) || null;
 
   useEffect(() => {
     if (autoconnect && client && !autoconnectAttempted.current) {
