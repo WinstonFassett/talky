@@ -69,9 +69,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
@@ -254,6 +256,8 @@ class VoiceChannel:
         # started yet; applied when _ensure_backend starts it.
         self._deferred_resumes: dict[str, dict] = {}
         self._active_profile: Optional[str] = None
+        # WIN-579: the selected Talky profile survives idle teardown and daemon restart.
+        self._active_profile = self._load_persisted_profile()
 
         # Speech buffer — written by MCPDriverLLMService, drained by listen()
         self._user_speech_queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -652,6 +656,65 @@ class VoiceChannel:
             "grace_seconds": grace,
         }
 
+    # ── persisted Talky profile selection (WIN-579) ─────────────────────────
+
+    @staticmethod
+    def _state_path() -> Path:
+        from talky.shared.profile_manager import get_profile_manager
+
+        return get_profile_manager().config_dir / "state.json"
+
+    def _persist_profile(self, profile_name: str) -> None:
+        """Remember the selected Talky profile on disk (``~/.talky/state.json``)."""
+        try:
+            path = self._state_path()
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"active_profile": profile_name}))
+            tmp.replace(path)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"VoiceChannel: could not persist profile {profile_name!r}: {e}")
+
+    def _load_persisted_profile(self) -> Optional[str]:
+        """The persisted Talky profile if it still exists, else None.
+
+        Also queues that profile's voice (if it sets one) for the next build.
+        """
+        try:
+            from talky.shared.profile_manager import get_profile_manager
+
+            data = json.loads(self._state_path().read_text())
+            name = data.get("active_profile") if isinstance(data, dict) else None
+            pm = get_profile_manager()
+            tp = pm.get_talky_profile(name) if name else None
+            if tp is None:
+                return None
+            if tp.voice_profile and pm.get_voice_profile(tp.voice_profile):
+                self._pending_voice_profile = tp.voice_profile
+            return name
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _remember_profile(self, profile_name: str, announce: bool) -> str:
+        # Only manual picker/API switches persist; agent joins (announce=False) and
+        # the MCP passthrough are transient.
+        if announce and profile_name != self.MCP_DRIVER_PROFILE:
+            self._persist_profile(profile_name)
+        return profile_name
+
+    async def _apply_profile_voice(self, profile_name: str) -> None:
+        """Apply the Talky profile's ``voice_profile`` (if it sets one); else leave voice as-is."""
+        from talky.shared.profile_manager import get_profile_manager
+
+        tp = get_profile_manager().get_talky_profile(profile_name)
+        if not tp or not tp.voice_profile:
+            return
+        try:
+            await self.switch_voice(tp.voice_profile)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"VoiceChannel: profile {profile_name!r} voice {tp.voice_profile!r} not applied: {e}"
+            )
+
     def available_profiles(self) -> list[str]:
         """List of profile names the channel will accept for ``switch_to_profile``.
 
@@ -722,11 +785,12 @@ class VoiceChannel:
         if not self.is_live() or self._pipeline_task is None:
             # Soft path: no live pipeline. Store the desired profile and
             # let the next build apply it.
-            self._active_profile = profile_name
+            self._active_profile = self._remember_profile(profile_name, announce)
             logger.info(
                 f"VoiceChannel: profile {profile_name!r} stored as desired "
                 "(no live pipeline — will apply on next browser connect)"
             )
+            await self._apply_profile_voice(profile_name)
             await self._emit_profile_changed(profile_name)
             return
 
@@ -745,8 +809,9 @@ class VoiceChannel:
         from pipecat.frames.frames import ManuallySwitchServiceFrame
 
         await self._pipeline_task.queue_frames([ManuallySwitchServiceFrame(service=service)])
-        self._active_profile = profile_name
+        self._active_profile = self._remember_profile(profile_name, announce)
         logger.info(f"VoiceChannel: active profile → {profile_name!r}")
+        await self._apply_profile_voice(profile_name)
         await self._emit_profile_changed(profile_name)
 
         if self._convo_session is not None:
@@ -1025,6 +1090,7 @@ class VoiceChannel:
         from talky.shared.profile_manager import get_profile_manager
 
         active = self._active_profile
+        voices = {v["name"]: v for v in self.voices_info()}
         profiles: list[dict] = [
             {
                 "name": self.MCP_DRIVER_PROFILE,
@@ -1052,6 +1118,8 @@ class VoiceChannel:
                     "healthy": self._health.get(backend_name),
                     "backend": backend_name,
                     "model": model if isinstance(model, str) else None,
+                    "voice_profile": tp.voice_profile if tp else None,
+                    "voice": voices.get(tp.voice_profile) if tp and tp.voice_profile else None,
                 })
         except Exception:  # noqa: BLE001
             pass
@@ -1370,7 +1438,7 @@ class VoiceChannel:
         self._deferred_resumes = {}
 
         if not preserve_active_profile:
-            self._active_profile = None
+            self._active_profile = self._load_persisted_profile()
         # If preserving: _active_profile stays as the "desired profile"
         # that the next attach() will switch back to.
 

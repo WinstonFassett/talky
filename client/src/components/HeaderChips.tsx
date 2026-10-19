@@ -71,6 +71,11 @@ function ProfilePanel({ onDone, linkLabel }: { onDone: () => void; linkLabel?: s
                 <span data-testid="profile-summary" className="block truncate font-mono text-[11px]" style={{ color: 'var(--color-text-mute)' }}>
                   {[p.backend, p.model].filter(Boolean).join(' · ') || p.description}
                 </span>
+                {p.voice_profile && (
+                  <span data-testid="profile-row-voice" className="block truncate font-mono text-[11px]" style={{ color: 'var(--color-text-mute)' }}>
+                    voice: {p.voice?.description || p.voice_profile} {p.voice ? (p.voice.ready ? '✓' : '✗') : ''}
+                  </span>
+                )}
               </span>
               {selected && <CheckIcon size={13} style={{ color: 'var(--color-accent)' }} />}
             </button>

@@ -10,6 +10,9 @@ export interface LLMProfile {
   description: string;
   active: boolean;
   healthy: boolean | null;
+  /** Voice profile this profile applies on switch; null/absent = keeps the current voice. */
+  voice_profile?: string | null;
+  voice?: { name: string; description: string; ready: boolean; tts: string; stt: string } | null;
 }
 
 interface ProfilesResponse {
