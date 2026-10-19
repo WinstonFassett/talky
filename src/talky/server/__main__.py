@@ -918,7 +918,7 @@ def _build_webrtc_routes():
 
         JSON ``{"convo_id": str, "profile": str | null}``. Binds the live call
         (or the next one) to that record and replays its transcript when the
-        target backend can't natively resume. Does not switch profile.
+        target backend can't natively resume. Switches the live pipeline to the chat's profile (WIN-582).
         """
         try:
             body = await request.json() or {}
@@ -928,9 +928,11 @@ def _build_webrtc_routes():
         if not convo_id:
             return JSONResponse({"error": "missing 'convo_id'"}, status_code=400)
         try:
-            result = voice_channel.resume_convo(convo_id, body.get("profile"))
+            result = await voice_channel.open_convo(convo_id, body.get("profile"))
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
+        except RuntimeError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
         except Exception as e:  # noqa: BLE001 — e.g. a corrupt convo.json
             logger.warning(f"/api/convos/resume failed for {convo_id!r}: {e}")
             return JSONResponse({"error": f"could not resume {convo_id!r}: {e}"}, status_code=500)

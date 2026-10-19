@@ -89,7 +89,7 @@ function ThreadRow({ t, busy, disabled, onPick }: { t: T3Thread; busy: boolean; 
 }
 
 export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void }) {
-  const { open } = useSessions();
+  const { open, error: openError } = useSessions();
   const [source, setSource] = useState<Source>('t3');
   const [nativeProject, setNativeProject] = useState<string | null>(null);
   const [showAutomated, setShowAutomated] = useState(false);
@@ -148,7 +148,7 @@ export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void 
   const pinned = rest?.filter((t) => t.pinned) ?? [];
   const others = rest?.filter((t) => !t.pinned) ?? [];
   const grouped = recent.length > 0 || pinned.length > 0;
-  const err = tool ? native.error : s.error;
+  const err = (tool ? native.error : s.error) ?? openError;
   const showList = tool ? true : connected;
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="in-tools">

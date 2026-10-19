@@ -28,6 +28,8 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=18791)
     ap.add_argument("--mobile", action="store_true")
     ap.add_argument("--t3-delay-file", help="FAKE_T3_REPLY_DELAY_FILE of the rig's fake T3: enables the in-flight scenario")
+    ap.add_argument("--real-hermes", action="store_true", help="rig runs the REAL hermes backend class (WIN-582): assert the live call rebinds to it, no turns sent")
+    ap.add_argument("--hermes-unavailable", action="store_true", help="with --real-hermes, daemon started with HERMES_HOME=<dir with fake_tools' state.db and no hermes-agent>: opening a Hermes chat must fail cleanly (error shown, stays on T3, chat not re-tagged)")
     ap.add_argument("--shots", default="/tmp/win582")
     a = ap.parse_args()
     if a.port in (8765, 18781):
@@ -105,6 +107,39 @@ def main() -> int:
             slow = f"t3-slow-q-{RUN}"
             box.fill(slow); box.press("Enter")
             page.wait_for_timeout(1500)
+        if a.real_hermes:
+            # Real hermes backend class (no stand-in): no model call. The live pipeline must switch to it and
+            # bind the chat; the chat's record must keep backend=hermes (a T3 service must not re-tag it).
+            pick("hermes", HERMES_TITLE if a.hermes_unavailable else "Pineapple code word test")  # a real session in the login user's Hermes store (read-only listing)
+            shot("2-hermes-opened")
+            if a.hermes_unavailable:
+                prof = {p["name"]: p.get("active") for p in get("/api/profiles")["profiles"]}
+                cv = get("/api/convos")
+                rec = next((c for c in cv["convos"] if (c.get("title") or "").startswith("Hermes")), {})
+                check(prof.get("t3") is True, "Hermes unavailable: pipeline stays on t3")
+                check(rec.get("backend") == "hermes", "Hermes chat record not re-tagged as t3")
+                check(page.get_by_text(re.compile("isn.t available", re.I)).count() > 0, "an error says why the Hermes chat can't open")
+                r = ask("after-fail-q", None)
+                check("ack:" in r and not (get("/api/convos")["current"] or {}).get("id") == rec.get("id"), "a T3 reply never lands in the Hermes chat")
+                br.close()
+                return 1 if fails else 0
+            prof = {p["name"]: p.get("active") for p in get("/api/profiles")["profiles"]}
+            cv = get("/api/convos")
+            cur = cv["current"] or {}
+            rec = next((c for c in cv["convos"] if c["id"] == cur.get("id")), {})
+            log("  active:", [k for k, v in prof.items() if v], "current convo:", cur.get("id"), "backend:", rec.get("backend"))
+            check(prof.get("hermes") is True, "live pipeline switched to the hermes profile")
+            check(rec.get("backend") == "hermes" and rec.get("profile") == "hermes", "bound chat is still a hermes chat (not re-tagged t3)")
+            check(not page.get_by_text(re.compile("Couldn.t continue", re.I)).count(), "no 'Couldn't continue session' error banner")
+            pick("t3")
+            prof = {p["name"]: p.get("active") for p in get("/api/profiles")["profiles"]}
+            check(prof.get("t3") is True, "opening a T3 chat switches back to t3")
+            r = ask("t3-second-q", None)
+            shot("4-back-to-t3")
+            check("ack:" in r, "back on a T3 chat: reply from T3 again")
+            br.close()
+            check(not errors, "no pageerror")
+            return 1 if fails else 0
         pick("hermes", HERMES_TITLE)
         r = ask("hermes-q", None)
         shot("2-hermes-opened")

@@ -206,13 +206,11 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   /** Make `id` the daemon's current convo (resume + profile switch); no LLM call. */
   const bind = useCallback(async (id: string, profile?: string) => {
     try {
-      const [plan, now] = await Promise.all([convosApi.resume(id, profile), convosApi.profiles()]);
+      // The daemon switches the live pipeline to the chat's profile itself (WIN-582); it answers 409 if it can't.
+      await convosApi.resume(id, profile);
       // Read the active profile fresh: the cached one is stale after a daemon restart.
-      const active = now.profiles.find((p) => p.active)?.name ?? '';
-      activeProfileRef.current = active;
-      if (plan.profile && plan.profile !== active) {
-        await convosApi.switchProfile(plan.profile);
-      }
+      const now = await convosApi.profiles();
+      activeProfileRef.current = now.profiles.find((p) => p.active)?.name ?? '';
     } catch (e) {
       setError(`Couldn't continue session: ${e instanceof Error ? e.message : e}`);
     }

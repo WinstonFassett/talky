@@ -1686,6 +1686,37 @@ class VoiceChannel:
             "applied": when,
         }
 
+    async def open_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
+        """Open a saved chat: bind it AND make the live pipeline run its backend (WIN-582).
+
+        ``resume_convo`` only rebinds the session; without the profile switch the old backend (a T3
+        thread) keeps answering into the new chat and re-tags its record. All-or-nothing: if the chat's
+        backend can't run, nothing is bound and the caller gets a ``RuntimeError`` to show.
+        """
+        plan = self._resume_plan(convo_id, profile)
+        live = self.is_live() and self._convo_session is not None
+        backend = plan["backend"]
+        if live and backend != self.MCP_DRIVER_PROFILE and backend not in self._llm_services:
+            from talky.backends import BackendStatus
+            from talky.shared.profile_manager import get_profile_manager
+
+            self._refresh_backend_status(get_profile_manager())
+            entry = self._backend_status.get(backend) or {}
+            if entry.get("status") != BackendStatus.READY.value:
+                raise RuntimeError(f"can't open this chat: {backend} isn't available ({entry.get('reason') or 'not configured'})")
+        result = self.resume_convo(convo_id, profile)
+        if plan["profile"] != self._active_profile:
+            try:
+                await self.switch_to_profile(plan["profile"])
+            except Exception as e:  # noqa: BLE001 -- e.g. the backend failed to construct
+                # Don't leave the chat bound to a backend that isn't running it: the old backend would answer
+                # into it. The next turn opens a fresh chat instead.
+                self._deferred_resumes.pop(backend, None)
+                if self._convo_session is not None:
+                    self._convo_session.start_fresh()
+                raise RuntimeError(f"can't open this chat: {e}") from e
+        return result
+
     def _leave_current_convo(self, next_convo_id: str) -> None:
         """Opening another chat mid-call: nothing the old chat's backend still says may reach the new one (WIN-582).
 
