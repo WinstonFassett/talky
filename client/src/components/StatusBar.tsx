@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 import { SessionSheet } from './SessionSheet';
 
@@ -96,7 +95,6 @@ export const StatusBar = ({
           <SessionSheet currentLabel={currentLabel} />
         ) : (
           <div className="flex items-center min-w-0">
-            <LLMProfileSelect variant="footer" />
             <VoiceProfileSelect variant="footer" />
           </div>
         )}

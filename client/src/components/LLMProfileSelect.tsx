@@ -16,6 +16,8 @@ import { PickerTrigger } from './PickerTrigger';
 
 interface LLMProfile {
   name: string;
+  backend?: string;
+  model?: string | null;
   label: string;
   description: string;
   active: boolean;
@@ -27,9 +29,13 @@ interface ProfilesResponse {
   live: boolean;
 }
 
+// `chip` (header row, WIN-578): `chipKind` picks the label. `backend` renders
+// "by <backend>", `model` renders the profile's model (nothing if it has none).
+// Both open the same profile list: a profile is what carries backend + model.
 export const LLMProfileSelect = ({
   variant = 'bordered',
-}: { variant?: 'bordered' | 'footer' | 'title' } = {}) => {
+  chipKind = 'backend',
+}: { variant?: 'bordered' | 'footer' | 'title' | 'chip'; chipKind?: 'backend' | 'model' } = {}) => {
   const [profiles, setProfiles] = useState<LLMProfile[]>([]);
   const [activeProfile, setActiveProfile] = useState<string>('');
   const [switching, setSwitching] = useState(false);
@@ -98,6 +104,7 @@ export const LLMProfileSelect = ({
   if (profiles.length === 0) return null;
 
   const current = profiles.find((p) => p.name === activeProfile) ?? profiles[0];
+  if (variant === 'chip' && chipKind === 'model' && !current.model) return null;
   const comboData = profiles.map((p) => ({ value: p.name, label: p.label }));
 
   return (
@@ -144,9 +151,18 @@ export const LLMProfileSelect = ({
             variant={variant}
             disabled={switching}
             title={`Switch profile · current: ${current.label}`}
+            data-testid={variant === 'chip' ? `chip-${chipKind}` : undefined}
           >
-            <StatusDot healthy={current.healthy} />
-            <span className="truncate">{current.label}</span>
+            {variant === 'chip' ? (
+              <span className="truncate" data-testid={`chip-${chipKind}-label`}>
+                {chipKind === 'model' ? current.model : <>by {current.label}</>}
+              </span>
+            ) : (
+              <>
+                <StatusDot healthy={current.healthy} />
+                <span className="truncate">{current.label}</span>
+              </>
+            )}
             <ChevronDownIcon
               size={11}
               style={{ color: 'var(--color-text-mute)' }}

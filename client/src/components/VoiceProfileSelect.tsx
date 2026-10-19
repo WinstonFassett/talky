@@ -17,7 +17,7 @@ import { useVoiceProfiles } from './useVoiceProfiles';
 export const VoiceProfileSelect = ({
   compact = false,
   variant = 'bordered',
-}: { compact?: boolean; variant?: 'bordered' | 'footer' } = {}) => {
+}: { compact?: boolean; variant?: 'bordered' | 'footer' | 'chip' } = {}) => {
   const { voices, activeVoice, switching, error, switchVoice } = useVoiceProfiles();
   const [open, setOpen] = useState(false);
 
@@ -43,12 +43,15 @@ export const VoiceProfileSelect = ({
           open={open}
           variant={variant}
           disabled={switching}
+          data-testid={variant === 'chip' ? 'chip-voice' : undefined}
           title={`Switch voice profile · current: ${current.description || current.name}`}
         >
           {variant === 'footer' ? (
             <span style={{ color: 'var(--color-text-mute)' }} className="shrink-0">
               Voice:
             </span>
+          ) : variant === 'chip' ? (
+            <span aria-hidden="true" className="shrink-0">🎙</span>
           ) : (
             <VolumeIcon
               size={12}

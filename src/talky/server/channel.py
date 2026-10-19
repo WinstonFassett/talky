@@ -1017,7 +1017,7 @@ class VoiceChannel:
 
         Works without a live pipeline — reads from config. Each entry:
         ``{"name": str, "label": str, "description": str, "active": bool,
-        "healthy": bool | None}``.
+        "healthy": bool | None, "backend": str, "model": str | None}``.
 
         MCP Mode is prepended as a synthetic entry (it's the raw
         receiving state, not a talky profile).
@@ -1042,12 +1042,16 @@ class VoiceChannel:
                 # back to the profile name itself for the lookup.
                 tp = pm.get_talky_profile(name)
                 backend_name = (tp.llm_backend if tp and tp.llm_backend else name)
+                backend_cfg = pm.get_llm_backend(backend_name)
+                model = (backend_cfg.config or {}).get("model") if backend_cfg else None
                 profiles.append({
                     "name": name,
                     "label": name,
                     "description": desc,
                     "active": active == name,
                     "healthy": self._health.get(backend_name),
+                    "backend": backend_name,
+                    "model": model if isinstance(model, str) else None,
                 })
         except Exception:  # noqa: BLE001
             pass

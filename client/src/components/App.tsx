@@ -13,6 +13,8 @@ import { SpeakerMuteButton } from './SpeakerMuteButton';
 import { MuteButton } from './MuteButton';
 import { AudioSettingsButton } from './audio/AudioSettingsButton';
 import { StatusBar } from './StatusBar';
+import { HeaderChips } from './HeaderChips';
+import { useOptionalSessions } from '../sessions/SessionsProvider';
 import { SessionDrawer, SessionRail, SessionsToggle, useRailOpen } from '../sessions/SessionSidebar';
 import { CallProvider, useCall } from '../call/CallProvider';
 import { TurnProvider } from '../turn/TurnProvider';
@@ -112,18 +114,23 @@ const AppShell = ({ client, autoconnect = false }: AppProps) => {
   }, [client]);
 
   // Track active profile (name + label).
-  const [profileLabels, setProfileLabels] = useState<Record<string, string>>({});
-  useDaemonEvent('init', (data: { profiles?: Array<{ name: string; label: string; active: boolean }> }) => {
+  const [profileInfo, setProfileInfo] = useState<Record<string, { label: string; model?: string | null }>>({});
+  useDaemonEvent('init', (data: { profiles?: Array<{ name: string; label: string; active: boolean; model?: string | null }> }) => {
     const profiles = data?.profiles;
     if (!profiles) return;
-    setProfileLabels(Object.fromEntries(profiles.map((p) => [p.name, p.label])));
+    setProfileInfo(Object.fromEntries(profiles.map((p) => [p.name, { label: p.label, model: p.model }])));
     const active = profiles.find((p) => p.active);
     if (active) setActiveProfile(active.name);
   });
   useDaemonEvent('profileChanged', (data: { type?: string; profile?: string }) => {
     if (data?.type === 'llm' && data.profile) setActiveProfile(data.profile);
   });
-  const activeProfileLabel = profileLabels[activeProfile] ?? activeProfile;
+  const activeProfileLabel = profileInfo[activeProfile]?.label ?? activeProfile;
+  // Chat title for the header: the open chat's title, else the profile label.
+  const sessions = useOptionalSessions();
+  const openRow = sessions?.rows.find((r) => r.id === sessions.openId);
+  const chatTitle = openRow?.title || activeProfileLabel;
+  const linkLabel = openRow?.backend === 't3' && openRow.native_session_id ? 'T3' : null;
 
   useEffect(() => {
     if (autoconnect && client && !autoconnectAttempted.current) {
@@ -151,46 +158,45 @@ const AppShell = ({ client, autoconnect = false }: AppProps) => {
     <div className="relative flex flex-col flex-1 min-w-0 h-full">
       <PermissionBanner />
       <header
-        className="grid items-center shrink-0 border-b gap-2 pl-2 pr-1 sm:pr-2 h-9"
+        data-testid="app-header"
+        className="flex items-center shrink-0 border-b gap-2 pl-2 pr-1 sm:pr-2 h-9"
         style={{
-          gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)',
           borderColor: 'var(--color-border-soft)',
           backgroundColor: 'var(--color-card)',
         }}
       >
         {/* Left: sessions toggle (when the rail is hidden) + voice status. */}
-        <div className="flex items-center gap-1 min-w-0 justify-self-start">
+        <div className="flex items-center gap-1 min-w-0 shrink-0">
           {!showRail && <SessionsToggle onClick={toggleSessions} />}
-          <StatusBadge state={voiceState} />
+          <StatusBadge state={voiceState} compact={isNarrow} />
         </div>
 
-        {/* Center: session title — bare profile label, read-only. Dropped
-            ≤640px: on small screens the status label keeps its spot. */}
-        <div className="flex items-center min-w-0 justify-self-center">
-          {!isNarrow && activeProfile && (
-            <span
-              className="truncate font-medium"
-              style={{
-                fontSize: '0.9375rem',
-                letterSpacing: '-0.01em',
-                color: 'var(--color-foreground)',
-              }}
-              title={activeProfileLabel}
-            >
-              {activeProfileLabel}
-            </span>
-          )}
+        {/* Chat title: always visible, also on phone. */}
+        <div className="flex items-center min-w-0 flex-1">
+          <span
+            data-testid="chat-title"
+            className="truncate font-medium"
+            style={{
+              fontSize: '0.9375rem',
+              letterSpacing: '-0.01em',
+              color: 'var(--color-foreground)',
+            }}
+            title={chatTitle}
+          >
+            {chatTitle}
+          </span>
         </div>
 
         {/* Right: Mic mute · Speaker mute · Settings · More. Mutes and
             devices show only when connected. */}
-        <div className="flex items-center gap-0.5 shrink-0 justify-self-end">
+        <div className="flex items-center gap-0.5 shrink-0">
           {transportConnected && <MuteButton />}
           {transportConnected && <SpeakerMuteButton />}
           {transportConnected && <AudioSettingsButton />}
           <MoreMenu />
         </div>
       </header>
+      <HeaderChips isNarrow={isNarrow} profile={profileInfo[activeProfile]} linkLabel={linkLabel} />
       <ConnectionBanner />
 
       <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
