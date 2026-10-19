@@ -1508,6 +1508,9 @@ class VoiceChannel:
             live_svc = self._llm_services.get(self._convo_session.backend)
             if live_svc is not None and getattr(live_svc, "live_attach", False) and callable(getattr(live_svc, "set_resume", None)):
                 live_svc.set_resume(None)
+            # Backends that bind a session inside their bridge (Claude, Hermes; WIN-584) expose new_session().
+            elif live_svc is not None and callable(getattr(live_svc, "new_session", None)):
+                live_svc.new_session()
         logger.info("VoiceChannel: next turn starts a new convo")
         self._emit_convo_changed(None, "current", "idle")
 
