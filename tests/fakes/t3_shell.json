@@ -1,0 +1,1217 @@
+{
+ "projects": [
+  {
+   "id": "project:noproj",
+   "title": "No project",
+   "workspaceRoot": "/tmp/fake-noproject"
+  },
+  {
+   "id": "project:alpha",
+   "title": "alpha",
+   "workspaceRoot": "/tmp/fake-alpha"
+  },
+  {
+   "id": "project:beta",
+   "title": "beta",
+   "workspaceRoot": "/tmp/fake-beta"
+  },
+  {
+   "id": "project:empty",
+   "title": "empty",
+   "workspaceRoot": "/tmp/fake-empty"
+  }
+ ],
+ "threads": [
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003e8:00000000-0000-0000-0000-000000001388",
+   "projectId": "project:alpha",
+   "title": "alpha thread 00",
+   "status": "running",
+   "activeRunId": "run-0",
+   "activityRunStatus": "running",
+   "createdAt": "2026-10-18T02:00:00.000Z",
+   "updatedAt": "2026-10-18T12:00:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003e9:00000000-0000-0000-0000-000000001389",
+   "projectId": "project:alpha",
+   "title": "alpha thread 01",
+   "status": "running",
+   "activeRunId": "run-1",
+   "activityRunStatus": "running",
+   "createdAt": "2026-10-18T01:59:00.000Z",
+   "updatedAt": "2026-10-18T11:53:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003ea:00000000-0000-0000-0000-00000000138a",
+   "projectId": "project:alpha",
+   "title": "alpha thread 02",
+   "status": "failed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:58:00.000Z",
+   "updatedAt": "2026-10-18T11:46:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003eb:00000000-0000-0000-0000-00000000138b",
+   "projectId": "project:alpha",
+   "title": "alpha thread 03",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:57:00.000Z",
+   "updatedAt": "2026-10-18T11:39:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": "2026-10-18T11:59:00.000Z",
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003ec:00000000-0000-0000-0000-00000000138c",
+   "projectId": "project:alpha",
+   "title": "alpha thread 04",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:56:00.000Z",
+   "updatedAt": "2026-10-18T11:32:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": "2026-10-18T11:59:00.000Z"
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003ed:00000000-0000-0000-0000-00000000138d",
+   "projectId": "project:alpha",
+   "title": "shared title",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:55:00.000Z",
+   "updatedAt": "2026-10-18T11:25:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003ee:00000000-0000-0000-0000-00000000138e",
+   "projectId": "project:alpha",
+   "title": "ctrl\u0001char title",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:54:00.000Z",
+   "updatedAt": "2026-10-18T11:18:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003ef:00000000-0000-0000-0000-00000000138f",
+   "projectId": "project:alpha",
+   "title": "alpha thread 07",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:53:00.000Z",
+   "updatedAt": "2026-10-18T11:11:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003f0:00000000-0000-0000-0000-000000001390",
+   "projectId": "project:alpha",
+   "title": "alpha thread 08",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:52:00.000Z",
+   "updatedAt": "2026-10-18T11:04:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003f1:00000000-0000-0000-0000-000000001391",
+   "projectId": "project:alpha",
+   "title": "alpha thread 09",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:51:00.000Z",
+   "updatedAt": "2026-10-18T10:57:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003f2:00000000-0000-0000-0000-000000001392",
+   "projectId": "project:alpha",
+   "title": "alpha thread 10",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:50:00.000Z",
+   "updatedAt": "2026-10-18T10:50:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003f3:00000000-0000-0000-0000-000000001393",
+   "projectId": "project:alpha",
+   "title": "alpha thread 11",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:49:00.000Z",
+   "updatedAt": "2026-10-18T10:43:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003f4:00000000-0000-0000-0000-000000001394",
+   "projectId": "project:alpha",
+   "title": "alpha thread 12",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:48:00.000Z",
+   "updatedAt": "2026-10-18T10:36:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003f5:00000000-0000-0000-0000-000000001395",
+   "projectId": "project:alpha",
+   "title": "alpha thread 13",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:47:00.000Z",
+   "updatedAt": "2026-10-18T10:29:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003f6:00000000-0000-0000-0000-000000001396",
+   "projectId": "project:alpha",
+   "title": "alpha thread 14",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:46:00.000Z",
+   "updatedAt": "2026-10-18T10:22:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003f7:00000000-0000-0000-0000-000000001397",
+   "projectId": "project:alpha",
+   "title": "alpha thread 15",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:45:00.000Z",
+   "updatedAt": "2026-10-18T10:15:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003f8:00000000-0000-0000-0000-000000001398",
+   "projectId": "project:alpha",
+   "title": "alpha thread 16",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:44:00.000Z",
+   "updatedAt": "2026-10-18T10:08:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003f9:00000000-0000-0000-0000-000000001399",
+   "projectId": "project:alpha",
+   "title": "alpha thread 17",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:43:00.000Z",
+   "updatedAt": "2026-10-18T10:01:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003fa:00000000-0000-0000-0000-00000000139a",
+   "projectId": "project:alpha",
+   "title": "alpha thread 18",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:42:00.000Z",
+   "updatedAt": "2026-10-18T09:54:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003fb:00000000-0000-0000-0000-00000000139b",
+   "projectId": "project:alpha",
+   "title": "alpha thread 19",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:41:00.000Z",
+   "updatedAt": "2026-10-18T09:47:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003fc:00000000-0000-0000-0000-00000000139c",
+   "projectId": "project:alpha",
+   "title": "alpha thread 20",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:40:00.000Z",
+   "updatedAt": "2026-10-18T09:40:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003fd:00000000-0000-0000-0000-00000000139d",
+   "projectId": "project:alpha",
+   "title": "alpha thread 21",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:39:00.000Z",
+   "updatedAt": "2026-10-18T09:33:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003fe:00000000-0000-0000-0000-00000000139e",
+   "projectId": "project:alpha",
+   "title": "alpha thread 22",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:38:00.000Z",
+   "updatedAt": "2026-10-18T09:26:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-0000000003ff:00000000-0000-0000-0000-00000000139f",
+   "projectId": "project:alpha",
+   "title": "alpha thread 23",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:37:00.000Z",
+   "updatedAt": "2026-10-18T09:19:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-000000000400:00000000-0000-0000-0000-0000000013a0",
+   "projectId": "project:alpha",
+   "title": "alpha thread 24",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:36:00.000Z",
+   "updatedAt": "2026-10-18T09:12:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-000000000401:00000000-0000-0000-0000-0000000013a1",
+   "projectId": "project:alpha",
+   "title": "alpha thread 25",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:35:00.000Z",
+   "updatedAt": "2026-10-18T09:05:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-000000000402:00000000-0000-0000-0000-0000000013a2",
+   "projectId": "project:alpha",
+   "title": "alpha thread 26",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:34:00.000Z",
+   "updatedAt": "2026-10-18T08:58:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-000000000403:00000000-0000-0000-0000-0000000013a3",
+   "projectId": "project:alpha",
+   "title": "alpha thread 27",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:33:00.000Z",
+   "updatedAt": "2026-10-18T08:51:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-000000000404:00000000-0000-0000-0000-0000000013a4",
+   "projectId": "project:alpha",
+   "title": "alpha thread 28",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:32:00.000Z",
+   "updatedAt": "2026-10-18T08:44:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:alpha:00000000-0000-0000-0000-000000000405:00000000-0000-0000-0000-0000000013a5",
+   "projectId": "project:alpha",
+   "title": "alpha thread 29",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:31:00.000Z",
+   "updatedAt": "2026-10-18T08:37:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:beta:00000000-0000-0000-0000-00000000044c:00000000-0000-0000-0000-0000000013ec",
+   "projectId": "project:beta",
+   "title": "shared title",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T02:00:00.000Z",
+   "updatedAt": "2026-10-18T12:00:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:beta:00000000-0000-0000-0000-00000000044d:00000000-0000-0000-0000-0000000013ed",
+   "projectId": "project:beta",
+   "title": "beta thread 1",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:59:00.000Z",
+   "updatedAt": "2026-10-18T11:53:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:beta:00000000-0000-0000-0000-00000000044e:00000000-0000-0000-0000-0000000013ee",
+   "projectId": "project:beta",
+   "title": "beta thread 2",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:58:00.000Z",
+   "updatedAt": "2026-10-18T11:46:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:beta:00000000-0000-0000-0000-00000000044f:00000000-0000-0000-0000-0000000013ef",
+   "projectId": "project:beta",
+   "title": "beta thread 3",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:57:00.000Z",
+   "updatedAt": "2026-10-18T11:39:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:beta:00000000-0000-0000-0000-000000000450:00000000-0000-0000-0000-0000000013f0",
+   "projectId": "project:beta",
+   "title": "beta thread 4",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T01:56:00.000Z",
+   "updatedAt": "2026-10-18T11:32:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  },
+  {
+   "id": "thread:noproj:00000000-0000-0000-0000-0000000004b0:00000000-0000-0000-0000-000000001450",
+   "projectId": "project:noproj",
+   "title": "scratch chat",
+   "status": "completed",
+   "activeRunId": null,
+   "activityRunStatus": "completed",
+   "createdAt": "2026-10-18T02:00:00.000Z",
+   "updatedAt": "2026-10-18T12:00:00.000Z",
+   "modelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-sonnet-5-5"
+   },
+   "runtimeMode": "approval-required",
+   "archivedAt": null,
+   "deletedAt": null
+  }
+ ],
+ "messages": {
+  "thread:alpha:00000000-0000-0000-0000-0000000003e8:00000000-0000-0000-0000-000000001388": [
+   {
+    "id": "m0a",
+    "role": "user",
+    "text": "hello from alpha thread 00",
+    "createdAt": "2026-10-18T11:58:00.000Z",
+    "runId": "run-0"
+   },
+   {
+    "id": "m0b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 00",
+    "createdAt": "2026-10-18T11:59:00.000Z",
+    "runId": "run-0"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003e9:00000000-0000-0000-0000-000000001389": [
+   {
+    "id": "m1a",
+    "role": "user",
+    "text": "hello from alpha thread 01",
+    "createdAt": "2026-10-18T11:51:00.000Z",
+    "runId": "run-1"
+   },
+   {
+    "id": "m1b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 01",
+    "createdAt": "2026-10-18T11:52:00.000Z",
+    "runId": "run-1"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003ea:00000000-0000-0000-0000-00000000138a": [
+   {
+    "id": "m2a",
+    "role": "user",
+    "text": "hello from alpha thread 02",
+    "createdAt": "2026-10-18T11:44:00.000Z",
+    "runId": "run-2"
+   },
+   {
+    "id": "m2b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 02",
+    "createdAt": "2026-10-18T11:45:00.000Z",
+    "runId": "run-2"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003eb:00000000-0000-0000-0000-00000000138b": [
+   {
+    "id": "m3a",
+    "role": "user",
+    "text": "hello from alpha thread 03",
+    "createdAt": "2026-10-18T11:37:00.000Z",
+    "runId": "run-3"
+   },
+   {
+    "id": "m3b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 03",
+    "createdAt": "2026-10-18T11:38:00.000Z",
+    "runId": "run-3"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003ec:00000000-0000-0000-0000-00000000138c": [
+   {
+    "id": "m4a",
+    "role": "user",
+    "text": "hello from alpha thread 04",
+    "createdAt": "2026-10-18T11:30:00.000Z",
+    "runId": "run-4"
+   },
+   {
+    "id": "m4b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 04",
+    "createdAt": "2026-10-18T11:31:00.000Z",
+    "runId": "run-4"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003ed:00000000-0000-0000-0000-00000000138d": [
+   {
+    "id": "m5a",
+    "role": "user",
+    "text": "hello from shared title",
+    "createdAt": "2026-10-18T11:23:00.000Z",
+    "runId": "run-5"
+   },
+   {
+    "id": "m5b",
+    "role": "assistant",
+    "text": "fixture reply in shared title",
+    "createdAt": "2026-10-18T11:24:00.000Z",
+    "runId": "run-5"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003ee:00000000-0000-0000-0000-00000000138e": [
+   {
+    "id": "m6a",
+    "role": "user",
+    "text": "hello from ctrl\u0001char title",
+    "createdAt": "2026-10-18T11:16:00.000Z",
+    "runId": "run-6"
+   },
+   {
+    "id": "m6b",
+    "role": "assistant",
+    "text": "fixture reply in ctrl\u0001char title",
+    "createdAt": "2026-10-18T11:17:00.000Z",
+    "runId": "run-6"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003ef:00000000-0000-0000-0000-00000000138f": [
+   {
+    "id": "m7a",
+    "role": "user",
+    "text": "hello from alpha thread 07",
+    "createdAt": "2026-10-18T11:09:00.000Z",
+    "runId": "run-7"
+   },
+   {
+    "id": "m7b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 07",
+    "createdAt": "2026-10-18T11:10:00.000Z",
+    "runId": "run-7"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003f0:00000000-0000-0000-0000-000000001390": [
+   {
+    "id": "m8a",
+    "role": "user",
+    "text": "hello from alpha thread 08",
+    "createdAt": "2026-10-18T11:02:00.000Z",
+    "runId": "run-8"
+   },
+   {
+    "id": "m8b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 08",
+    "createdAt": "2026-10-18T11:03:00.000Z",
+    "runId": "run-8"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003f1:00000000-0000-0000-0000-000000001391": [
+   {
+    "id": "m9a",
+    "role": "user",
+    "text": "hello from alpha thread 09",
+    "createdAt": "2026-10-18T10:55:00.000Z",
+    "runId": "run-9"
+   },
+   {
+    "id": "m9b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 09",
+    "createdAt": "2026-10-18T10:56:00.000Z",
+    "runId": "run-9"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003f2:00000000-0000-0000-0000-000000001392": [
+   {
+    "id": "m10a",
+    "role": "user",
+    "text": "hello from alpha thread 10",
+    "createdAt": "2026-10-18T10:48:00.000Z",
+    "runId": "run-10"
+   },
+   {
+    "id": "m10b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 10",
+    "createdAt": "2026-10-18T10:49:00.000Z",
+    "runId": "run-10"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003f3:00000000-0000-0000-0000-000000001393": [
+   {
+    "id": "m11a",
+    "role": "user",
+    "text": "hello from alpha thread 11",
+    "createdAt": "2026-10-18T10:41:00.000Z",
+    "runId": "run-11"
+   },
+   {
+    "id": "m11b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 11",
+    "createdAt": "2026-10-18T10:42:00.000Z",
+    "runId": "run-11"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003f4:00000000-0000-0000-0000-000000001394": [
+   {
+    "id": "m12a",
+    "role": "user",
+    "text": "hello from alpha thread 12",
+    "createdAt": "2026-10-18T10:34:00.000Z",
+    "runId": "run-12"
+   },
+   {
+    "id": "m12b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 12",
+    "createdAt": "2026-10-18T10:35:00.000Z",
+    "runId": "run-12"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003f5:00000000-0000-0000-0000-000000001395": [
+   {
+    "id": "m13a",
+    "role": "user",
+    "text": "hello from alpha thread 13",
+    "createdAt": "2026-10-18T10:27:00.000Z",
+    "runId": "run-13"
+   },
+   {
+    "id": "m13b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 13",
+    "createdAt": "2026-10-18T10:28:00.000Z",
+    "runId": "run-13"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003f6:00000000-0000-0000-0000-000000001396": [
+   {
+    "id": "m14a",
+    "role": "user",
+    "text": "hello from alpha thread 14",
+    "createdAt": "2026-10-18T10:20:00.000Z",
+    "runId": "run-14"
+   },
+   {
+    "id": "m14b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 14",
+    "createdAt": "2026-10-18T10:21:00.000Z",
+    "runId": "run-14"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003f7:00000000-0000-0000-0000-000000001397": [
+   {
+    "id": "m15a",
+    "role": "user",
+    "text": "hello from alpha thread 15",
+    "createdAt": "2026-10-18T10:13:00.000Z",
+    "runId": "run-15"
+   },
+   {
+    "id": "m15b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 15",
+    "createdAt": "2026-10-18T10:14:00.000Z",
+    "runId": "run-15"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003f8:00000000-0000-0000-0000-000000001398": [
+   {
+    "id": "m16a",
+    "role": "user",
+    "text": "hello from alpha thread 16",
+    "createdAt": "2026-10-18T10:06:00.000Z",
+    "runId": "run-16"
+   },
+   {
+    "id": "m16b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 16",
+    "createdAt": "2026-10-18T10:07:00.000Z",
+    "runId": "run-16"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003f9:00000000-0000-0000-0000-000000001399": [
+   {
+    "id": "m17a",
+    "role": "user",
+    "text": "hello from alpha thread 17",
+    "createdAt": "2026-10-18T09:59:00.000Z",
+    "runId": "run-17"
+   },
+   {
+    "id": "m17b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 17",
+    "createdAt": "2026-10-18T10:00:00.000Z",
+    "runId": "run-17"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003fa:00000000-0000-0000-0000-00000000139a": [
+   {
+    "id": "m18a",
+    "role": "user",
+    "text": "hello from alpha thread 18",
+    "createdAt": "2026-10-18T09:52:00.000Z",
+    "runId": "run-18"
+   },
+   {
+    "id": "m18b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 18",
+    "createdAt": "2026-10-18T09:53:00.000Z",
+    "runId": "run-18"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003fb:00000000-0000-0000-0000-00000000139b": [
+   {
+    "id": "m19a",
+    "role": "user",
+    "text": "hello from alpha thread 19",
+    "createdAt": "2026-10-18T09:45:00.000Z",
+    "runId": "run-19"
+   },
+   {
+    "id": "m19b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 19",
+    "createdAt": "2026-10-18T09:46:00.000Z",
+    "runId": "run-19"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003fc:00000000-0000-0000-0000-00000000139c": [
+   {
+    "id": "m20a",
+    "role": "user",
+    "text": "hello from alpha thread 20",
+    "createdAt": "2026-10-18T09:38:00.000Z",
+    "runId": "run-20"
+   },
+   {
+    "id": "m20b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 20",
+    "createdAt": "2026-10-18T09:39:00.000Z",
+    "runId": "run-20"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003fd:00000000-0000-0000-0000-00000000139d": [
+   {
+    "id": "m21a",
+    "role": "user",
+    "text": "hello from alpha thread 21",
+    "createdAt": "2026-10-18T09:31:00.000Z",
+    "runId": "run-21"
+   },
+   {
+    "id": "m21b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 21",
+    "createdAt": "2026-10-18T09:32:00.000Z",
+    "runId": "run-21"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003fe:00000000-0000-0000-0000-00000000139e": [
+   {
+    "id": "m22a",
+    "role": "user",
+    "text": "hello from alpha thread 22",
+    "createdAt": "2026-10-18T09:24:00.000Z",
+    "runId": "run-22"
+   },
+   {
+    "id": "m22b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 22",
+    "createdAt": "2026-10-18T09:25:00.000Z",
+    "runId": "run-22"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-0000000003ff:00000000-0000-0000-0000-00000000139f": [
+   {
+    "id": "m23a",
+    "role": "user",
+    "text": "hello from alpha thread 23",
+    "createdAt": "2026-10-18T09:17:00.000Z",
+    "runId": "run-23"
+   },
+   {
+    "id": "m23b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 23",
+    "createdAt": "2026-10-18T09:18:00.000Z",
+    "runId": "run-23"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-000000000400:00000000-0000-0000-0000-0000000013a0": [
+   {
+    "id": "m24a",
+    "role": "user",
+    "text": "hello from alpha thread 24",
+    "createdAt": "2026-10-18T09:10:00.000Z",
+    "runId": "run-24"
+   },
+   {
+    "id": "m24b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 24",
+    "createdAt": "2026-10-18T09:11:00.000Z",
+    "runId": "run-24"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-000000000401:00000000-0000-0000-0000-0000000013a1": [
+   {
+    "id": "m25a",
+    "role": "user",
+    "text": "hello from alpha thread 25",
+    "createdAt": "2026-10-18T09:03:00.000Z",
+    "runId": "run-25"
+   },
+   {
+    "id": "m25b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 25",
+    "createdAt": "2026-10-18T09:04:00.000Z",
+    "runId": "run-25"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-000000000402:00000000-0000-0000-0000-0000000013a2": [
+   {
+    "id": "m26a",
+    "role": "user",
+    "text": "hello from alpha thread 26",
+    "createdAt": "2026-10-18T08:56:00.000Z",
+    "runId": "run-26"
+   },
+   {
+    "id": "m26b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 26",
+    "createdAt": "2026-10-18T08:57:00.000Z",
+    "runId": "run-26"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-000000000403:00000000-0000-0000-0000-0000000013a3": [
+   {
+    "id": "m27a",
+    "role": "user",
+    "text": "hello from alpha thread 27",
+    "createdAt": "2026-10-18T08:49:00.000Z",
+    "runId": "run-27"
+   },
+   {
+    "id": "m27b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 27",
+    "createdAt": "2026-10-18T08:50:00.000Z",
+    "runId": "run-27"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-000000000404:00000000-0000-0000-0000-0000000013a4": [
+   {
+    "id": "m28a",
+    "role": "user",
+    "text": "hello from alpha thread 28",
+    "createdAt": "2026-10-18T08:42:00.000Z",
+    "runId": "run-28"
+   },
+   {
+    "id": "m28b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 28",
+    "createdAt": "2026-10-18T08:43:00.000Z",
+    "runId": "run-28"
+   }
+  ],
+  "thread:alpha:00000000-0000-0000-0000-000000000405:00000000-0000-0000-0000-0000000013a5": [
+   {
+    "id": "m29a",
+    "role": "user",
+    "text": "hello from alpha thread 29",
+    "createdAt": "2026-10-18T08:35:00.000Z",
+    "runId": "run-29"
+   },
+   {
+    "id": "m29b",
+    "role": "assistant",
+    "text": "fixture reply in alpha thread 29",
+    "createdAt": "2026-10-18T08:36:00.000Z",
+    "runId": "run-29"
+   }
+  ],
+  "thread:beta:00000000-0000-0000-0000-00000000044c:00000000-0000-0000-0000-0000000013ec": [
+   {
+    "id": "m0a",
+    "role": "user",
+    "text": "hello from shared title",
+    "createdAt": "2026-10-18T11:58:00.000Z",
+    "runId": "run-0"
+   },
+   {
+    "id": "m0b",
+    "role": "assistant",
+    "text": "fixture reply in shared title",
+    "createdAt": "2026-10-18T11:59:00.000Z",
+    "runId": "run-0"
+   }
+  ],
+  "thread:beta:00000000-0000-0000-0000-00000000044d:00000000-0000-0000-0000-0000000013ed": [
+   {
+    "id": "m1a",
+    "role": "user",
+    "text": "hello from beta thread 1",
+    "createdAt": "2026-10-18T11:51:00.000Z",
+    "runId": "run-1"
+   },
+   {
+    "id": "m1b",
+    "role": "assistant",
+    "text": "fixture reply in beta thread 1",
+    "createdAt": "2026-10-18T11:52:00.000Z",
+    "runId": "run-1"
+   }
+  ],
+  "thread:beta:00000000-0000-0000-0000-00000000044e:00000000-0000-0000-0000-0000000013ee": [
+   {
+    "id": "m2a",
+    "role": "user",
+    "text": "hello from beta thread 2",
+    "createdAt": "2026-10-18T11:44:00.000Z",
+    "runId": "run-2"
+   },
+   {
+    "id": "m2b",
+    "role": "assistant",
+    "text": "fixture reply in beta thread 2",
+    "createdAt": "2026-10-18T11:45:00.000Z",
+    "runId": "run-2"
+   }
+  ],
+  "thread:beta:00000000-0000-0000-0000-00000000044f:00000000-0000-0000-0000-0000000013ef": [
+   {
+    "id": "m3a",
+    "role": "user",
+    "text": "hello from beta thread 3",
+    "createdAt": "2026-10-18T11:37:00.000Z",
+    "runId": "run-3"
+   },
+   {
+    "id": "m3b",
+    "role": "assistant",
+    "text": "fixture reply in beta thread 3",
+    "createdAt": "2026-10-18T11:38:00.000Z",
+    "runId": "run-3"
+   }
+  ],
+  "thread:beta:00000000-0000-0000-0000-000000000450:00000000-0000-0000-0000-0000000013f0": [
+   {
+    "id": "m4a",
+    "role": "user",
+    "text": "hello from beta thread 4",
+    "createdAt": "2026-10-18T11:30:00.000Z",
+    "runId": "run-4"
+   },
+   {
+    "id": "m4b",
+    "role": "assistant",
+    "text": "fixture reply in beta thread 4",
+    "createdAt": "2026-10-18T11:31:00.000Z",
+    "runId": "run-4"
+   }
+  ],
+  "thread:noproj:00000000-0000-0000-0000-0000000004b0:00000000-0000-0000-0000-000000001450": [
+   {
+    "id": "m0a",
+    "role": "user",
+    "text": "hello from scratch chat",
+    "createdAt": "2026-10-18T11:58:00.000Z",
+    "runId": "run-0"
+   },
+   {
+    "id": "m0b",
+    "role": "assistant",
+    "text": "fixture reply in scratch chat",
+    "createdAt": "2026-10-18T11:59:00.000Z",
+    "runId": "run-0"
+   }
+  ]
+ },
+ "snapshotSequence": 1
+}
