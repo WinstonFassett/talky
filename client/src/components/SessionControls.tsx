@@ -1,19 +1,18 @@
 import { MicSelector } from './audio/MicSelector';
 import { SpeakerSelector } from './audio/SpeakerSelector';
-import { LLMProfileSelect } from './LLMProfileSelect';
 import { VoiceProfileSelect } from './VoiceProfileSelect';
 
-// Stacked picker rows: Assistant / Voice / Audio. Used in the mobile
-// SessionSheet drawer body AND in the desktop EmptyState pre-connect.
-export const SessionControls = () => {
+// Stacked picker rows: Voice / Audio. The profile (assistant) lives only in the
+// header chip (WIN-579). `voice` is off in EmptyState, where the voice is the
+// footer picker (desktop) / Settings sheet (phone) and would be a duplicate.
+export const SessionControls = ({ voice = true }: { voice?: boolean } = {}) => {
   return (
     <div className="flex flex-col gap-4 w-full">
-      <Row label="Assistant">
-        <LLMProfileSelect />
-      </Row>
-      <Row label="Voice">
-        <VoiceProfileSelect />
-      </Row>
+      {voice && (
+        <Row label="Voice">
+          <VoiceProfileSelect />
+        </Row>
+      )}
       <Row label="Audio" stretch={false}>
         <div className="flex flex-col gap-1.5 w-full">
           <MicSelector />

@@ -196,7 +196,7 @@ const AppShell = ({ client, autoconnect = false }: AppProps) => {
           <MoreMenu />
         </div>
       </header>
-      <HeaderChips isNarrow={isNarrow} profile={profileInfo[activeProfile]} linkLabel={linkLabel} />
+      <HeaderChips isNarrow={isNarrow} linkLabel={linkLabel} />
       <ConnectionBanner />
 
       <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -213,11 +213,7 @@ const AppShell = ({ client, autoconnect = false }: AppProps) => {
         </div>
       </main>
 
-      <StatusBar
-        connected={transportConnected}
-        isNarrow={isNarrow}
-        currentLabel={activeProfile ? activeProfileLabel : undefined}
-      />
+      <StatusBar connected={transportConnected} isNarrow={isNarrow} />
     </div>
     </div>
   );

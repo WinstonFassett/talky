@@ -31,7 +31,7 @@ const StartButton = ({ onConnect }: { onConnect: () => void }) => (
 );
 
 // The first screen of a new session: a plain question, a few starters, the
-// assistant / voice / audio pickers, and the call button. The composer sits
+// audio pickers, and the call button. The composer sits
 // below it, focused.
 export const EmptyState = ({ onConnect }: Props) => {
   const composer = useComposer();
@@ -60,7 +60,7 @@ export const EmptyState = ({ onConnect }: Props) => {
       </div>
 
       <div className="w-full max-w-[360px] flex flex-col gap-6">
-        <SessionControls />
+        <SessionControls voice={false} />
         {onConnect && <StartButton onConnect={onConnect} />}
       </div>
     </div>

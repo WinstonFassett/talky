@@ -1,11 +1,10 @@
-"""Header chips rig (WIN-578). Needs `rig_daemon.sh start --port P --fake-t3 --wait-ready`.
+"""Header chips rig (WIN-578/579). Needs `rig_daemon.sh start --port P --fake-t3 --wait-ready`.
 
     python3 tests/browser/drive_header.py [--port 18782] [--mobile] [--shots DIR] [--before]
 
 --before: only screenshot the header (baseline build, no chips expected).
-Otherwise: title visible; chips `by <backend>`, `🎙 <voice>` (and model when the profile's backend config sets one);
-tap each chip → bottom sheet (phone) / popover (desktop), screenshot it; link chip on a linked chat;
-footer has no backend picker. Fake T3 only; never port 8765. Exit 0 and no pageerror = pass.
+Otherwise: ONE profile chip (no backend/model/voice chips) opening a sheet (phone) / popover (desktop) with
+backend + voice visible, profile switch and back; link chip on a linked chat not clipped; footer has no backend picker. Fake T3 only; never port 8765. Exit 0 and no pageerror = pass.
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=int(os.environ.get("RIG_PORT", 18782)))
     ap.add_argument("--mobile", action="store_true")
     ap.add_argument("--before", action="store_true")
-    ap.add_argument("--shots", default=str(ROOT / "screenshots" / "win-578"))
+    ap.add_argument("--shots", default="/tmp/rt2/drive-header")
     a = ap.parse_args()
     if a.port == 8765:
         raise SystemExit("refusing port 8765")
@@ -79,36 +78,39 @@ def main() -> int:
 
         shot("header-after")
         check(page.get_by_test_id("chat-title").is_visible(), "chat title visible")
-        check(page.get_by_test_id("chip-backend").is_visible(), "backend chip visible")
-        check(page.get_by_test_id("chip-voice").is_visible(), "voice chip visible")
-        kinds = ["backend"] + (["model"] if page.get_by_test_id("chip-model").count() else []) + ["voice"]
-        log("chips present:", kinds)
+        check(page.get_by_test_id("chip-profile").is_visible(), "profile chip visible")
+        for gone in ("chip-backend", "chip-model", "chip-voice"):
+            check(page.get_by_test_id(gone).count() == 0, f"no separate {gone}")
         check(page.get_by_test_id("chip-link").count() == 1, "link chip on the linked chat")
-        check("by " in page.get_by_test_id("chip-backend").inner_text(), "backend chip reads 'by …'")
+        lb = page.get_by_test_id("chip-link").bounding_box()
+        vw = 390 if a.mobile else 1280
+        check(bool(lb) and lb["x"] + lb["width"] <= vw, "link chip not clipped")
 
-        for kind in kinds:
-            page.get_by_test_id(f"chip-{kind}").click()
-            if a.mobile:
-                page.get_by_test_id("chip-sheet").wait_for(timeout=10000)
-                page.wait_for_timeout(600)
-                shot(f"chip-{kind}-sheet")
-                # the existing picker sits in the sheet; open it to show the list
-                page.get_by_test_id("chip-sheet").locator("button").first.click()
-                page.wait_for_timeout(600)
-                check(page.get_by_test_id("chip-sheet").is_visible(), f"{kind} chip opens a bottom sheet")
-            else:
-                page.locator("[cmdk-input], [role=listbox], [role=dialog]").first.wait_for(timeout=10000)
-                check(True, f"{kind} chip opens a popover")
-            page.wait_for_timeout(500)  # let the open animation finish
-            shot(f"chip-{kind}-open")
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(300)
-            if a.mobile:
-                page.keyboard.press("Escape")
-                page.get_by_test_id("chip-sheet").wait_for(state="detached", timeout=10000)
+        chip = page.get_by_test_id("chip-profile")
+        before = page.get_by_test_id("chip-profile-label").inner_text()
+        chip.click()
+        panel = page.get_by_test_id("chip-sheet" if a.mobile else "chip-popover")
+        panel.wait_for(timeout=10000)
+        page.wait_for_timeout(600)
+        check(page.get_by_test_id("profile-backend").is_visible(), "backend shown in the profile panel")
+        check(page.get_by_test_id("profile-voice").is_visible(), "voice shown in the profile panel")
+        shot("profile-open")
+        other = page.locator('[data-testid=profile-option]:not([aria-selected=true]):not([disabled])').first
+        target = other.get_attribute("data-profile")
+        other.click()
+        page.wait_for_function(
+            "(l) => document.querySelector('[data-testid=chip-profile-label]')?.innerText !== l", arg=before, timeout=15000)
+        check(True, f"switched profile {before} -> {target}")
+        chip.click()
+        panel.wait_for(timeout=10000)
+        page.locator(f'[data-testid=profile-option][data-profile="{before}"]').click()
+        page.wait_for_function(
+            "(l) => document.querySelector('[data-testid=chip-profile-label]')?.innerText === l", arg=before, timeout=15000)
+        check(True, "switched back")
 
-        if not a.mobile:
-            check(page.locator("footer .picker-footer", has_text="by ").count() == 0, "footer has no backend picker")
+        check(page.locator("footer .picker-footer", has_text="by ").count() == 0, "footer has no backend picker")
+        if a.mobile:
+            check(page.locator("footer").get_by_text(before, exact=True).count() == 0, "phone footer has no profile label")
         browser.close()
 
     check(not errors, "no pageerror")

@@ -75,11 +75,9 @@ function VersionChip() {
 export const StatusBar = ({
   connected,
   isNarrow,
-  currentLabel,
 }: {
   connected: boolean;
   isNarrow: boolean;
-  currentLabel?: string;
 }) => {
   return (
     <footer
@@ -92,7 +90,7 @@ export const StatusBar = ({
       {/* Left: profile + voice pickers. Mobile collapses into the SessionSheet. */}
       <div className="flex items-center min-w-0 flex-1">
         {isNarrow ? (
-          <SessionSheet currentLabel={currentLabel} />
+          <SessionSheet />
         ) : (
           <div className="flex items-center min-w-0">
             <VoiceProfileSelect variant="footer" />
