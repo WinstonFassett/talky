@@ -89,11 +89,25 @@ export type T3ThreadStatus = 'running' | 'idle' | 'completed' | 'failed';
 
 export type T3Thread = {
   id: string;
+  short: string;
   title: string;
   project: string;
+  project_id: string | null;
   status: T3ThreadStatus;
   last_activity: string;
   model: string;
+  pinned: boolean;
+  convo_id: string | null;
+};
+
+export type T3Project = {
+  id: string;
+  title: string;
+  root: string;
+  root_name: string;
+  thread_count: number;
+  running: number;
+  last_activity: string | null;
 };
 
 export type T3Status = {
@@ -110,9 +124,22 @@ export const t3Api = {
   status: () => fetch('/api/t3/status').then((r) => json<T3Status>(r)),
   connect: () => send('/api/t3/connect', 'POST').then((r) => json<T3Status>(r)),
   disconnect: () => send('/api/t3/disconnect', 'POST').then((r) => json<T3Status>(r)),
-  threads: () => fetch('/api/t3/threads').then((r) => json<{ threads: T3Thread[] }>(r)),
+  projects: async (etag?: string): Promise<{ notModified: true } | { notModified: false; etag: string | null; projects: T3Project[] }> => {
+    const r = await fetch('/api/t3/projects', { headers: etag ? { 'If-None-Match': etag } : undefined });
+    if (r.status === 304) return { notModified: true };
+    const body = await json<{ projects: T3Project[] }>(r);
+    return { notModified: false, etag: r.headers.get('ETag'), projects: body.projects };
+  },
+  threads: (opts: { project?: string; cursor?: string | null; limit?: number } = {}) => {
+    const p = new URLSearchParams({ limit: String(opts.limit ?? 20) });
+    if (opts.project) p.set('project', opts.project);
+    if (opts.cursor) p.set('cursor', opts.cursor);
+    return fetch(`/api/t3/threads?${p}`).then((r) =>
+      json<{ threads: T3Thread[]; total: number; next_cursor: string | null }>(r),
+    );
+  },
   attach: (threadId: string) =>
     send('/api/t3/attach', 'POST', { thread_id: threadId }).then((r) =>
-      json<{ convo_id: string; created: boolean; thread: T3Thread }>(r),
+      json<{ convo_id: string; created: boolean; thread: unknown }>(r),
     ),
 };

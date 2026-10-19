@@ -1,6 +1,6 @@
 """T3 thread picker rig (WIN-564): open the client, pick an existing T3 thread, talk to it.
 
-Expands the "T3 Code threads" sidebar section, screenshots it, clicks the thread whose title
+Opens the sidebar "In tools" tab (T3 threads), screenshots it, clicks the thread whose title
 contains ``--thread``, checks the thread's recent messages show as context, starts a call,
 types ``--say`` and waits for a reply containing ``--expect`` (proof the message reached
 THAT thread, which already holds the fact). Point it at an isolated daemon:
@@ -85,10 +85,7 @@ def main() -> int:
 
         if args.mobile:
             page.get_by_label(re.compile("sessions", re.I)).first.click()
-        toggle = page.get_by_test_id("t3-toggle")
-        toggle.wait_for(timeout=15000)
-        if toggle.get_attribute("aria-expanded") != "true":
-            toggle.click()
+        page.get_by_test_id("sidebar-tab-tools").click(timeout=15000)
         page.get_by_test_id("t3-thread").first.wait_for(timeout=20000)
         n = page.get_by_test_id("t3-thread").count()
         log(f"picker lists {n} T3 threads; statuses:", sorted({e.get_attribute("data-status") for e in page.get_by_test_id("t3-thread").all()}))

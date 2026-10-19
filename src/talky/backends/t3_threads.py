@@ -80,6 +80,7 @@ def normalise(snapshot: dict) -> list[dict]:
                 "model": m.get("model") or "",
                 "instance": m.get("instanceId") or "",
                 "runtime_mode": t.get("runtimeMode") or "",
+                "pinned": bool(t.get("pinnedAt")),
             }
         )
     rows.sort(key=lambda r: r["last_activity"] or "", reverse=True)
@@ -157,6 +158,38 @@ def project_threads(
     nxt = f"o:{offset + limit}" if offset + limit < len(rows) else None
     return {
         "seq": snapshot.get("snapshotSequence"),
+        "threads": [{**r, "convo_id": link_index.get(r["id"])} for r in page],
+        "next_cursor": nxt,
+    }
+
+
+def flat_threads(
+    snapshot: dict,
+    link_index: Optional[dict] = None,
+    project_id: Optional[str] = None,
+    limit: int = 20,
+    cursor: Optional[str] = None,
+) -> dict:
+    """One page of threads across all projects (or one): pinned first, then newest activity first.
+
+    This is the "In tools" list (WIN-577): no project grouping, ``project`` is just a tag on each row.
+    """
+    if project_id is not None and not any(p["id"] == project_id for p in snapshot.get("projects", [])):
+        raise LookupError(f"T3 project {project_id!r} not found")
+    link_index = link_index or {}
+    rows = [r for r in normalise(snapshot) if project_id is None or r["project_id"] == project_id]
+    rows.sort(key=lambda r: r["last_activity"] or "", reverse=True)
+    rows.sort(key=lambda r: not r["pinned"])
+    try:
+        offset = int(cursor[2:]) if cursor and cursor.startswith("o:") else 0
+    except ValueError:
+        offset = 0
+    offset = max(offset, 0)
+    page = rows[offset : offset + limit]
+    nxt = f"o:{offset + limit}" if offset + limit < len(rows) else None
+    return {
+        "seq": snapshot.get("snapshotSequence"),
+        "total": len(rows),
         "threads": [{**r, "convo_id": link_index.get(r["id"])} for r in page],
         "next_cursor": nxt,
     }

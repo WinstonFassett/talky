@@ -2,7 +2,7 @@
 
     python3 tests/browser/drive_t3_connect.py [--port 18781] [--mobile]
 
-1. no token file → open sessions, expand T3 → threads appear, no "login" text, token file now mode 600
+1. no token file → open sessions, In tools tab → threads appear, no "login" text, token file now mode 600
 2. fail-cli on → Disconnect → card + Connect; Connect fails → error text + Retry
 3. fail-cli off → Retry → threads again
 4. stop fake T3 → "T3 Code isn't running"; the convo list still renders
@@ -66,14 +66,11 @@ def main() -> int:
         page.goto(f"http://127.0.0.1:{a.port}/", wait_until="domcontentloaded")
 
         def open_sessions() -> None:
-            if a.mobile and not page.get_by_test_id("t3-toggle").is_visible():
+            if a.mobile and not page.get_by_test_id("sidebar-tabs").is_visible():
                 page.get_by_label(re.compile("sessions", re.I)).first.click()
-            page.get_by_test_id("t3-toggle").wait_for(timeout=20000)
+            page.get_by_test_id("sidebar-tab-tools").click(timeout=20000)
 
         open_sessions()
-        toggle = page.get_by_test_id("t3-toggle")
-        if toggle.get_attribute("aria-expanded") != "true":
-            toggle.click()
 
         # 1. auto-connect
         page.get_by_test_id("t3-thread").first.wait_for(timeout=20000)
@@ -108,7 +105,7 @@ def main() -> int:
         page.get_by_test_id("t3-refresh").click()
         page.get_by_test_id("connection-card").wait_for(timeout=15000)
         check("isn't running" in page.get_by_test_id("connection-detail").inner_text(), "t3_down text shown")
-        check(page.get_by_test_id("t3-toggle").is_visible(), "sidebar still renders with T3 down")
+        check(page.get_by_test_id("sidebar-tabs").is_visible(), "sidebar still renders with T3 down")
         browser.close()
 
     check(not errors, "no pageerror")

@@ -156,7 +156,8 @@
    },
    "runtimeMode": "approval-required",
    "archivedAt": null,
-   "deletedAt": null
+   "deletedAt": null,
+   "pinnedAt": "2026-10-17T09:00:00.000Z"
   },
   {
    "id": "thread:alpha:00000000-0000-0000-0000-0000000003f0:00000000-0000-0000-0000-000000001390",
@@ -241,7 +242,8 @@
    },
    "runtimeMode": "approval-required",
    "archivedAt": null,
-   "deletedAt": null
+   "deletedAt": null,
+   "pinnedAt": "2026-10-17T09:00:00.000Z"
   },
   {
    "id": "thread:alpha:00000000-0000-0000-0000-0000000003f5:00000000-0000-0000-0000-000000001395",
@@ -581,7 +583,8 @@
    },
    "runtimeMode": "approval-required",
    "archivedAt": null,
-   "deletedAt": null
+   "deletedAt": null,
+   "pinnedAt": "2026-10-17T09:00:00.000Z"
   },
   {
    "id": "thread:beta:00000000-0000-0000-0000-00000000044f:00000000-0000-0000-0000-0000000013ef",

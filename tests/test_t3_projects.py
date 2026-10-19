@@ -125,3 +125,27 @@ def test_no_destructive_rpc_strings():
     src = Path(t3_threads.__file__).read_text().lower()
     for bad in ("thread.delete", "thread.archive", "thread.stop", "settle"):
         assert bad not in src
+
+
+def test_flat_threads_pinned_first_then_newest_with_convo_join():
+    out = t3_threads.flat_threads(SNAP, {}, None, 100)
+    rows = out["threads"]
+    assert out["total"] == len(rows) == sum(p["thread_count"] for p in t3_threads.group_projects(SNAP)["projects"])
+    pinned = [r for r in rows if r["pinned"]]
+    assert pinned, "fixture pins some threads"
+    assert all(r["pinned"] for r in rows[: len(pinned)]), "pinned rows lead"
+    rest = [r["last_activity"] for r in rows[len(pinned):]]
+    assert rest == sorted(rest, reverse=True)
+    tid = rows[5]["id"]
+    assert t3_threads.flat_threads(SNAP, {tid: "convo-1"}, None, 100)["threads"][5]["convo_id"] == "convo-1"
+
+
+def test_flat_threads_project_filter_and_paging():
+    pid = _alpha()
+    p1 = t3_threads.flat_threads(SNAP, {}, pid, 20)
+    assert len(p1["threads"]) == 20 and p1["next_cursor"] == "o:20" and p1["total"] == 28
+    assert {r["project_id"] for r in p1["threads"]} == {pid}
+    p2 = t3_threads.flat_threads(SNAP, {}, pid, 20, p1["next_cursor"])
+    assert len(p2["threads"]) == 8 and p2["next_cursor"] is None
+    with pytest.raises(LookupError):
+        t3_threads.flat_threads(SNAP, {}, "project:nope")

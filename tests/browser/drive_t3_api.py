@@ -91,8 +91,9 @@ def main() -> int:
     row = next(t for t in p1b["threads"] if t["id"] == tid)
     check(row["convo_id"] == at1["convo_id"], "linked thread carries convo_id")
 
-    st, _, flat = req(f"{base}/api/t3/threads")
-    check(st == 200 and len(flat["threads"]) == len(live), "legacy flat /api/t3/threads still works until S1b")
+    st, _, flat = req(f"{base}/api/t3/threads?limit=100")
+    check(st == 200 and len(flat["threads"]) == min(100, len(live)) and flat["total"] == len(live), "flat /api/t3/threads (no project) pages across all projects")
+    check(flat["threads"][0]["pinned"] is True, "flat list leads with pinned threads")
 
     print("[t3-api]", "PASS" if not fails else f"FAIL ({len(fails)})")
     return 1 if fails else 0

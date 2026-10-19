@@ -944,16 +944,6 @@ def _build_webrtc_routes():
     # ── T3 Code threads (WIN-564) ────────────────────────────────────────
     # Read-only list of T3 threads for the picker, and attach = bind a convo to one.
 
-    async def handle_t3_threads(request: Request):
-        """GET /api/t3/threads — T3 threads, running first then newest activity."""
-        from talky.backends import t3_threads
-
-        try:
-            rows = await t3_threads.list_threads()
-        except Exception as e:  # noqa: BLE001 — no token, T3 down, 401…
-            return _t3_error(e)
-        return JSONResponse({"threads": rows})
-
     async def handle_t3_projects(request: Request):
         """GET /api/t3/projects — projects with live thread counts; ``ETag`` = shell snapshotSequence (304 on match)."""
         from starlette.responses import Response
@@ -973,22 +963,19 @@ def _build_webrtc_routes():
         return JSONResponse({"state": "connected", **out}, headers=headers)
 
     async def handle_t3_project_threads(request: Request):
-        """GET /api/t3/threads?project=&limit=20&cursor=o:20 — one page of a project's threads."""
+        """GET /api/t3/threads?project=&limit=20&cursor=o:20 — one page of threads, all projects unless ``project`` is given (pinned first, newest first)."""
         from talky.backends import t3_threads
         from talky.convos import default_store
 
-        project = request.query_params.get("project")
-        if not project:
-            # Flat list kept until the client moves to the project routes (WIN-576 S1b).
-            return await handle_t3_threads(request)
+        project = request.query_params.get("project") or None
         try:
             limit = max(1, min(int(request.query_params.get("limit", 20)), 100))
         except ValueError:
             limit = 20
         try:
             snap = await t3_threads.fetch_shell()
-            out = t3_threads.project_threads(
-                snap, project, default_store().link_index("t3"), limit, request.query_params.get("cursor")
+            out = t3_threads.flat_threads(
+                snap, default_store().link_index("t3"), project, limit, request.query_params.get("cursor")
             )
         except LookupError as e:
             return JSONResponse({"error": str(e)}, status_code=404)

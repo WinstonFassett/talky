@@ -1,0 +1,248 @@
+// "In tools" tab (WIN-577, design C): other tools' own threads in one flat list. A thread already in a Chat
+// opens that Chat (`in a chat ↔`); any other attaches one first (`chat ›`). No project headers: the project is a
+// small tag on each row and a filter chip above the list.
+import { useState } from 'react';
+import { MoreHorizontalIcon, PinIcon, RefreshCwIcon, XIcon } from 'lucide-react';
+
+import { t3Api, type T3Status, type T3Thread, type T3ThreadStatus } from './api';
+import { relativeTime } from './groups';
+import { useSessions } from './SessionsProvider';
+import { ConnectionCard } from './t3/ConnectionCard';
+import type { T3Sessions } from './useT3Sessions';
+
+const COLOR: Record<T3ThreadStatus, string> = {
+  running: 'var(--color-accent)',
+  idle: 'var(--color-text-mute)',
+  completed: 'var(--color-success)',
+  failed: 'var(--color-destructive)',
+};
+const LEGEND_KEY = 'talky.inToolsLegend';
+const mute = { color: 'var(--color-text-mute)' } as const;
+const SOURCES = [
+  { id: 't3', label: 'T3', live: true },
+  { id: 'claude', label: 'Claude', live: false },
+  { id: 'hermes', label: 'Hermes', live: false },
+] as const;
+
+function ThreadRow({ t, busy, disabled, onPick }: { t: T3Thread; busy: boolean; disabled: boolean; onPick: (t: T3Thread) => void }) {
+  const linked = !!t.convo_id;
+  return (
+    <button
+      type="button"
+      data-testid="t3-thread"
+      data-thread-id={t.id}
+      data-status={t.status}
+      data-linked={linked ? '1' : '0'}
+      data-pinned={t.pinned ? '1' : '0'}
+      disabled={disabled}
+      className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-[var(--color-muted)] disabled:opacity-60"
+      onClick={() => onPick(t)}
+    >
+      <span className="flex items-center gap-1.5">
+        <span
+          className={`inline-block size-1.5 shrink-0 rounded-full ${t.status === 'running' ? 'animate-pulse' : ''}`}
+          style={{ backgroundColor: COLOR[t.status] }}
+          title={t.status}
+        />
+        {t.pinned && <PinIcon size={11} className="shrink-0" style={mute} aria-label="Pinned in T3" />}
+        <span className="min-w-0 flex-1 truncate text-[13px]" style={{ color: 'var(--color-foreground)' }} title={t.title}>
+          {t.title}
+        </span>
+        <span className="shrink-0 font-mono text-[10px]" style={mute}>
+          {relativeTime(Date.parse(t.last_activity) / 1000)}
+        </span>
+      </span>
+      <span className="flex items-center gap-1.5 pl-3 text-[11px]">
+        <span
+          data-testid="t3-project-tag"
+          className="max-w-[45%] shrink-0 truncate rounded px-1 font-mono text-[10px] leading-4"
+          style={{ ...mute, border: '1px solid var(--color-border-soft)' }}
+        >
+          {t.project}
+        </span>
+        <span className="flex-1" />
+        <span
+          data-testid="t3-marker"
+          className="shrink-0"
+          style={{ color: linked ? 'var(--color-accent)' : 'var(--color-text-dim)' }}
+        >
+          {busy ? 'Attaching…' : linked ? 'in a chat ↔' : 'chat ›'}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+export function InTools({ s, onPicked }: { s: T3Sessions; onPicked?: () => void }) {
+  const { open } = useSessions();
+  const [attaching, setAttaching] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [legend, setLegend] = useState(() => {
+    try {
+      return localStorage.getItem(LEGEND_KEY) !== 'hidden';
+    } catch {
+      return true;
+    }
+  });
+  const connected = s.status?.state === 'connected';
+
+  const pick = async (t: T3Thread) => {
+    setAttaching(t.id);
+    try {
+      const convoId = t.convo_id ?? (await t3Api.attach(t.id)).convo_id;
+      await open(convoId, 't3');
+      onPicked?.();
+      if (!t.convo_id) void s.refresh(true);
+    } catch (e) {
+      s.setError(`Couldn't open: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setAttaching(null);
+    }
+  };
+
+  const chips = s.projects.filter((p) => p.thread_count > 0);
+  return (
+    <div className="flex h-full min-h-0 flex-col" data-testid="in-tools">
+      <div className="flex shrink-0 items-center gap-1 px-2 pt-2">
+        <div role="group" aria-label="Tool" className="flex flex-1 gap-1">
+          {SOURCES.map((src) => (
+            <button
+              key={src.id}
+              type="button"
+              data-testid={`intools-source-${src.id}`}
+              aria-pressed={src.live}
+              disabled={!src.live}
+              title={src.live ? undefined : 'coming soon'}
+              className="rounded px-2 py-0.5 font-mono text-[11px] disabled:cursor-not-allowed disabled:opacity-45"
+              style={{
+                border: '1px solid var(--color-border-soft)',
+                backgroundColor: src.live ? 'var(--color-muted)' : undefined,
+                color: src.live ? 'var(--color-foreground)' : 'var(--color-text-mute)',
+              }}
+            >
+              {src.label}
+            </button>
+          ))}
+        </div>
+        {connected && (
+          <div className="relative">
+            <button
+              type="button"
+              data-testid="t3-menu"
+              title="T3 options"
+              aria-label="T3 options"
+              aria-expanded={menuOpen}
+              className="inline-flex size-6 items-center justify-center rounded hover:bg-[var(--color-muted)]"
+              style={{ color: 'var(--color-text-dim)' }}
+              onClick={() => setMenuOpen((o) => !o)}
+            >
+              <MoreHorizontalIcon size={13} />
+            </button>
+            {menuOpen && (
+              <button
+                type="button"
+                data-testid="t3-disconnect"
+                className="absolute right-0 top-7 z-10 whitespace-nowrap rounded-md px-3 py-1.5 text-[12px] hover:bg-[var(--color-muted)]"
+                style={{ background: 'var(--color-background)', border: '1px solid var(--color-border-soft)', color: 'var(--color-foreground)' }}
+                onClick={() => {
+                  setMenuOpen(false);
+                  void s.disconnect();
+                }}
+              >
+                Disconnect T3
+              </button>
+            )}
+          </div>
+        )}
+        <button
+          type="button"
+          data-testid="t3-refresh"
+          title="Refresh T3 threads"
+          aria-label="Refresh T3 threads"
+          className="inline-flex size-6 items-center justify-center rounded hover:bg-[var(--color-muted)]"
+          style={{ color: 'var(--color-text-dim)' }}
+          onClick={() => void s.refresh(true)}
+        >
+          <RefreshCwIcon size={12} className={s.loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
+
+      {connected && legend && (
+        <div
+          data-testid="intools-legend"
+          className="relative mx-2 mt-2 shrink-0 rounded-md py-1.5 pl-2 pr-6 text-[11px] leading-snug"
+          style={{ ...mute, border: '1px solid var(--color-border-soft)' }}
+        >
+          Chats live in Talky. T3 and Claude keep their own threads. Open one and Talky makes a Chat linked to it.
+          <button
+            type="button"
+            data-testid="intools-legend-dismiss"
+            aria-label="Dismiss"
+            className="absolute right-1 top-1 inline-flex size-4 items-center justify-center rounded hover:bg-[var(--color-muted)]"
+            onClick={() => {
+              setLegend(false);
+              try {
+                localStorage.setItem(LEGEND_KEY, 'hidden');
+              } catch { /* private mode */ }
+            }}
+          >
+            <XIcon size={11} />
+          </button>
+        </div>
+      )}
+
+      {connected && chips.length > 0 && (
+        <div className="flex shrink-0 gap-1 overflow-x-auto px-2 pt-2" data-testid="intools-chips">
+          {[{ id: null as string | null, title: 'All' }, ...chips].map((c) => (
+            <button
+              key={c.id ?? 'all'}
+              type="button"
+              data-testid="intools-chip"
+              data-project-id={c.id ?? ''}
+              aria-pressed={s.filter === c.id}
+              className="shrink-0 rounded-full px-2 py-0.5 text-[11px]"
+              style={{
+                border: '1px solid var(--color-border-soft)',
+                backgroundColor: s.filter === c.id ? 'var(--color-muted)' : undefined,
+                color: s.filter === c.id ? 'var(--color-foreground)' : 'var(--color-text-mute)',
+              }}
+              onClick={() => s.setFilter(c.id)}
+            >
+              {c.title}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2" data-testid="t3-thread-list">
+        {s.status && !connected && <ConnectionCard status={s.status} onStatus={(st: T3Status) => s.onStatus(st)} />}
+        {s.error && (
+          <div className="px-2 pb-2 text-[12px]" style={{ color: 'var(--color-destructive)' }} data-testid="t3-error">
+            {s.error}
+          </div>
+        )}
+        {connected && s.threads?.length === 0 && (
+          <div className="px-3 py-6 text-center text-[12px] leading-snug" style={mute} data-testid="intools-empty">
+            No T3 threads yet.
+            <br />
+            Start one in T3 Code and it shows up here; open it to get a Chat.
+          </div>
+        )}
+        {s.threads?.map((t) => (
+          <ThreadRow key={t.id} t={t} busy={attaching === t.id} disabled={attaching !== null} onPick={(x) => void pick(x)} />
+        ))}
+        {s.cursor && (
+          <button
+            type="button"
+            data-testid="t3-more"
+            className="mt-1 w-full rounded-md px-2 py-1.5 text-center text-[12px] hover:bg-[var(--color-muted)]"
+            style={mute}
+            onClick={() => void s.loadMore()}
+          >
+            Show more{s.total > 0 && s.threads ? ` (${s.total - s.threads.length})` : ''}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
