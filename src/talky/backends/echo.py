@@ -244,6 +244,11 @@ class SessionEchoLLMService(EchoLLMService):
         self.session_id: str | None = resume
         self._replayed: str | None = None
 
+    def new_session(self) -> None:
+        """New chat (WIN-584): same hook the real Hermes/Claude backends expose."""
+        self.session_id = None
+        self._replayed = None
+
     def set_history(self, turns: list[dict]) -> None:
         super().set_history(turns)
         self._replayed = " | ".join(t.get("content", "") for t in turns if isinstance(t, dict))[:200] or None

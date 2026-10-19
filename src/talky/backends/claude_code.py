@@ -343,6 +343,17 @@ class ClaudeCodeLLMService(HistoryPreambleMixin, LLMService):
         """Set a session ID to resume on the next pipeline start. One-shot: clears after use."""
         self._resume = session_id
 
+    def new_session(self) -> None:
+        """Drop the current session so the next turn starts a fresh one (New chat, WIN-584).
+
+        The bridge re-resumes its last session id every turn, so clearing it is what makes the next
+        ``query()`` open a new session instead of continuing the old one.
+        """
+        self._resume = None
+        if self._bridge is not None:
+            self._bridge._last_session_id = None  # noqa: SLF001
+            self._bridge._options.resume = None  # noqa: SLF001
+
     def resolve_permission(self, *, allow: bool) -> bool:
         """Resolve a pending permission prompt. Returns True if one was pending."""
         if self._bridge is None:

@@ -148,10 +148,10 @@ class _HermesThread:
         else:
             self._prompt_queue.put(text)
 
-    def stop(self):
+    def stop(self, join: bool = True):
         self._prompt_queue.put(None)
         self.resolve_permission(allow=False)  # unblock any pending approval so join() doesn't hang
-        if self._thread:
+        if join and self._thread:
             self._thread.join(timeout=5)
 
     def _put_frame(self, item: tuple):
@@ -360,6 +360,21 @@ class HermesLLMService(HistoryPreambleMixin, LLMService):
     def session_id(self) -> Optional[str]:
         agent = getattr(self._bridge, "_agent", None)
         return getattr(agent, "session_id", None) or self._resume
+
+    def new_session(self) -> None:
+        """Drop the current session so the next turn starts a fresh one (New chat, WIN-584).
+
+        The agent keeps its session id and the thread keeps the running history, so both are replaced:
+        a new AIAgent without ``session_id`` and a new bridge thread with empty history. The old thread
+        is told to stop but not joined (this runs on the event loop; it may be mid-turn).
+        """
+        self._resume = None
+        old = self._bridge
+        if old is None:
+            return
+        old.stop(join=False)
+        self._bridge = _HermesThread(self._build_agent(), self._loop, self._frame_queue)
+        self._bridge.start()
 
     def resolve_permission(self, *, allow: bool) -> bool:
         """Grant/deny a pending Hermes dangerous-command approval (ticket 3e56).
