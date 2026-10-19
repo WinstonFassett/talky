@@ -918,7 +918,7 @@ def _build_webrtc_routes():
 
         JSON ``{"convo_id": str, "profile": str | null}``. Binds the live call
         (or the next one) to that record and replays its transcript when the
-        target backend can't natively resume. Does not switch profile.
+        target backend can't natively resume. Switches the live pipeline to the chat's profile (WIN-582).
         """
         try:
             body = await request.json() or {}
@@ -928,9 +928,11 @@ def _build_webrtc_routes():
         if not convo_id:
             return JSONResponse({"error": "missing 'convo_id'"}, status_code=400)
         try:
-            result = voice_channel.resume_convo(convo_id, body.get("profile"))
+            result = await voice_channel.open_convo(convo_id, body.get("profile"))
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
+        except RuntimeError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
         except Exception as e:  # noqa: BLE001 — e.g. a corrupt convo.json
             logger.warning(f"/api/convos/resume failed for {convo_id!r}: {e}")
             return JSONResponse({"error": f"could not resume {convo_id!r}: {e}"}, status_code=500)
@@ -940,6 +942,154 @@ def _build_webrtc_routes():
         """POST /api/convos/new — the next turn starts a fresh convo (WIN-534)."""
         voice_channel.new_convo()
         return JSONResponse({"status": "ok"})
+
+    # ── T3 Code threads (WIN-564) ────────────────────────────────────────
+    # Read-only list of T3 threads for the picker, and attach = bind a convo to one.
+
+    async def handle_t3_projects(request: Request):
+        """GET /api/t3/projects — projects with live thread counts; ``ETag`` = shell snapshotSequence (304 on match)."""
+        from starlette.responses import Response
+
+        from talky.backends import t3_threads
+        from talky.convos import default_store
+
+        try:
+            snap = await t3_threads.fetch_shell()
+        except Exception as e:  # noqa: BLE001
+            return _t3_error(e)
+        seq = snap.get("snapshotSequence")
+        headers = {"ETag": t3_threads.etag_for(seq)}
+        if t3_threads.etag_matches(request.headers.get("if-none-match"), seq):
+            return Response(status_code=304, headers=headers)
+        out = t3_threads.group_projects(snap, default_store().link_index("t3"))
+        return JSONResponse({"state": "connected", **out}, headers=headers)
+
+    async def handle_t3_project_threads(request: Request):
+        """GET /api/t3/threads?project=&limit=20&cursor=o:20 — one page of threads, all projects unless ``project`` is given (pinned first, newest first)."""
+        from talky.backends import t3_threads
+        from talky.convos import default_store
+
+        project = request.query_params.get("project") or None
+        try:
+            limit = max(1, min(int(request.query_params.get("limit", 20)), 100))
+        except ValueError:
+            limit = 20
+        try:
+            snap = await t3_threads.fetch_shell()
+            out = t3_threads.flat_threads(
+                snap, default_store().link_index("t3"), project, limit, request.query_params.get("cursor"),
+                request.query_params.get("q"),
+            )
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:  # noqa: BLE001
+            return _t3_error(e)
+        return JSONResponse(out)
+
+    def _t3_error(e: Exception) -> JSONResponse:
+        """503 + ``code`` for connection-state errors the UI can act on; 502 for anything else."""
+        import httpx
+
+        from talky.backends import t3_threads
+        from talky.backends.t3_auth import T3AuthError
+
+        if isinstance(e, T3AuthError):
+            msg = f"T3 Code isn't running at {t3_threads.base_url()}" if e.code == "t3_down" else str(e)
+            return JSONResponse({"error": msg, "code": e.code}, status_code=503)
+        if isinstance(e, (httpx.ConnectError, httpx.TimeoutException)):
+            return JSONResponse({"error": f"T3 Code isn't running at {t3_threads.base_url()}", "code": "t3_down"}, status_code=503)
+        return JSONResponse({"error": f"T3 unavailable: {e}"}, status_code=502)
+
+    async def handle_t3_status(request: Request):  # noqa: ARG001
+        """GET /api/t3/status — connection state; a first call auto-issues a session (see ``t3_auth.status``)."""
+        from talky.backends import t3_auth
+
+        return JSONResponse(await asyncio.to_thread(t3_auth.status))
+
+    async def handle_t3_connect(request: Request):  # noqa: ARG001
+        """POST /api/t3/connect — force a fresh session (Connect / Retry); resets the failure cooldown."""
+        from talky.backends import t3_auth, t3_threads
+
+        def _go() -> dict:
+            try:
+                t3_auth.connect()
+            except t3_auth.T3AuthError as e:
+                return {"state": "needs_connect", "code": e.code, "detail": str(e), "session": None,
+                        "expires_at": None, "scopes": [], "base_url": t3_threads.base_url()}
+            return t3_auth.status()
+
+        return JSONResponse(await asyncio.to_thread(_go))
+
+    async def handle_t3_disconnect(request: Request):  # noqa: ARG001
+        """POST /api/t3/disconnect — revoke the stored session and delete the token file."""
+        from talky.backends import t3_auth, t3_threads
+
+        def _go() -> dict:
+            try:
+                t3_auth.disconnect()
+            except t3_auth.T3AuthError as e:
+                logger.warning(f"t3 disconnect: revoke failed ({e.code}); removing the token file anyway")
+                t3_auth.token_path().unlink(missing_ok=True)
+            return {"state": "needs_connect", "code": None, "detail": "disconnected", "session": None,
+                    "expires_at": None, "scopes": [], "base_url": t3_threads.base_url()}
+
+        return JSONResponse(await asyncio.to_thread(_go))
+
+    async def handle_t3_attach(request: Request):
+        """POST /api/t3/attach — JSON ``{"thread_id": str}``.
+
+        Creates (or reuses) the Talky convo bound to that T3 thread, seeded with the thread's
+        recent messages. Re-pointing a live t3 backend happens in the client's follow-up
+        ``/api/convos/resume`` (``VoiceChannel.resume_convo``), not here.
+        """
+        from talky.backends import t3_threads
+
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        ref = body.get("thread_id")
+        if not ref:
+            return JSONResponse({"error": "missing 'thread_id'"}, status_code=400)
+        try:
+            rows = await t3_threads.list_threads()
+            thread = t3_threads.resolve_thread(rows, ref)
+            out = await t3_threads.attach_thread(thread["id"])
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:  # noqa: BLE001
+            return _t3_error(e)
+        return JSONResponse({"status": "ok", **out})
+
+    async def handle_native_sessions(request: Request):
+        """GET /api/native/sessions?tool=claude|hermes — that tool's own saved sessions, newest first."""
+        from talky.backends import native_sessions
+
+        try:
+            rows = await asyncio.to_thread(native_sessions.list_sessions, request.query_params.get("tool", ""))
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"error": f"couldn't read sessions: {e}"}, status_code=502)
+        return JSONResponse({"sessions": rows, "total": len(rows)})
+
+    async def handle_native_attach(request: Request):
+        """POST /api/native/attach — JSON ``{"tool": "claude"|"hermes", "session_id": str}``; creates or reuses the linked Chat."""
+        from talky.backends import native_sessions
+
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        if not body.get("session_id"):
+            return JSONResponse({"error": "missing 'session_id'"}, status_code=400)
+        try:
+            out = await asyncio.to_thread(native_sessions.attach_session, body.get("tool", ""), body["session_id"])
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"error": f"couldn't attach: {e}"}, status_code=502)
+        return JSONResponse({"status": "ok", **out})
 
     # ── convo browsing (WIN-535) ─────────────────────────────────────────
     # The app's session sidebar reads these; the CLI reads the store directly.
@@ -1333,6 +1483,14 @@ def _build_webrtc_routes():
         Route("/api/voices", handle_get_voices, methods=["GET"]),
         Route("/api/voices/switch", handle_switch_voice, methods=["POST"]),
         Route("/api/resume", handle_set_resume, methods=["POST"]),
+        Route("/api/t3/status", handle_t3_status, methods=["GET"]),
+        Route("/api/t3/connect", handle_t3_connect, methods=["POST"]),
+        Route("/api/t3/disconnect", handle_t3_disconnect, methods=["POST"]),
+        Route("/api/t3/projects", handle_t3_projects, methods=["GET"]),
+        Route("/api/t3/threads", handle_t3_project_threads, methods=["GET"]),
+        Route("/api/t3/attach", handle_t3_attach, methods=["POST"]),
+        Route("/api/native/sessions", handle_native_sessions, methods=["GET"]),
+        Route("/api/native/attach", handle_native_attach, methods=["POST"]),
         Route("/api/convos/resume", handle_resume_convo, methods=["POST"]),
         Route("/api/convos/new", handle_new_convo, methods=["POST"]),
         Route("/api/convos", handle_list_convos, methods=["GET"]),

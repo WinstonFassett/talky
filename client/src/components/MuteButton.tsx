@@ -12,6 +12,8 @@ export const MuteButton = () => {
         <button
           type="button"
           onClick={onClick}
+          data-testid="mic-toggle"
+          data-mic={isMicEnabled ? 'on' : 'muted'}
           aria-label={isMicEnabled ? 'Mute microphone' : 'Unmute microphone'}
           aria-pressed={!isMicEnabled}
           title={isMicEnabled ? 'Mute microphone' : 'Unmute microphone'}

@@ -271,3 +271,6 @@ inspiration/
 # Local working copies of external sources (e.g. voice-ui-kit checkouts).
 # Not tracked in git — was previously an orphaned gitlink; cleared in this branch.
 sources.local/
+
+# Browser test rig state (WIN-574)
+.rig/

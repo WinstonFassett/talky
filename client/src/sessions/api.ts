@@ -30,13 +30,26 @@ export type ConvoChangedEvent = {
 
 export type ProfileInfo = { name: string; label: string; active: boolean };
 
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
+    let code: string | undefined;
     try {
-      msg = (await res.json()).error ?? msg;
+      const body = await res.json();
+      msg = body.error ?? msg;
+      code = body.code;
     } catch { /* not json */ }
-    throw new Error(msg);
+    throw new ApiError(msg, res.status, code);
   }
   return res.json() as Promise<T>;
 }
@@ -69,4 +82,77 @@ export const convosApi = {
   profiles: () => fetch('/api/profiles').then((r) => json<{ profiles: ProfileInfo[] }>(r)),
   switchProfile: (profile: string) =>
     send('/api/profiles/switch', 'POST', { profile }).then((r) => json<unknown>(r)),
+};
+
+// T3 Code threads (WIN-564): read-only list + attach (binds a Talky session to a T3 thread).
+export type T3ThreadStatus = 'running' | 'idle' | 'completed' | 'failed';
+
+export type T3Thread = {
+  id: string;
+  short: string;
+  title: string;
+  project: string;
+  project_id: string | null;
+  status: T3ThreadStatus;
+  last_activity: string;
+  model: string;
+  pinned: boolean;
+  convo_id: string | null;
+  automated?: boolean;
+};
+
+export type T3Project = {
+  id: string;
+  title: string;
+  root: string;
+  root_name: string;
+  thread_count: number;
+  running: number;
+  last_activity: string | null;
+};
+
+export type T3Status = {
+  state: 'connected' | 'needs_connect';
+  code: null | 'no_cli' | 't3_down' | 'denied' | 'expired';
+  detail: string;
+  session: string | null;
+  expires_at: string | null;
+  scopes: string[];
+  base_url: string;
+};
+
+export const t3Api = {
+  status: () => fetch('/api/t3/status').then((r) => json<T3Status>(r)),
+  connect: () => send('/api/t3/connect', 'POST').then((r) => json<T3Status>(r)),
+  disconnect: () => send('/api/t3/disconnect', 'POST').then((r) => json<T3Status>(r)),
+  projects: async (etag?: string): Promise<{ notModified: true } | { notModified: false; etag: string | null; projects: T3Project[] }> => {
+    const r = await fetch('/api/t3/projects', { headers: etag ? { 'If-None-Match': etag } : undefined });
+    if (r.status === 304) return { notModified: true };
+    const body = await json<{ projects: T3Project[] }>(r);
+    return { notModified: false, etag: r.headers.get('ETag'), projects: body.projects };
+  },
+  threads: (opts: { project?: string; cursor?: string | null; limit?: number; q?: string } = {}) => {
+    const p = new URLSearchParams({ limit: String(opts.limit ?? 20) });
+    if (opts.project) p.set('project', opts.project);
+    if (opts.cursor) p.set('cursor', opts.cursor);
+    if (opts.q) p.set('q', opts.q);
+    return fetch(`/api/t3/threads?${p}`).then((r) =>
+      json<{ threads: T3Thread[]; recent?: T3Thread[]; total: number; next_cursor: string | null }>(r),
+    );
+  },
+  attach: (threadId: string) =>
+    send('/api/t3/attach', 'POST', { thread_id: threadId }).then((r) =>
+      json<{ convo_id: string; created: boolean; thread: unknown }>(r),
+    ),
+};
+
+export type NativeTool = 'claude' | 'hermes';
+
+export const nativeApi = {
+  list: (tool: NativeTool) =>
+    fetch(`/api/native/sessions?tool=${tool}`).then((r) => json<{ sessions: T3Thread[]; total: number }>(r)),
+  attach: (tool: NativeTool, sessionId: string) =>
+    send('/api/native/attach', 'POST', { tool, session_id: sessionId }).then((r) =>
+      json<{ convo_id: string; created: boolean }>(r),
+    ),
 };

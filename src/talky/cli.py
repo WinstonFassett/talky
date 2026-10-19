@@ -892,6 +892,89 @@ def cmd_convos(args):
     print("resume: talky resume [<id>] [--profile <other>]   (no id = most recent)")
 
 
+def cmd_t3(args):
+    """T3 Code sessions (WIN-564): list its threads, attach Talky to one, manage the session token."""
+    import asyncio
+    import datetime as _dt
+
+    from talky.backends import t3_auth, t3_threads
+
+    sub = getattr(args, "t3_cmd", None)
+    if sub is None:  # bare `talky t3` keeps meaning "switch to the t3 profile"
+        args.name = "t3"
+        return cmd_profile(args)
+
+    if sub == "login":
+        try:
+            rec = t3_auth.connect(ttl=args.ttl)
+        except t3_auth.T3AuthError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"✅ T3 session {rec['sessionId'][:8]} ({', '.join(rec['scopes'])}) → {t3_auth.token_path()} (mode 600), expires {rec['expiresAt']}")
+        return
+
+    if sub == "logout":
+        try:
+            sid = t3_auth.revoke()
+        except t3_auth.T3AuthError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"✅ revoked T3 session {sid[:8]} and removed the token file" if sid else "no T3 token file — nothing to revoke")
+        return
+
+    try:
+        rows = asyncio.run(t3_threads.list_threads())
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ can't read T3 threads: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if sub == "threads":
+        if args.status:
+            rows = [r for r in rows if r["status"] == args.status]
+        rows = rows[: args.limit]
+        if args.json:
+            print(json.dumps(rows, indent=2))
+            return
+        if not rows:
+            print("(no T3 threads)")
+            return
+        icon = {"running": "🔄", "idle": "💤", "completed": "✅", "failed": "❌"}
+        print(f"{'ID':<8}  {'':2} {'STATUS':<9}  {'LAST ACTIVITY':<16}  {'PROJECT':<18}  {'MODEL':<22}  TITLE")
+        for r in rows:
+            when = _dt.datetime.fromisoformat(r["last_activity"].replace("Z", "+00:00")).astimezone().strftime("%m-%d %H:%M")
+            print(f"{r['short']:<8}  {icon.get(r['status'], ''):<2} {r['status']:<9}  {when:<16}  {r['project'][:18]:<18}  {r['model'][:22]:<22}  {r['title'][:50]}")
+        print()
+        print("attach: talky t3 attach <id-prefix | title text>")
+        return
+
+    if sub == "attach":
+        try:
+            thread = t3_threads.resolve_thread(rows, args.thread)
+        except LookupError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(2)
+        if not ensure_daemon():
+            sys.exit(1)
+        req = urllib.request.Request(
+            f"{daemon_base_url()}/api/t3/attach", data=json.dumps({"thread_id": thread["id"]}).encode("utf-8"),
+            method="POST", headers={"content-type": "application/json"},
+        )
+        try:
+            with daemon_urlopen(req, timeout=30) as resp:
+                out = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read().decode("utf-8")).get("error", e.reason)
+            except Exception:  # noqa: BLE001
+                msg = f"HTTP {e.code}"
+            print(f"❌ attach failed: {msg}", file=sys.stderr)
+            sys.exit(1)
+        verb = "created" if out.get("created") else "reused"
+        print(f"🔗 attached to T3 thread {thread['short']} “{thread['title']}” ({thread['status']}); {verb} convo {out['convo_id']}")
+        args.id, args.profile = out["convo_id"], "t3"
+        return cmd_resume(args)
+
+
 def cmd_voice(args):
     """Show or switch the active voice profile in the running talky server."""
     if not ensure_daemon():
@@ -1320,7 +1403,7 @@ def main():
     # Shortcut: treat first non-option, non-command arg as a profile name.
     # `talky claude` → `talky profile claude`. `cmd_profile` ensures
     # the daemon is up.
-    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch", "certs", "convos", "resume"}
+    known_commands = {"config", "say", "ask", "daemon", "ls", "auth", "transcribe", "kill", "profile", "voice", "status", "launch", "certs", "convos", "resume", "t3"}
     if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
         candidate = sys.argv[1]
         # If the profile carries a ``launcher:`` block, route through the
@@ -1438,6 +1521,24 @@ def main():
         help="Don't open the Talky app/browser when no call is live",
     )
     resume_parser.set_defaults(func=cmd_resume)
+
+    # === t3 subcommand (WIN-564) ===
+    t3_parser = subparsers.add_parser(
+        "t3",
+        help="T3 Code sessions: list threads, attach to one, login/logout (bare `talky t3` switches to the t3 profile)",
+    )
+    t3_sub = t3_parser.add_subparsers(dest="t3_cmd")
+    t3_th = t3_sub.add_parser("threads", help="List T3 threads (running first, then newest)")
+    t3_th.add_argument("--json", action="store_true", help="Emit JSON")
+    t3_th.add_argument("--status", choices=["running", "idle", "completed", "failed"], help="Only this status")
+    t3_th.add_argument("--limit", type=int, default=25, help="Max rows (default 25)")
+    t3_at = t3_sub.add_parser("attach", help="Talk to an existing T3 thread (id prefix or title text)")
+    t3_at.add_argument("thread", help="Thread id, id prefix, or part of the title")
+    t3_at.add_argument("--no-open", action="store_true", help="Don't open the Talky app/browser when no call is live")
+    t3_lg = t3_sub.add_parser("login", help="Optional — Talky connects by itself. Issue a narrow T3 session (read+operate) into ~/.talky/credentials/t3.json (mode 600)")
+    t3_lg.add_argument("--ttl", default="8h", help="Session lifetime, e.g. 8h (default)")
+    t3_sub.add_parser("logout", help="Revoke the stored T3 session and delete the token file")
+    t3_parser.set_defaults(func=cmd_t3)
 
     # === convos subcommand (WIN-534) ===
     convos_parser = subparsers.add_parser(

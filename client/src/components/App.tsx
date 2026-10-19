@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { PipecatBaseChildProps } from '@pipecat-ai/voice-ui-kit';
 import { ConversationPanelWithReasoning } from './ConversationPanelWithReasoning';
-import { Loader2Icon, WifiOffIcon } from 'lucide-react';
+import { Loader2Icon, MicOffIcon, WifiOffIcon } from 'lucide-react';
 
 import type { TransportType } from '../config';
 import { PermissionBanner } from './PermissionBanner';
@@ -13,6 +13,8 @@ import { SpeakerMuteButton } from './SpeakerMuteButton';
 import { MuteButton } from './MuteButton';
 import { AudioSettingsButton } from './audio/AudioSettingsButton';
 import { StatusBar } from './StatusBar';
+import { HeaderChips } from './HeaderChips';
+import { useOptionalSessions } from '../sessions/SessionsProvider';
 import { SessionDrawer, SessionRail, SessionsToggle, useRailOpen } from '../sessions/SessionSidebar';
 import { CallProvider, useCall } from '../call/CallProvider';
 import { TurnProvider } from '../turn/TurnProvider';
@@ -95,6 +97,52 @@ function ConnectionBanner() {
   );
 }
 
+// Mic trouble and why a call ended, under the header. Blocked/no-device show
+// Retry.
+function MicBanner() {
+  const call = useCall();
+  const { micIssue: m, dropReason } = call;
+  let text: string | null = null;
+  let retry = false;
+  if (m && (call.state === 'connected' || call.state === 'connecting')) {
+    retry = true;
+    text =
+      m.kind === 'blocked'
+        ? 'Microphone blocked — allow it for this site, then retry.'
+        : 'No microphone found — plug one in, then retry.';
+  } else if (dropReason && (call.state === 'disconnected' || call.state === 'offline')) {
+    text = `Call ended: ${dropReason}`;
+  }
+  if (!text) return null;
+  return (
+    <div
+      role="alert"
+      data-testid="mic-banner"
+      data-kind={m?.kind ?? 'dropped'}
+      className="flex items-center justify-center gap-2 px-3 py-1.5 text-[12px] shrink-0"
+      style={{
+        borderBottom: '1px solid var(--color-border-soft)',
+        backgroundColor: 'var(--color-panel-2)',
+        color: 'var(--color-destructive)',
+      }}
+    >
+      <MicOffIcon size={13} className="shrink-0" aria-hidden="true" />
+      <span className="min-w-0">{text}</span>
+      {retry && (
+        <button
+          type="button"
+          data-testid="mic-retry"
+          onClick={() => void call.retryMic()}
+          className="rounded px-2 py-0.5 font-medium shrink-0"
+          style={{ border: '1px solid var(--color-border)', color: 'var(--color-foreground)' }}
+        >
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
 const AppShell = ({ client, autoconnect = false }: AppProps) => {
   const call = useCall();
   const autoconnectAttempted = useRef(false);
@@ -112,18 +160,24 @@ const AppShell = ({ client, autoconnect = false }: AppProps) => {
   }, [client]);
 
   // Track active profile (name + label).
-  const [profileLabels, setProfileLabels] = useState<Record<string, string>>({});
-  useDaemonEvent('init', (data: { profiles?: Array<{ name: string; label: string; active: boolean }> }) => {
+  const [profileInfo, setProfileInfo] = useState<Record<string, { label: string; model?: string | null }>>({});
+  useDaemonEvent('init', (data: { profiles?: Array<{ name: string; label: string; active: boolean; model?: string | null }> }) => {
     const profiles = data?.profiles;
     if (!profiles) return;
-    setProfileLabels(Object.fromEntries(profiles.map((p) => [p.name, p.label])));
+    setProfileInfo(Object.fromEntries(profiles.map((p) => [p.name, { label: p.label, model: p.model }])));
     const active = profiles.find((p) => p.active);
     if (active) setActiveProfile(active.name);
   });
   useDaemonEvent('profileChanged', (data: { type?: string; profile?: string }) => {
     if (data?.type === 'llm' && data.profile) setActiveProfile(data.profile);
   });
-  const activeProfileLabel = profileLabels[activeProfile] ?? activeProfile;
+  const activeProfileLabel = profileInfo[activeProfile]?.label ?? activeProfile;
+  // Chat title for the header: the open chat's title, else the profile label.
+  const sessions = useOptionalSessions();
+  const openRow = sessions?.rows.find((r) => r.id === sessions.openId);
+  const chatTitle = openRow?.title || activeProfileLabel;
+  const LINK_LABEL: Record<string, string> = { t3: 'T3', 'claude-code': 'Claude', hermes: 'Hermes' };
+  const linkLabel = (openRow?.native_session_id && openRow.backend && LINK_LABEL[openRow.backend]) || null;
 
   useEffect(() => {
     if (autoconnect && client && !autoconnectAttempted.current) {
@@ -151,47 +205,47 @@ const AppShell = ({ client, autoconnect = false }: AppProps) => {
     <div className="relative flex flex-col flex-1 min-w-0 h-full">
       <PermissionBanner />
       <header
-        className="grid items-center shrink-0 border-b gap-2 pl-2 pr-1 sm:pr-2 h-9"
+        data-testid="app-header"
+        className="flex items-center shrink-0 border-b gap-2 pl-2 pr-1 sm:pr-2 h-9"
         style={{
-          gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)',
           borderColor: 'var(--color-border-soft)',
           backgroundColor: 'var(--color-card)',
         }}
       >
         {/* Left: sessions toggle (when the rail is hidden) + voice status. */}
-        <div className="flex items-center gap-1 min-w-0 justify-self-start">
+        <div className="flex items-center gap-1 min-w-0 shrink-0">
           {!showRail && <SessionsToggle onClick={toggleSessions} />}
-          <StatusBadge state={voiceState} />
+          <StatusBadge state={voiceState} compact={isNarrow} />
         </div>
 
-        {/* Center: session title — bare profile label, read-only. Dropped
-            ≤640px: on small screens the status label keeps its spot. */}
-        <div className="flex items-center min-w-0 justify-self-center">
-          {!isNarrow && activeProfile && (
-            <span
-              className="truncate font-medium"
-              style={{
-                fontSize: '0.9375rem',
-                letterSpacing: '-0.01em',
-                color: 'var(--color-foreground)',
-              }}
-              title={activeProfileLabel}
-            >
-              {activeProfileLabel}
-            </span>
-          )}
+        {/* Chat title: always visible, also on phone. */}
+        <div className="flex items-center min-w-0 flex-1">
+          <span
+            data-testid="chat-title"
+            className="truncate font-medium"
+            style={{
+              fontSize: '0.9375rem',
+              letterSpacing: '-0.01em',
+              color: 'var(--color-foreground)',
+            }}
+            title={chatTitle}
+          >
+            {chatTitle}
+          </span>
         </div>
 
         {/* Right: Mic mute · Speaker mute · Settings · More. Mutes and
             devices show only when connected. */}
-        <div className="flex items-center gap-0.5 shrink-0 justify-self-end">
+        <div className="flex items-center gap-0.5 shrink-0">
           {transportConnected && <MuteButton />}
           {transportConnected && <SpeakerMuteButton />}
           {transportConnected && <AudioSettingsButton />}
           <MoreMenu />
         </div>
       </header>
+      <HeaderChips isNarrow={isNarrow} linkLabel={linkLabel} />
       <ConnectionBanner />
+      <MicBanner />
 
       <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
         <div className="h-full mx-auto flex flex-col w-full min-w-0" style={{ maxWidth: 600 }}>
@@ -207,11 +261,7 @@ const AppShell = ({ client, autoconnect = false }: AppProps) => {
         </div>
       </main>
 
-      <StatusBar
-        connected={transportConnected}
-        isNarrow={isNarrow}
-        currentLabel={activeProfile ? activeProfileLabel : undefined}
-      />
+      <StatusBar connected={transportConnected} isNarrow={isNarrow} />
     </div>
     </div>
   );

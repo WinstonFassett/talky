@@ -32,13 +32,18 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
 HERE = Path(__file__).parent
-WAV = HERE / "fixtures" / "hello.wav"
+WAV = Path(os.environ.get("TALKY_WAV") or HERE / "fixtures" / "hello.wav")
+# Non-echo backends (WIN-564, e.g. t3): TALKY_EXPECT=<substring> replaces the echo "you said" check
+# (the reply must contain it), and TALKY_DRIVE_WAIT raises the 25 s wait for slow cold backends.
+EXPECT = os.environ.get("TALKY_EXPECT", "").lower()
+DRIVE_WAIT = float(os.environ.get("TALKY_DRIVE_WAIT", "25"))
 CLIENT_URL = os.environ.get("TALKY_URL", "http://127.0.0.1:8765/")
 # Single rolling output dir — overwritten each run, don't hoard audio/video.
 OUT_DIR = Path(os.environ.get("TALKY_TEST_OUT", "/tmp/talky-test-out"))
@@ -158,7 +163,7 @@ def main() -> int:
             raise SystemExit("mic gate failed: " + str(gum.get("err")))
 
         # Gate 2+3: start the call, wait for LISTENING + offer.
-        page.get_by_role("button", name="Start call").click()
+        page.get_by_role("button", name=re.compile("^(Start call|Converse)$")).first.click()  # "Converse" once a convo exists
         log("clicked Start call")
 
         deadline = time.time() + 20
@@ -237,8 +242,8 @@ def main() -> int:
             }"""
         )
 
-        log("driving thread: waiting for echo turn + TTS (25s)...")
-        time.sleep(25)
+        log(f"driving thread: waiting for turn + TTS ({DRIVE_WAIT:.0f}s)...")
+        time.sleep(DRIVE_WAIT)
 
         # Stop the audio recorder and read the signals.
         signals = page.evaluate(
@@ -290,9 +295,9 @@ def main() -> int:
         panel = (signals.get("panel_text") or "").lower()
         # Language OUT: echo's "you said:" reply means a transcript round-tripped
         # through STT -> echo -> back to the client as text.
-        language_out = "you said" in panel or any(
+        language_out = (EXPECT in panel) if EXPECT else ("you said" in panel or any(
             w in panel for w in ["hear me", "can you hear"]
-        )
+        ))
         audio_out = signals.get("audio_bytes", 0) > 0
 
         # Tier-1 client-render (af68): the karaoke/transcript surface is the lead
@@ -305,9 +310,9 @@ def main() -> int:
         transcript_text = (signals.get("transcript_text") or "").lower()
         transcript_rendered = bool(signals.get("transcript_rendered"))
         karaoke_rendered = signals.get("karaoke_part_count", 0) > 0
-        transcript_has_words = "you said" in transcript_text or any(
+        transcript_has_words = (EXPECT in transcript_text) if EXPECT else ("you said" in transcript_text or any(
             w in transcript_text for w in ["hear me", "can you hear"]
-        )
+        ))
         # The karaoke renderer (KaraokePart) is the lead client-render surface;
         # it only emits for assistant turns. Requiring it + the words inside the
         # transcript surface means a broken karaoke/transcript render fails here

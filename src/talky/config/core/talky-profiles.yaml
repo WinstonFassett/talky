@@ -41,6 +41,11 @@ talky_profiles:
     description: "Opencode"
     llm_backend: "opencode"
 
+  # T3 Code — orchestration RPC client (WIN-563 spike)
+  t3:
+    description: "T3 Code"
+    llm_backend: "t3"
+
   # Devin (cognition.ai) — local devin CLI over ACP (devin acp)
   devin:
     description: "Devin"

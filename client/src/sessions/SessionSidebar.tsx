@@ -29,6 +29,8 @@ import {
 import type { ConvoRow } from './api';
 import { groupSessions, relativeTime } from './groups';
 import { useSessions } from './SessionsProvider';
+import { InTools } from './InTools';
+import { useT3Sessions } from './useT3Sessions';
 
 const label = {
   fontSize: 10,
@@ -285,7 +287,73 @@ function SessionRow({
 }
 
 // ─── LIST ──────────────────────────────────────────────────────────────
-function SessionList({ onPicked, onCollapse }: { onPicked?: () => void; onCollapse?: () => void }) {
+type Tab = 'chats' | 'tools';
+const TAB_KEY = 'talky.sidebarTab';
+
+function SidebarTabs({ tab, onTab, running, placement }: { tab: Tab; onTab: (t: Tab) => void; running: number; placement: 'top' | 'bottom' }) {
+  const btn = (id: Tab, text: string, badge?: string) => (
+    <button
+      key={id}
+      type="button"
+      role="tab"
+      aria-selected={tab === id}
+      data-testid={`sidebar-tab-${id}`}
+      className="flex h-9 flex-1 items-center justify-center gap-1.5 text-[12px] font-medium"
+      style={{
+        color: tab === id ? 'var(--color-foreground)' : 'var(--color-text-mute)',
+        boxShadow: tab === id ? `inset 0 ${placement === 'top' ? -2 : 2}px 0 var(--color-accent)` : undefined,
+      }}
+      onClick={() => onTab(id)}
+    >
+      {text}
+      {badge && (
+        <span
+          data-testid="intools-running"
+          className="rounded-full px-1.5 font-mono text-[10px] leading-4"
+          style={{ backgroundColor: 'var(--color-accent)', color: 'var(--color-accent-foreground)' }}
+        >
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+  return (
+    <div
+      role="tablist"
+      data-testid="sidebar-tabs"
+      data-placement={placement}
+      className="flex shrink-0"
+      style={placement === 'top' ? { borderBottom: '1px solid var(--color-border-soft)' } : { borderTop: '1px solid var(--color-border-soft)' }}
+    >
+      {btn('chats', 'Chats')}
+      {btn('tools', 'In tools', running > 0 ? `${running} running` : undefined)}
+    </div>
+  );
+}
+
+function SessionList({
+  onPicked,
+  onCollapse,
+  tabsAt = 'top',
+}: {
+  onPicked?: () => void;
+  onCollapse?: () => void;
+  tabsAt?: 'top' | 'bottom';
+}) {
+  const [tab, setTabState] = useState<Tab>(() => {
+    try {
+      return localStorage.getItem(TAB_KEY) === 'tools' ? 'tools' : 'chats';
+    } catch {
+      return 'chats';
+    }
+  });
+  const setTab = (t: Tab) => {
+    setTabState(t);
+    try {
+      localStorage.setItem(TAB_KEY, t);
+    } catch { /* private mode */ }
+  };
+  const t3 = useT3Sessions();
   const { rows, query, setQuery, showArchived, setShowArchived, newChat, remove, error } = useSessions();
   const [confirming, setConfirming] = useState<ConvoRow | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -299,8 +367,9 @@ function SessionList({ onPicked, onCollapse }: { onPicked?: () => void; onCollap
     <div className="flex h-full min-h-0 flex-col" data-testid="session-sidebar">
       <div className="flex h-9 shrink-0 items-center gap-1 pl-3 pr-1" style={{ borderBottom: '1px solid var(--color-border-soft)' }}>
         <span className="flex-1 font-mono uppercase" style={label}>
-          Sessions
+          {tab === 'chats' ? 'Chats' : 'In tools · T3'}
         </span>
+        {tab === 'chats' && (
         <button
           type="button"
           data-testid="session-new"
@@ -315,6 +384,7 @@ function SessionList({ onPicked, onCollapse }: { onPicked?: () => void; onCollap
         >
           <PlusIcon size={15} />
         </button>
+        )}
         {onCollapse && (
           <button
             type="button"
@@ -329,6 +399,11 @@ function SessionList({ onPicked, onCollapse }: { onPicked?: () => void; onCollap
         )}
       </div>
 
+      {tabsAt === 'top' && <SidebarTabs tab={tab} onTab={setTab} running={t3.running} placement="top" />}
+      {tab === 'tools' ? (
+        <InTools s={t3} onPicked={onPicked} />
+      ) : (
+        <>
       <div className="shrink-0 px-2 pt-2">
         <div
           className="flex items-center gap-1.5 rounded-md px-2"
@@ -386,6 +461,9 @@ function SessionList({ onPicked, onCollapse }: { onPicked?: () => void; onCollap
           {showArchived ? '← Back to sessions' : 'Archived sessions'}
         </button>
       </div>
+        </>
+      )}
+      {tabsAt === 'bottom' && <SidebarTabs tab={tab} onTab={setTab} running={t3.running} placement="bottom" />}
 
       <Dialog open={!!confirming} onOpenChange={(o) => !o && setConfirming(null)}>
         <DialogContent data-testid="session-delete-dialog">
@@ -532,9 +610,9 @@ export function SessionDrawer({ open, onOpenChange }: { open: boolean; onOpenCha
           style={{ backgroundColor: 'var(--color-card)' }}
           data-testid="session-drawer"
         >
-          <Drawer.Title className="sr-only">Sessions</Drawer.Title>
+          <Drawer.Title className="sr-only">Chats</Drawer.Title>
           <Drawer.Description className="sr-only">Browse, search and reopen past sessions.</Drawer.Description>
-          <SessionList onPicked={() => onOpenChange(false)} />
+          <SessionList tabsAt="bottom" onPicked={() => onOpenChange(false)} />
         </Drawer.Content>
       </Drawer.Portal>
     </Drawer.Root>

@@ -72,6 +72,7 @@ class TalkyProfile:
     name: str
     description: str
     llm_backend: Optional[str] = None  # Legacy - for backends like Moltis
+    # Optional: applied on switch to this profile; None leaves the global voice as-is.
     voice_profile: Optional[str] = None
     backend: Optional[str] = None  # New: "mcp" for voice backends
     app: Optional[str] = None  # New: "pi", "claude", etc.
@@ -347,7 +348,8 @@ class ProfileManager:
             name=name,
             description=config.get("description", ""),
             llm_backend=config.get("llm_backend") or self.defaults.get("llm_backend"),
-            voice_profile=config.get("voice_profile") or self.defaults.get("voice_profile"),
+            # Unset stays None: switching to the profile then leaves the voice alone.
+            voice_profile=config.get("voice_profile") or None,
             backend=config.get("backend"),
             app=config.get("app"),
             client=config.get("client"),
@@ -495,9 +497,10 @@ class ProfileManager:
         llm = self.get_llm_backend(tp.llm_backend)
         if not llm:
             raise ValueError(f"Unknown LLM backend: {tp.llm_backend}")
-        vp = self.get_voice_profile(tp.voice_profile)
+        vp_name = tp.voice_profile or self.get_default_voice_profile()
+        vp = self.get_voice_profile(vp_name)
         if not vp:
-            raise ValueError(f"Unknown voice profile: {tp.voice_profile}")
+            raise ValueError(f"Unknown voice profile: {vp_name}")
         return {
             "talky_profile": tp,
             "llm_backend": llm,

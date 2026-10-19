@@ -1,6 +1,6 @@
 import { forwardRef, type ButtonHTMLAttributes } from 'react';
 
-type PickerVariant = 'bordered' | 'footer';
+type PickerVariant = 'bordered' | 'footer' | 'chip';
 
 type PickerTriggerProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   open?: boolean;
@@ -17,6 +17,27 @@ type PickerTriggerProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 export const PickerTrigger = forwardRef<HTMLButtonElement, PickerTriggerProps>(
   ({ open, variant = 'bordered', className, style, children, ...rest }, ref) => {
+    if (variant === 'chip') {
+      // Header chip row (WIN-578): quiet mono pill, no border.
+      return (
+        <button
+          ref={ref}
+          type="button"
+          className={`picker-footer flex items-center gap-1 px-2.5 h-6 min-w-0 max-w-full font-mono bg-transparent transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer rounded-full ${className ?? ''}`}
+          style={{
+            fontSize: 11,
+            letterSpacing: '0.04em',
+            color: 'var(--color-text-dim)',
+            backgroundColor: open ? 'var(--color-panel-3)' : 'var(--color-panel-2)',
+            ...style,
+          }}
+          {...rest}
+        >
+          {children}
+        </button>
+      );
+    }
+
     if (variant === 'footer') {
       return (
         <button

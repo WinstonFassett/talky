@@ -19,6 +19,7 @@ package). We insert that directory into sys.path at import time.
 
 import asyncio
 import os
+import pwd
 import queue
 import sys
 import threading
@@ -45,8 +46,17 @@ from pipecat.services.llm_service import LLMService
 from talky.convos.replay import HistoryPreambleMixin
 from talky.server.turn import UserTurnTextFrame
 
-_HERMES_DIR = os.path.expanduser("~/.hermes/hermes-agent")
-_HERMES_CONFIG = os.path.expanduser("~/.hermes/config.yaml")
+# Hermes lives under the LOGIN user's home, not $HOME: isolated daemons (the browser-test rigs) override
+# $HOME, and there the agent dir, config and session store (the one "In tools" lists) would all be "not
+# found" -- opening a Hermes chat mid-call then fails to start the backend (WIN-582). Same rule as
+# native_sessions._home(). HERMES_HOME is pinned too so the agent resolves its own state the same way.
+try:
+    _LOGIN_HOME = pwd.getpwuid(os.getuid()).pw_dir
+except KeyError:
+    _LOGIN_HOME = os.path.expanduser("~")
+_HERMES_HOME = os.environ.setdefault("HERMES_HOME", os.path.join(_LOGIN_HOME, ".hermes"))
+_HERMES_DIR = os.path.join(_HERMES_HOME, "hermes-agent")
+_HERMES_CONFIG = os.path.join(_HERMES_HOME, "config.yaml")
 
 # Importing Hermes runs its bootstrap, which (a) re-execs the process under
 # Hermes's own venv unless HERMES_DISABLE_LAZY_INSTALLS=1 — the talky daemon

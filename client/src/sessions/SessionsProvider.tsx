@@ -97,6 +97,8 @@ type SessionsValue = {
   setArchived: (id: string, archived: boolean) => Promise<void>;
   remove: (id: string) => Promise<void>;
   error: string | null;
+  /** Bumps on every switch attempt, so a dismissed banner can show again for an identical error. */
+  attempt: number;
 };
 
 const SessionsContext = createContext<SessionsValue | null>(null);
@@ -131,6 +133,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const [historyStart, setHistoryStart] = useState(0);
   const [liveMark, setLiveMark] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [ready, setReady] = useState(false);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const activeProfileRef = useRef<string>('');
@@ -206,13 +209,11 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   /** Make `id` the daemon's current convo (resume + profile switch); no LLM call. */
   const bind = useCallback(async (id: string, profile?: string) => {
     try {
-      const [plan, now] = await Promise.all([convosApi.resume(id, profile), convosApi.profiles()]);
+      // The daemon switches the live pipeline to the chat's profile itself (WIN-582); it answers 409 if it can't.
+      await convosApi.resume(id, profile);
       // Read the active profile fresh: the cached one is stale after a daemon restart.
-      const active = now.profiles.find((p) => p.active)?.name ?? '';
-      activeProfileRef.current = active;
-      if (plan.profile && plan.profile !== active) {
-        await convosApi.switchProfile(plan.profile);
-      }
+      const now = await convosApi.profiles();
+      activeProfileRef.current = now.profiles.find((p) => p.active)?.name ?? '';
     } catch (e) {
       setError(`Couldn't continue session: ${e instanceof Error ? e.message : e}`);
     }
@@ -220,8 +221,12 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
 
   /** Show a session's transcript. With `bind`, also make it the daemon's current convo. */
   const show = useCallback(
-    async (id: string, opts: { bind: boolean; profile?: string }) => {
-      setError(null);
+    async (id: string, opts: { bind: boolean; profile?: string; keepError?: boolean }) => {
+      // A daemon-driven re-show (convoChanged) must not wipe the error of the pick that just failed.
+      if (!opts.keepError) {
+        setError(null);
+        setAttempt((n) => n + 1);
+      }
       setOpenId(id);
       setLiveMark(liveLenRef.current);
       setHistory([]);
@@ -376,7 +381,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         if (!inCallRef.current) void loadHistory(d.current).catch(() => {});
       } else {
         // Someone else (the CLI, another tab) switched the daemon's session.
-        void show(d.current, { bind: false });
+        void show(d.current, { bind: false, keepError: true });
       }
     } else if (!d.current && d.reason === 'current' && openNow) {
       clearView();
@@ -446,6 +451,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     setArchived,
     remove,
     error,
+    attempt,
   };
   return <SessionsContext.Provider value={value}>{children}</SessionsContext.Provider>;
 }

@@ -523,3 +523,124 @@ def test_mcp_mode_does_not_take_over_the_session_profile(tmp_path):
     assert (session.backend, session.profile) == ("claude", "claude")
     rec = store.get(rec_id)
     assert (rec.backend, rec.profile) == ("claude", "claude")
+
+
+# --- WIN-576: live re-point of a live_attach backend (B2) --------------------
+
+
+def _live_t3(channel, monkeypatch, thread: str):
+    from talky.backends.t3 import T3LLMService
+
+    svc = T3LLMService(resume=thread)
+    monkeypatch.setattr(channel, "is_live", lambda: True)
+    channel._llm_services = {"t3": svc}
+    channel._convo_session = ConvoSession(channel._convo_store, backend="t3", profile="t3")
+    return svc
+
+
+def test_live_resume_repoints_live_attach_backend(channel, monkeypatch):
+    rec = channel._convo_store.create(backend="t3", profile="t3", native_session_id="thread-B")
+    channel._convo_store.append_turn(rec.id, "user", "hello B")
+    svc = _live_t3(channel, monkeypatch, "thread-A")
+
+    out = channel.resume_convo(rec.id)
+
+    assert out["applied"] == "live" and out["replay_turns"] == 0
+    assert svc._thread_id == "thread-B"
+    assert svc._replay_preamble == "", "B's transcript must not be sent into a thread"
+
+
+def test_live_resume_clears_a_stale_preamble_on_repoint(channel, monkeypatch):
+    rec = channel._convo_store.create(backend="t3", profile="t3", native_session_id="thread-B")
+    svc = _live_t3(channel, monkeypatch, "thread-A")
+    svc.set_history([{"role": "user", "content": "left over from an earlier resume"}])
+
+    channel.resume_convo(rec.id)
+
+    assert svc._thread_id == "thread-B" and svc._replay_preamble == ""
+
+
+def test_live_resume_of_unlinked_convo_never_lands_in_the_live_thread(channel, monkeypatch):
+    rec = channel._convo_store.create(backend="t3", profile="t3")
+    channel._convo_store.append_turn(rec.id, "user", "no link yet")
+    svc = _live_t3(channel, monkeypatch, "thread-A")
+
+    channel.resume_convo(rec.id)
+
+    assert svc._thread_id is None, "next message must launch a new thread"
+    assert "no link yet" in svc._replay_preamble
+
+
+# --- WIN-582: opening a chat mid-call switches the backend, or binds nothing ---
+
+
+def _go_live(channel, monkeypatch, status):
+    """A live call on T3 whose pipeline can't start any other backend: only ``status`` says why."""
+    from talky.convos.session import ConvoSession
+
+    monkeypatch.setattr(channel, "is_live", lambda: True)
+    channel._active_profile = "t3"
+    channel._convo_session = ConvoSession(channel._convo_store, backend="t3", profile="t3")
+    channel._backend_status = {"hermes": status}
+    monkeypatch.setattr(channel, "_refresh_backend_status", lambda pm: None)
+
+
+def test_open_convo_refuses_when_the_chats_backend_cant_run(channel, monkeypatch):
+    import asyncio
+
+    rec = channel._convo_store.create(backend="hermes", profile="hermes", native_session_id="h-1")
+    _go_live(channel, monkeypatch, {"status": "misconfigured", "reason": "hermes-agent not found"})
+
+    with pytest.raises(RuntimeError, match="hermes isn't available"):
+        asyncio.run(channel.open_convo(rec.id))
+
+    # nothing bound, record untouched: a T3 reply can't land in it or re-tag it
+    assert channel._convo_session.convo_id is None
+    assert channel._convo_store.get(rec.id).backend == "hermes"
+
+
+def test_open_convo_switches_the_live_profile(channel, monkeypatch):
+    import asyncio
+
+    rec = channel._convo_store.create(backend="hermes", profile="hermes", native_session_id="h-1")
+    _go_live(channel, monkeypatch, {"status": "ready", "reason": ""})
+    channel._llm_services["hermes"] = object()
+    switched = []
+
+    async def fake_switch(name, **kw):
+        switched.append(name)
+
+    monkeypatch.setattr(channel, "switch_to_profile", fake_switch)
+    monkeypatch.setattr(channel, "interrupt", lambda: asyncio.sleep(0))
+
+    out = asyncio.run(channel.open_convo(rec.id))
+
+    assert switched == ["hermes"] and out["backend"] == "hermes"
+    assert channel._convo_session.convo_id == rec.id
+
+
+def test_assistant_sink_fence_keeps_old_reply_out_of_the_next_chat(tmp_path):
+    import asyncio
+
+    from pipecat.frames.frames import InterruptionFrame, LLMFullResponseStartFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    from pipecat.utils.string import TextPartForConcatenation
+
+    from talky.convos.transcript_sink import ConvoAssistantTranscriptProcessor
+
+    store = ConvoStore(root=tmp_path)
+    old = store.create(backend="t3", profile="t3")
+    new = store.create(backend="hermes", profile="hermes")
+    session = ConvoSession(store, backend="t3", profile="t3", resume_into=old.id)
+    sink = ConvoAssistantTranscriptProcessor(session)
+    sink._current_assistant_text_parts = [TextPartForConcatenation("first half", includes_inter_part_spaces=False)]
+
+    sink.fence()  # opening the next chat
+    session.bind(new.id)
+    # the old reply's remaining words and its close land after the rebind
+    sink._current_assistant_text_parts = [TextPartForConcatenation("second half", includes_inter_part_spaces=False)]
+    asyncio.run(sink.process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM))
+
+    assert [t.content for t in store.read_transcript(old.id)] == ["first half"]
+    assert store.read_transcript(new.id) == []
+    assert sink._fenced is False  # the next backend's reply is recorded again

@@ -4,9 +4,9 @@ import { SlidersHorizontalIcon } from 'lucide-react';
 
 import { SessionControls } from './SessionControls';
 
-// Header trigger + bottom-sheet panel containing the existing LLM and Voice
+// Header trigger + bottom-sheet panel containing the Voice and Audio
 // pickers stacked vertically. Mobile only — desktop renders the pickers inline.
-export const SessionSheet = ({ currentLabel }: { currentLabel?: string }) => {
+export const SessionSheet = () => {
   const [open, setOpen] = useState(false);
 
   // Close the sheet on viewport widen (the desktop layout shows pickers inline).
@@ -27,7 +27,7 @@ export const SessionSheet = ({ currentLabel }: { currentLabel?: string }) => {
           className="flex items-center gap-1.5 px-2.5 h-9 w-full min-w-0 text-[13px] font-medium text-foreground bg-transparent transition-colors disabled:opacity-50 cursor-pointer rounded-md"
           style={{ border: '1px solid var(--color-border)' }}
         >
-          <span className="truncate flex-1 text-left">{currentLabel || 'Settings'}</span>
+          <span className="truncate flex-1 text-left">Settings</span>
           <SlidersHorizontalIcon
             size={13}
             style={{ color: 'var(--color-text-mute)' }}
@@ -59,7 +59,7 @@ export const SessionSheet = ({ currentLabel }: { currentLabel?: string }) => {
             Settings
           </Drawer.Title>
           <Drawer.Description className="sr-only">
-            Configure the assistant and voice for this session.
+            Configure the voice and audio devices for this session.
           </Drawer.Description>
 
           <div

@@ -6,9 +6,8 @@
 // itself and reports one of:
 //
 //   disconnected → connecting → connected
-//                       ↘ reconnecting (an unexpected drop; a few tries with backoff)
-//                              ↘ offline (gave up; Retry starts over, and so
-//                                does the daemon coming back)
+//                       ↘ reconnecting (an unexpected drop; two tries with backoff)
+//                              ↘ offline (gave up, quietly; Retry starts over)
 //
 // A drop is noticed from the transport state, or sooner when the daemon's
 // event stream drops and the daemon doesn't answer a request. Every
@@ -40,11 +39,35 @@ type CallValue = {
   disconnect: () => void;
   /** After giving up: try again now. */
   retry: () => void;
+  /** Why the mic couldn't be opened at connect time, or null. */
+  micIssue: MicIssue | null;
+  /** Ask for the mic again (re-prompts if the browser allows) and re-enable it. */
+  retryMic: () => Promise<void>;
+  /** One line on why the last call ended without the user ending it. */
+  dropReason: string | null;
+};
+
+export type MicIssue = { kind: 'blocked' | 'nodevice'; label: string };
+
+
+const noMicPlugged = () =>
+  navigator.mediaDevices
+    .enumerateDevices()
+    .then((d) => !d.some((x) => x.kind === 'audioinput'))
+    .catch(() => false);
+
+const micErrorKind = (err: unknown): 'blocked' | 'nodevice' => {
+  const name = (err as { name?: string })?.name ?? '';
+  return name === 'NotFoundError' || name === 'OverconstrainedError' ? 'nodevice' : 'blocked';
 };
 
 const CallContext = createContext<CallValue | null>(null);
 
-const RETRY_DELAYS = [0, 1000, 2000, 4000, 8000];
+// Auto-reconnect after a drop: two tries, backed off. Then it stops and Retry is manual.
+const AUTO_RETRY_DELAYS = [1000, 3000];
+const MANUAL_RETRY_DELAYS = [0, 1000];
+// A call that stayed up this long ends the drop episode (the next drop cues again).
+const STABLE_MS = 15000;
 const ATTEMPT_TIMEOUT = 10000;
 
 /** Is the daemon answering at all? Cheap, and fails fast when it's gone. */
@@ -80,6 +103,11 @@ export function CallProvider({
   const muted = useRef(false);
   const transportRef = useRef(transportState);
   transportRef.current = transportState;
+  const [micIssue, setMicIssue] = useState<MicIssue | null>(null);
+  const [dropReason, setDropReason] = useState<string | null>(null);
+  const lastError = useRef<string | null>(null);
+  // The drop cue plays at most once per drop episode, however many times the call re-drops.
+  const cuedThisEpisode = useRef(false);
 
   const connectOnce = useCallback(async (): Promise<boolean> => {
     if (!(await reachable())) return false;
@@ -90,10 +118,12 @@ export function CallProvider({
       } catch { /* already gone */ }
       leaving.current = false;
     }
+    setMicIssue(null);
     try {
       await client.initDevices();
     } catch (err) {
       console.warn('initDevices failed (mic permission denied?):', err);
+      setMicIssue({ kind: micErrorKind(err), label: '' });
     }
     try {
       await Promise.race([
@@ -103,6 +133,12 @@ export function CallProvider({
         }),
       ]);
       if (muted.current) client.enableMic(false);
+      setDropReason(null);
+      const track = client.tracks()?.local?.audio;
+      if (!track) {
+        const none = await noMicPlugged();
+        setMicIssue((m) => m ?? { kind: none ? 'nodevice' : 'blocked', label: '' });
+      }
       return true;
     } catch (err) {
       console.warn('connect failed:', err);
@@ -110,10 +146,10 @@ export function CallProvider({
     }
   }, [client, transportType]);
 
-  const reconnect = useCallback(async () => {
+  const reconnect = useCallback(async (delays: number[] = AUTO_RETRY_DELAYS) => {
     const mine = ++epoch.current;
     setMode('reconnecting');
-    for (const delay of RETRY_DELAYS) {
+    for (const delay of delays) {
       await sleep(delay);
       if (epoch.current !== mine) return;
       const ok = await connectOnce();
@@ -132,6 +168,7 @@ export function CallProvider({
       wanted.current = true;
       muted.current = !!opts.muted;
       setMode('normal');
+      cuedThisEpisode.current = false;
       const ok = await connectOnce();
       return ok && epoch.current === mine;
     },
@@ -139,6 +176,8 @@ export function CallProvider({
   );
 
   const disconnect = useCallback(() => {
+    setDropReason(null);
+    setMicIssue(null);
     epoch.current++;
     wanted.current = false;
     leaving.current = true;
@@ -152,12 +191,23 @@ export function CallProvider({
 
   const dropped = useCallback(() => {
     if (!wanted.current || modeRef.current !== 'normal') return;
-    if (dropCue) {
+    setDropReason(lastError.current || 'The call was closed by the server.');
+    if (dropCue && !cuedThisEpisode.current) {
+      cuedThisEpisode.current = true;
       dropCue.currentTime = 0;
       dropCue.play().catch(() => {});
     }
     void reconnect();
   }, [reconnect]);
+
+  // A call that stays up ends the drop episode.
+  useEffect(() => {
+    if (transportState !== 'ready' || modeRef.current !== 'normal') return;
+    const t = setTimeout(() => {
+      cuedThisEpisode.current = false;
+    }, STABLE_MS);
+    return () => clearTimeout(t);
+  }, [transportState, mode]);
 
   // The transport says the call ended, and talky didn't end it.
   const wasConnected = useRef(false);
@@ -195,16 +245,6 @@ export function CallProvider({
     [client, dropped],
   );
 
-  // Offline, and the daemon is back (its event stream reconnected and sent
-  // `init`): reconnect without waiting for Retry.
-  useEffect(
-    () =>
-      onDaemonEvent('init', () => {
-        if (modeRef.current === 'offline' && wanted.current) void reconnect();
-      }),
-    [reconnect],
-  );
-
   // Coming back to a backgrounded tab: if the call died while it was hidden, reconnect.
   useEffect(() => {
     const onVisible = () => {
@@ -218,9 +258,40 @@ export function CallProvider({
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [reconnect]);
 
+  // The server's own words for why it ended the call, kept for `dropped`.
+  useEffect(() => {
+    const onError = (msg: unknown) => {
+      const data = (msg as { data?: { message?: string; error?: string } })?.data;
+      lastError.current = data?.message || data?.error || null;
+    };
+    const onBotGone = () => {
+      lastError.current ||= 'The bot left the call.';
+    };
+    client.on('error', onError);
+    client.on('botDisconnected', onBotGone);
+    return () => {
+      client.off('error', onError);
+      client.off('botDisconnected', onBotGone);
+    };
+  }, [client]);
+
+  const retryMic = useCallback(async () => {
+    try {
+      await client.initDevices();
+      client.enableMic(true);
+      muted.current = false;
+      setMicIssue(null);
+      if (!client.tracks()?.local?.audio) {
+        setMicIssue({ kind: (await noMicPlugged()) ? 'nodevice' : 'blocked', label: '' });
+      }
+    } catch (err) {
+      setMicIssue({ kind: micErrorKind(err), label: '' });
+    }
+  }, [client]);
+
   const retry = useCallback(() => {
     wanted.current = true;
-    void reconnect();
+    void reconnect(MANUAL_RETRY_DELAYS);
   }, [reconnect]);
 
   const state: CallState = useMemo(() => {
@@ -232,7 +303,10 @@ export function CallProvider({
     return 'disconnected';
   }, [mode, transportState]);
 
-  const value = useMemo(() => ({ state, connect, disconnect, retry }), [state, connect, disconnect, retry]);
+  const value = useMemo(
+    () => ({ state, connect, disconnect, retry, micIssue, retryMic, dropReason }),
+    [state, connect, disconnect, retry, micIssue, retryMic, dropReason],
+  );
   return <CallContext.Provider value={value}>{children}</CallContext.Provider>;
 }
 

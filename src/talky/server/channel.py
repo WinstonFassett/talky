@@ -69,9 +69,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
@@ -254,6 +256,8 @@ class VoiceChannel:
         # started yet; applied when _ensure_backend starts it.
         self._deferred_resumes: dict[str, dict] = {}
         self._active_profile: Optional[str] = None
+        # WIN-579: the selected Talky profile survives idle teardown and daemon restart.
+        self._active_profile = self._load_persisted_profile()
 
         # Speech buffer — written by MCPDriverLLMService, drained by listen()
         self._user_speech_queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -652,6 +656,65 @@ class VoiceChannel:
             "grace_seconds": grace,
         }
 
+    # ── persisted Talky profile selection (WIN-579) ─────────────────────────
+
+    @staticmethod
+    def _state_path() -> Path:
+        from talky.shared.profile_manager import get_profile_manager
+
+        return get_profile_manager().config_dir / "state.json"
+
+    def _persist_profile(self, profile_name: str) -> None:
+        """Remember the selected Talky profile on disk (``~/.talky/state.json``)."""
+        try:
+            path = self._state_path()
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"active_profile": profile_name}))
+            tmp.replace(path)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"VoiceChannel: could not persist profile {profile_name!r}: {e}")
+
+    def _load_persisted_profile(self) -> Optional[str]:
+        """The persisted Talky profile if it still exists, else None.
+
+        Also queues that profile's voice (if it sets one) for the next build.
+        """
+        try:
+            from talky.shared.profile_manager import get_profile_manager
+
+            data = json.loads(self._state_path().read_text())
+            name = data.get("active_profile") if isinstance(data, dict) else None
+            pm = get_profile_manager()
+            tp = pm.get_talky_profile(name) if name else None
+            if tp is None:
+                return None
+            if tp.voice_profile and pm.get_voice_profile(tp.voice_profile):
+                self._pending_voice_profile = tp.voice_profile
+            return name
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _remember_profile(self, profile_name: str, announce: bool) -> str:
+        # Only manual picker/API switches persist; agent joins (announce=False) and
+        # the MCP passthrough are transient.
+        if announce and profile_name != self.MCP_DRIVER_PROFILE:
+            self._persist_profile(profile_name)
+        return profile_name
+
+    async def _apply_profile_voice(self, profile_name: str) -> None:
+        """Apply the Talky profile's ``voice_profile`` (if it sets one); else leave voice as-is."""
+        from talky.shared.profile_manager import get_profile_manager
+
+        tp = get_profile_manager().get_talky_profile(profile_name)
+        if not tp or not tp.voice_profile:
+            return
+        try:
+            await self.switch_voice(tp.voice_profile)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"VoiceChannel: profile {profile_name!r} voice {tp.voice_profile!r} not applied: {e}"
+            )
+
     def available_profiles(self) -> list[str]:
         """List of profile names the channel will accept for ``switch_to_profile``.
 
@@ -722,11 +785,12 @@ class VoiceChannel:
         if not self.is_live() or self._pipeline_task is None:
             # Soft path: no live pipeline. Store the desired profile and
             # let the next build apply it.
-            self._active_profile = profile_name
+            self._active_profile = self._remember_profile(profile_name, announce)
             logger.info(
                 f"VoiceChannel: profile {profile_name!r} stored as desired "
                 "(no live pipeline — will apply on next browser connect)"
             )
+            await self._apply_profile_voice(profile_name)
             await self._emit_profile_changed(profile_name)
             return
 
@@ -745,8 +809,9 @@ class VoiceChannel:
         from pipecat.frames.frames import ManuallySwitchServiceFrame
 
         await self._pipeline_task.queue_frames([ManuallySwitchServiceFrame(service=service)])
-        self._active_profile = profile_name
+        self._active_profile = self._remember_profile(profile_name, announce)
         logger.info(f"VoiceChannel: active profile → {profile_name!r}")
+        await self._apply_profile_voice(profile_name)
         await self._emit_profile_changed(profile_name)
 
         if self._convo_session is not None:
@@ -1017,7 +1082,7 @@ class VoiceChannel:
 
         Works without a live pipeline — reads from config. Each entry:
         ``{"name": str, "label": str, "description": str, "active": bool,
-        "healthy": bool | None}``.
+        "healthy": bool | None, "backend": str, "model": str | None}``.
 
         MCP Mode is prepended as a synthetic entry (it's the raw
         receiving state, not a talky profile).
@@ -1025,6 +1090,7 @@ class VoiceChannel:
         from talky.shared.profile_manager import get_profile_manager
 
         active = self._active_profile
+        voices = {v["name"]: v for v in self.voices_info()}
         profiles: list[dict] = [
             {
                 "name": self.MCP_DRIVER_PROFILE,
@@ -1042,12 +1108,18 @@ class VoiceChannel:
                 # back to the profile name itself for the lookup.
                 tp = pm.get_talky_profile(name)
                 backend_name = (tp.llm_backend if tp and tp.llm_backend else name)
+                backend_cfg = pm.get_llm_backend(backend_name)
+                model = (backend_cfg.config or {}).get("model") if backend_cfg else None
                 profiles.append({
                     "name": name,
                     "label": name,
                     "description": desc,
                     "active": active == name,
                     "healthy": self._health.get(backend_name),
+                    "backend": backend_name,
+                    "model": model if isinstance(model, str) else None,
+                    "voice_profile": tp.voice_profile if tp else None,
+                    "voice": voices.get(tp.voice_profile) if tp and tp.voice_profile else None,
                 })
         except Exception:  # noqa: BLE001
             pass
@@ -1366,7 +1438,7 @@ class VoiceChannel:
         self._deferred_resumes = {}
 
         if not preserve_active_profile:
-            self._active_profile = None
+            self._active_profile = self._load_persisted_profile()
         # If preserving: _active_profile stays as the "desired profile"
         # that the next attach() will switch back to.
 
@@ -1581,8 +1653,17 @@ class VoiceChannel:
                 # Not started yet (WIN-556): the switch the caller makes next
                 # starts it, natively resumed or with this replay applied.
                 self._deferred_resumes[plan["backend"]] = plan
+            elif getattr(live_svc, "live_attach", False) and callable(getattr(live_svc, "set_resume", None)):
+                # The backend can re-point a running call: aim it at the convo's native
+                # session (or none, so the next message starts a fresh one) and drop any
+                # queued preamble that was meant for the previous session.
+                native = plan["native_session_id"]
+                live_svc.set_resume(native)
+                if callable(getattr(live_svc, "set_history", None)):
+                    live_svc.set_history([] if native else plan["turns"])
             else:
                 self._apply_replay(live_svc, {**plan, "replay": True})
+            self._leave_current_convo(plan["convo_id"])
             self._convo_session.bind(plan["convo_id"])
             # A daemon restart mid-turn: once this convo is bound again, replay the turn.
             self._maybe_resume_interrupted_turn(plan["convo_id"])
@@ -1604,6 +1685,58 @@ class VoiceChannel:
             "replay_turns": 0 if plan["native_session_id"] else len(plan["turns"]),
             "applied": when,
         }
+
+    async def open_convo(self, convo_id: str, profile: Optional[str] = None) -> dict:
+        """Open a saved chat: bind it AND make the live pipeline run its backend (WIN-582).
+
+        ``resume_convo`` only rebinds the session; without the profile switch the old backend (a T3
+        thread) keeps answering into the new chat and re-tags its record. All-or-nothing: if the chat's
+        backend can't run, nothing is bound and the caller gets a ``RuntimeError`` to show.
+        """
+        plan = self._resume_plan(convo_id, profile)
+        live = self.is_live() and self._convo_session is not None
+        backend = plan["backend"]
+        if live and backend != self.MCP_DRIVER_PROFILE and backend not in self._llm_services:
+            from talky.backends import BackendStatus
+            from talky.shared.profile_manager import get_profile_manager
+
+            self._refresh_backend_status(get_profile_manager())
+            entry = self._backend_status.get(backend) or {}
+            if entry.get("status") != BackendStatus.READY.value:
+                raise RuntimeError(f"can't open this chat: {backend} isn't available ({entry.get('reason') or 'not configured'})")
+        result = self.resume_convo(convo_id, profile)
+        if plan["profile"] != self._active_profile:
+            try:
+                await self.switch_to_profile(plan["profile"])
+            except Exception as e:  # noqa: BLE001 -- e.g. the backend failed to construct
+                # Don't leave the chat bound to a backend that isn't running it: the old backend would answer
+                # into it. The next turn opens a fresh chat instead.
+                self._deferred_resumes.pop(backend, None)
+                if self._convo_session is not None:
+                    self._convo_session.start_fresh()
+                raise RuntimeError(f"can't open this chat: {e}") from e
+        return result
+
+    def _leave_current_convo(self, next_convo_id: str) -> None:
+        """Opening another chat mid-call: nothing the old chat's backend still says may reach the new one (WIN-582).
+
+        Persists the half-spoken reply into the old convo (and fences off the rest of it), stops the old backend's in-flight turn
+        (a T3 poll loop would otherwise keep pushing its "working" cue and reply text into whatever
+        convo is bound next) and cuts the bot's speech.
+        """
+        session = self._convo_session
+        if session is None or session.convo_id == next_convo_id:
+            return
+        if self._assistant_sink is not None:
+            self._assistant_sink.fence()
+        old = self._llm_services.get(session.backend)
+        abandon = getattr(old, "abandon_turn", None)
+        if callable(abandon):
+            abandon()
+        try:
+            asyncio.get_running_loop().create_task(self.interrupt())
+        except RuntimeError:
+            pass  # no loop (unit tests)
 
     @staticmethod
     def _convos_enabled(pm: Any) -> bool:
