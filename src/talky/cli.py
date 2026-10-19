@@ -1223,6 +1223,11 @@ def talky_daemon_is_running() -> bool:
         return False
 
 
+# Cold start (imports, local model load) can take over a minute; the old 30s
+# budget reported false failures while the daemon came up fine (WIN-583).
+_DAEMON_START_BUDGET_SECS = 180.0
+
+
 def _clear_daemon_files() -> None:
     for p in (_DAEMON_READY_PATH, _DAEMON_PID_PATH):
         try:
@@ -1257,7 +1262,84 @@ def _fetch_readiness() -> dict | None:
         return None
 
 
-def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
+def _wait_for_daemon_ready(
+    wait_secs: float,
+    *,
+    verbose: bool = True,
+    is_ready=None,
+    pid_alive=None,
+    fetch_readiness=None,
+    clock=time.monotonic,
+    sleep=time.sleep,
+    out=None,
+) -> tuple[str, float]:
+    """Poll until the daemon is ready. Returns ``(result, elapsed_secs)`` with
+    result ``"ready"``, ``"died"`` (the spawned process is gone) or ``"timeout"``.
+
+    The deadline extends while /api/ready reports open readiness tasks, so a
+    long model download isn't cut off. Probes and the clock are injectable
+    for tests.
+    """
+    is_ready = is_ready or talky_daemon_is_running
+    fetch_readiness = fetch_readiness or _fetch_readiness
+    out = out or sys.stderr
+
+    def _default_pid_alive() -> bool:
+        try:
+            os.kill(int(_DAEMON_PID_PATH.read_text().strip()), 0)
+        except (FileNotFoundError, ValueError, ProcessLookupError):
+            return False
+        except PermissionError:
+            pass  # alive but owned by another user
+        return True
+
+    pid_alive = pid_alive or _default_pid_alive
+
+    start = clock()
+    deadline = start + wait_secs
+    dot_interval = 2.0
+    next_dot = start + dot_interval
+    last_status_line = ""
+    saw_listening = False
+    while clock() < deadline:
+        now = clock()
+        if is_ready():
+            if verbose and last_status_line:
+                # Clear any in-progress status line.
+                print("\r" + " " * len(last_status_line) + "\r", file=out, end="", flush=True)
+            return "ready", now - start
+        if not pid_alive():
+            return "died", now - start
+        # Readiness is only fetchable once uvicorn binds.
+        r = fetch_readiness()
+        if r is not None:
+            if not saw_listening:
+                saw_listening = True
+                if verbose:
+                    print(f"\n   listening ({now - start:.0f}s), finishing setup...", file=out, flush=True)
+            tasks = r.get("tasks") or []
+            if tasks:
+                deadline = max(deadline, now + 120.0)
+                if verbose:
+                    first = tasks[0]
+                    line = f"   {first.get('name', '')}"
+                    pct = first.get("pct")
+                    if pct is not None:
+                        line += f" ({pct:.0f}%)"
+                    if len(tasks) > 1:
+                        line += f" (+{len(tasks) - 1} more)"
+                    line += f" [{now - start:.0f}s]"
+                    pad = max(0, len(last_status_line) - len(line))
+                    print("\r" + line + (" " * pad), file=out, end="", flush=True)
+                    last_status_line = line
+        elif verbose and now >= next_dot:
+            print(".", file=out, end="", flush=True)
+            next_dot = now + dot_interval
+        sleep(0.5)
+    return "timeout", clock() - start
+
+
+def ensure_daemon(wait_secs: float = _DAEMON_START_BUDGET_SECS, verbose: bool = True) -> bool:
     """Ensure the talky daemon is running. Spawn it (detached) if not.
 
     Uses a lock file to serialize spawning. Waits for the daemon's ready
@@ -1325,71 +1407,18 @@ def ensure_daemon(wait_secs: float = 30.0, verbose: bool = True) -> bool:
     # extra installs) instead of silent dots. Wait extends automatically
     # while active readiness work is observed — first-run downloads can
     # legitimately take 10+ minutes.
-    deadline = time.monotonic() + wait_secs
-    dot_interval = 2.0
-    next_dot = time.monotonic() + dot_interval
-    last_status_line = ""
-    saw_listening = False
     try:
-        while time.monotonic() < deadline:
-            if talky_daemon_is_running():
-                if verbose:
-                    _port = _daemon_local_port()
-                    # Clear any in-progress status line.
-                    if last_status_line:
-                        print("\r" + " " * len(last_status_line) + "\r", file=sys.stderr, end="", flush=True)
-                    print(f"\n✅ talky daemon up on :{_port}", file=sys.stderr)
-                return True
-            # Check if the spawned process died before becoming ready.
-            try:
-                pid = int(_DAEMON_PID_PATH.read_text().strip())
-                os.kill(pid, 0)
-            except (FileNotFoundError, ValueError, ProcessLookupError):
-                _clear_daemon_files()
-                print(f"\n❌ talky daemon process died during startup. Check {log_path}", file=sys.stderr)
-                return False
-            except PermissionError:
-                pass  # alive but owned by another user — keep waiting
-
-            # Try to fetch readiness — only meaningful once uvicorn binds.
-            r = _fetch_readiness()
-            now = time.monotonic()
-            if r is not None:
-                if not saw_listening:
-                    saw_listening = True
-                    if verbose:
-                        print("\n   listening, finishing setup...", file=sys.stderr, flush=True)
-                tasks = r.get("tasks") or []
-                if tasks:
-                    # Active work — extend the deadline so first-run downloads
-                    # don't hit a 30s timeout.
-                    deadline = max(deadline, now + 120.0)
-                    if verbose:
-                        first = tasks[0]
-                        name = first.get("name", "")
-                        pct = first.get("pct")
-                        line = f"   {name}"
-                        if pct is not None:
-                            line += f" ({pct:.0f}%)"
-                        extra = len(tasks) - 1
-                        if extra > 0:
-                            line += f" (+{extra} more)"
-                        # Carriage-return overwrite.
-                        pad = max(0, len(last_status_line) - len(line))
-                        print("\r" + line + (" " * pad), file=sys.stderr, end="", flush=True)
-                        last_status_line = line
-                else:
-                    # Listening, no open tasks — usually a transient race
-                    # between ready_file write and our next probe.
-                    pass
-            else:
-                if verbose and now >= next_dot:
-                    print(".", file=sys.stderr, end="", flush=True)
-                    next_dot = now + dot_interval
-            time.sleep(0.5)
-
+        result, elapsed = _wait_for_daemon_ready(wait_secs, verbose=verbose)
+        if result == "ready":
+            if verbose:
+                print(f"\n✅ talky daemon up on :{_daemon_local_port()} (ready in {elapsed:.0f}s)", file=sys.stderr)
+            return True
+        if result == "died":
+            _clear_daemon_files()
+            print(f"\n❌ talky daemon process died during startup. Check {log_path}", file=sys.stderr)
+            return False
         print(
-            f"\n❌ talky daemon failed to come up within {wait_secs:.0f}s. "
+            f"\n❌ talky daemon failed to come up within {elapsed:.0f}s. "
             f"Check {log_path} for details.",
             file=sys.stderr,
         )
