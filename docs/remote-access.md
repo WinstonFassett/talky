@@ -10,7 +10,7 @@ To reach the daemon remotely you need (a) the remote listener bound to an addres
 
 1. **Generate SSL certificates** with your external hostname as SAN:
    ```bash
-   talky certs --hostname macbook-pro.tailc3138.ts.net
+   talky certs --hostname my-laptop.example-tailnet.ts.net
    ```
    (Wheel-friendly — no repo checkout needed. The legacy `./scripts/generate-certs.sh`
    still works for repo dev, but is deprecated for one release.)
@@ -39,7 +39,7 @@ To reach the daemon remotely you need (a) the remote listener bound to an addres
 
 4. **Open on the remote device:**
    ```
-   https://macbook-pro.tailc3138.ts.net:8764
+   https://my-laptop.example-tailnet.ts.net:8764
    ```
    Accept the self-signed cert warning, or install the cert on the device.
 
@@ -62,8 +62,8 @@ security add-trusted-cert -d -r trustRoot \
 ```bash
 cd client
 VITE_HOST=0.0.0.0 \
-  VITE_ALLOWED_HOSTS="macbook-pro.tailc3138.ts.net,localhost" \
-  VITE_DAEMON_URL="https://macbook-pro.tailc3138.ts.net:8764" \
+  VITE_ALLOWED_HOSTS="my-laptop.example-tailnet.ts.net,localhost" \
+  VITE_DAEMON_URL="https://my-laptop.example-tailnet.ts.net:8764" \
   npm run dev:https
 ```
 
