@@ -6,9 +6,8 @@
 // itself and reports one of:
 //
 //   disconnected → connecting → connected
-//                       ↘ reconnecting (an unexpected drop; a few tries with backoff)
-//                              ↘ offline (gave up; Retry starts over, and so
-//                                does the daemon coming back)
+//                       ↘ reconnecting (an unexpected drop; two tries with backoff)
+//                              ↘ offline (gave up, quietly; Retry starts over)
 //
 // A drop is noticed from the transport state, or sooner when the daemon's
 // event stream drops and the daemon doesn't answer a request. Every
@@ -64,7 +63,11 @@ const micErrorKind = (err: unknown): 'blocked' | 'nodevice' => {
 
 const CallContext = createContext<CallValue | null>(null);
 
-const RETRY_DELAYS = [0, 1000, 2000, 4000, 8000];
+// Auto-reconnect after a drop: two tries, backed off. Then it stops and Retry is manual.
+const AUTO_RETRY_DELAYS = [1000, 3000];
+const MANUAL_RETRY_DELAYS = [0, 1000];
+// A call that stayed up this long ends the drop episode (the next drop cues again).
+const STABLE_MS = 15000;
 const ATTEMPT_TIMEOUT = 10000;
 
 /** Is the daemon answering at all? Cheap, and fails fast when it's gone. */
@@ -103,6 +106,8 @@ export function CallProvider({
   const [micIssue, setMicIssue] = useState<MicIssue | null>(null);
   const [dropReason, setDropReason] = useState<string | null>(null);
   const lastError = useRef<string | null>(null);
+  // The drop cue plays at most once per drop episode, however many times the call re-drops.
+  const cuedThisEpisode = useRef(false);
 
   const connectOnce = useCallback(async (): Promise<boolean> => {
     if (!(await reachable())) return false;
@@ -141,10 +146,10 @@ export function CallProvider({
     }
   }, [client, transportType]);
 
-  const reconnect = useCallback(async () => {
+  const reconnect = useCallback(async (delays: number[] = AUTO_RETRY_DELAYS) => {
     const mine = ++epoch.current;
     setMode('reconnecting');
-    for (const delay of RETRY_DELAYS) {
+    for (const delay of delays) {
       await sleep(delay);
       if (epoch.current !== mine) return;
       const ok = await connectOnce();
@@ -163,6 +168,7 @@ export function CallProvider({
       wanted.current = true;
       muted.current = !!opts.muted;
       setMode('normal');
+      cuedThisEpisode.current = false;
       const ok = await connectOnce();
       return ok && epoch.current === mine;
     },
@@ -186,12 +192,22 @@ export function CallProvider({
   const dropped = useCallback(() => {
     if (!wanted.current || modeRef.current !== 'normal') return;
     setDropReason(lastError.current || 'The call was closed by the server.');
-    if (dropCue) {
+    if (dropCue && !cuedThisEpisode.current) {
+      cuedThisEpisode.current = true;
       dropCue.currentTime = 0;
       dropCue.play().catch(() => {});
     }
     void reconnect();
   }, [reconnect]);
+
+  // A call that stays up ends the drop episode.
+  useEffect(() => {
+    if (transportState !== 'ready' || modeRef.current !== 'normal') return;
+    const t = setTimeout(() => {
+      cuedThisEpisode.current = false;
+    }, STABLE_MS);
+    return () => clearTimeout(t);
+  }, [transportState, mode]);
 
   // The transport says the call ended, and talky didn't end it.
   const wasConnected = useRef(false);
@@ -227,16 +243,6 @@ export function CallProvider({
           });
       }),
     [client, dropped],
-  );
-
-  // Offline, and the daemon is back (its event stream reconnected and sent
-  // `init`): reconnect without waiting for Retry.
-  useEffect(
-    () =>
-      onDaemonEvent('init', () => {
-        if (modeRef.current === 'offline' && wanted.current) void reconnect();
-      }),
-    [reconnect],
   );
 
   // Coming back to a backgrounded tab: if the call died while it was hidden, reconnect.
@@ -285,7 +291,7 @@ export function CallProvider({
 
   const retry = useCallback(() => {
     wanted.current = true;
-    void reconnect();
+    void reconnect(MANUAL_RETRY_DELAYS);
   }, [reconnect]);
 
   const state: CallState = useMemo(() => {
