@@ -1506,7 +1506,7 @@ class VoiceChannel:
             # A live-attachable backend (T3) keeps its native session id across start_fresh();
             # clear it so the next turn launches a new session instead of reusing the old one.
             live_svc = self._llm_services.get(self._convo_session.backend)
-            if getattr(live_svc, "live_attach", False) and callable(getattr(live_svc, "set_resume", None)):
+            if live_svc is not None and getattr(live_svc, "live_attach", False) and callable(getattr(live_svc, "set_resume", None)):
                 live_svc.set_resume(None)
         logger.info("VoiceChannel: next turn starts a new convo")
         self._emit_convo_changed(None, "current", "idle")
