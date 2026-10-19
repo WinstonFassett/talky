@@ -59,7 +59,7 @@ MCP uses a tool-based protocol pattern:
 
 ### MCP Server Setup
 ```bash
-uv tool install -e .
+uv tool install --editable --from "talky[claude-code] @ $PWD" talky --python 3.12 --force
 talky daemon  # runs on localhost:8765 (local HTTP listener)
 ```
 
