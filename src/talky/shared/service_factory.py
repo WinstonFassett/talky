@@ -146,4 +146,9 @@ def create_tts_service_from_config(provider: str, **kwargs):
     if "default_voice" in config and "voice_id" not in kwargs:
         kwargs["voice_id"] = config["default_voice"]
 
-    return _create_service_from_backend_config(config, provider, **kwargs)
+    service = _create_service_from_backend_config(config, provider, **kwargs)
+    # WIN-586: never read link URLs aloud (display text is unaffected).
+    from .spoken_text import strip_links_transform
+
+    service.add_text_transformer(strip_links_transform, "*")
+    return service
