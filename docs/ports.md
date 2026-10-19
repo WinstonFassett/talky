@@ -12,7 +12,7 @@ exposed through up to two listeners, named by who can reach them:
 | Listener | Binds | Protocol | Bound when | Job |
 |----------|-------|----------|-----------|-----|
 | **`local_port`** | `127.0.0.1` | HTTP | **always** | The local browser and local MCP clients (Claude Code, etc.) — they always have a plain-HTTP path. |
-| **`remote_port`** | `host` (e.g. `0.0.0.0`) | HTTPS | only when a TLS cert resolves | Off-box reach: LAN, mobile, ngrok, tailnet. Browsers require HTTPS for mic access over a network. |
+| **`remote_port`** | `host` (default `tailscale` → tailnet IPv4) | HTTPS | only when a TLS cert resolves | Off-box reach: LAN, mobile, ngrok, tailnet. Browsers require HTTPS for mic access over a network. |
 
 The local HTTP listener is **always on**, so a plain-HTTP path is always
 available locally. HTTPS is purely *additive* for remote reach — turning on TLS
@@ -28,7 +28,7 @@ Pin or change ports in `~/.talky/settings.yaml`:
 
 ```yaml
 network:
-  host: "0.0.0.0"          # remote (HTTPS) bind host
+  host: "tailscale"        # remote (HTTPS) bind host. Default: tailnet IPv4 only. "0.0.0.0" = all interfaces, no access control.
   local_port: 8765         # always-on local HTTP. null/omit → random free port.
   remote_port: 8764        # HTTPS listener. omit → random (when a cert resolves).
   https:                   # uncomment to serve the remote HTTPS listener
@@ -58,7 +58,7 @@ Clients should discover the port via the runfile rather than assuming a value.
 
 | Setting | Env override | Default |
 |---------|-------------|---------|
-| `network.host` | `TALKY_HOST` | `localhost` (`0.0.0.0` for remote) |
+| `network.host` | `TALKY_HOST` | `tailscale` in the shipped `settings.yaml` (tailnet IPv4 only); `localhost` if the key is absent. `0.0.0.0` is an explicit opt-in (all interfaces, no access control) |
 | `network.local_port` | `TALKY_LOCAL_PORT` | `8765` (pinned) |
 | `network.remote_port` | `TALKY_REMOTE_PORT` | random free port (HTTPS only) |
 | `network.https.cert` | `TALKY_HTTPS_CERT` | none (TLS off → no remote listener) |
