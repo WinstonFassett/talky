@@ -9,7 +9,12 @@ T3 is not an ACP server and its ``/mcp`` endpoint rejects normal sessions, so th
 is an RPC client: the first turn launches a thread (``orchestration.launchThread``,
 or reuses ``thread_id``), later turns send ``message.dispatch``. The reply is read
 from ``orchestration.getThreadProjection`` every ``poll_interval`` seconds and the
-growth of the run's assistant text is emitted as ``TextFrame`` deltas.
+growth of the run's assistant text is emitted as ``TextFrame`` deltas. The projection's
+``turnItems`` are read too (WIN-585): ``reasoning`` items become ``aggregated_by="thinking"``
+frames (only newly grown text), ``command_execution`` items a ``tool_start`` (``▶ cmd``) and,
+once done, a ``tool_end`` (``✓``/``✗``) frame,
+the same frames hermes/opencode emit. The first of these opens the response, which ends the
+"working" cue; the TTS skips both types (``skip_aggregator_types``), so they are never spoken.
 
 Auth
 ----
@@ -218,6 +223,9 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
                 await c.send_message(self._thread_id, text)
 
             emitted: dict[str, int] = {}  # message id -> chars already sent
+            thought: dict[str, str] = {}  # reasoning item id -> text already sent
+            ran: set[str] = set()  # command_execution item ids already announced
+            ended: set[str] = set()  # ... and already closed with tool_end
             loop = asyncio.get_running_loop()
             deadline = loop.time() + self._run_timeout
             while loop.time() < deadline:
@@ -225,6 +233,33 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
                 p = await c.thread_projection(self._thread_id)
                 runs = [r for r in p["runs"] if r["id"] not in known_runs]
                 run_ids = {r["id"] for r in runs}
+                items = sorted(
+                    (i for i in p.get("turnItems") or [] if i.get("runId") in run_ids),
+                    key=lambda i: i.get("ordinal", 0),
+                )
+                for it in items:
+                    out: list[AggregatedTextFrame] = []
+                    if it.get("type") == "reasoning":
+                        text, prev = it.get("text") or "", thought.get(it["id"], "")
+                        if text and text != prev:
+                            thought[it["id"]] = text
+                            out.append(AggregatedTextFrame(
+                                text=text[len(prev):] if text.startswith(prev) else text, aggregated_by="thinking"
+                            ))
+                    elif it.get("type") == "command_execution" and it.get("title") != "Workspace ready" and it.get("input"):
+                        cmd = it["input"][:60]
+                        if it["id"] not in ran:
+                            ran.add(it["id"])
+                            out.append(AggregatedTextFrame(text=f"▶ {cmd}", aggregated_by="tool_start"))
+                        if it["id"] not in ended and it.get("status") in ("completed", "failed"):
+                            ended.add(it["id"])
+                            mark = "✗" if it["status"] == "failed" else "✓"
+                            out.append(AggregatedTextFrame(text=f"{mark} {cmd}", aggregated_by="tool_end"))
+                    for frame in out:
+                        if not started:
+                            started = True
+                            await self.push_frame(LLMFullResponseStartFrame())
+                        await self.push_frame(frame)
                 for m in p["messages"]:
                     if m["role"] != "assistant" or m.get("runId") not in run_ids:
                         continue

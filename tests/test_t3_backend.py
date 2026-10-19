@@ -239,3 +239,151 @@ def test_status_is_ready_with_cli_but_no_token_and_misconfigured_without(monkeyp
     monkeypatch.setattr(t3_auth, "t3_bin", lambda: None)
     st, msg = T3LLMService.status()
     assert st == BackendStatus.MISCONFIGURED and "CLI not found" in msg
+
+
+# --- WIN-585: show T3's thinking + commands (turnItems) ---
+# Shapes are copied from a real getThreadProjection capture; the client is a FAKE.
+
+import re  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_R1 = {"id": "r1", "status": "running"}
+_R1_DONE = {"id": "r1", "status": "completed"}
+
+
+def _item(type_, ordinal, id_, **kw):
+    return {"id": id_, "runId": "r1", "ordinal": ordinal, "type": type_, "status": "completed", **kw}
+
+
+_PREP = _item("command_execution", 1, "i-prep", title="Workspace ready", input="Preparing workspace", outputOmitted=True)
+_USER = _item("user_message", 0, "i-user", text="hi")
+_CMD = _item("command_execution", 3, "i-cmd", title="Ran command", input="echo done", outputOmitted=True)
+
+
+def _reason(text, streaming=False):
+    return _item("reasoning", 2, "i-th", title="Thinking", text=text, streaming=streaming)
+
+
+class ItemsClient:
+    """Fake T3 client: replays one projection per poll (last one repeats)."""
+
+    def __init__(self, snapshots):
+        self.snapshots, self.polls = snapshots, 0
+
+    async def shell(self):
+        return {"projects": [{"id": "p", "title": "No project"}]}
+
+    async def launch_thread(self, **kw):
+        return {"threadId": "t-1"}
+
+    async def thread_projection(self, thread_id):
+        snap = self.snapshots[min(self.polls, len(self.snapshots) - 1)]
+        self.polls += 1
+        return snap
+
+
+def _snap(run, items, text=""):
+    msgs = [{"id": "m1", "role": "assistant", "runId": "r1", "text": text}] if text else []
+    return {"runs": [run], "messages": msgs, "turnItems": items}
+
+
+async def _run(snapshots):
+    svc = T3LLMService(poll_interval=0)
+    svc._client = ItemsClient(snapshots)  # type: ignore[assignment]
+    frames = await _collect(svc)
+    await svc._run_turn("hi")
+    return frames
+
+
+def _agg(frames):
+    return [(f.aggregated_by, f.text) for f in frames if isinstance(f, AggregatedTextFrame)]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_and_command_become_thinking_and_tool_start_before_reply():
+    frames = await _run([
+        _snap(_R1, [_USER, _PREP, _reason("Plan it.")]),
+        _snap(_R1, [_USER, _PREP, _reason("Plan it."), _CMD]),
+        _snap(_R1_DONE, [_USER, _PREP, _reason("Plan it."), _CMD], "done"),
+    ])
+    assert _agg(frames) == [
+        ("thinking", "Plan it."), ("tool_start", "▶ echo done"), ("tool_end", "✓ echo done"),
+    ]  # prep skipped, no repeats
+    assert [type(f) for f in frames] == [
+        LLMFullResponseStartFrame, AggregatedTextFrame, AggregatedTextFrame, AggregatedTextFrame, TextFrame,
+        LLMFullResponseEndFrame,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_sends_only_new_chars_and_resends_when_rewritten():
+    frames = await _run([
+        _snap(_R1, [_reason("Let me", True)]),
+        _snap(_R1, [_reason("Let me think", True)]),
+        _snap(_R1, [_reason("Rewritten entirely", True)]),
+        _snap(_R1_DONE, [_reason("Rewritten entirely")], "ok"),
+    ])
+    assert _agg(frames) == [("thinking", "Let me"), ("thinking", " think"), ("thinking", "Rewritten entirely")]
+
+
+@pytest.mark.asyncio
+async def test_long_command_truncated_and_no_items_means_plain_reply():
+    long = _item("command_execution", 3, "i-l", title="Ran command", input="x" * 100)
+    frames = await _run([_snap(_R1_DONE, [long], "hi")])
+    assert _agg(frames) == [("tool_start", "▶ " + "x" * 60), ("tool_end", "✓ " + "x" * 60)]
+    frames = await _run([_snap(_R1_DONE, [], "hi")])  # low effort / old server: no turnItems
+    assert [type(f) for f in frames] == [LLMFullResponseStartFrame, TextFrame, LLMFullResponseEndFrame]
+    snap = _snap(_R1_DONE, [], "hi")
+    del snap["turnItems"]  # key absent entirely: messages fallback still works
+    assert "".join(f.text for f in await _run([snap]) if isinstance(f, TextFrame)) == "hi"
+
+
+@pytest.mark.asyncio
+async def test_first_thinking_item_stops_the_working_cue(monkeypatch):
+    monkeypatch.setattr("talky.backends.t3.CUE_DELAY", 0.05)
+    monkeypatch.setattr("talky.backends.t3.CUE_EVERY", 0.05)
+
+    class Slow(ItemsClient):
+        async def thread_projection(self, thread_id):
+            await asyncio.sleep(0.12 if self.polls == 0 else 0)
+            return await super().thread_projection(thread_id)
+
+    svc = T3LLMService(poll_interval=0)
+    svc._client = Slow([_snap(_R1, [_reason("hm")]), _snap(_R1_DONE, [_reason("hm")], "ok")])  # type: ignore[assignment]
+    frames = await _collect(svc)
+    await svc._run_turn("hi")
+    await asyncio.sleep(0.2)
+    kinds = [a for a, _ in _agg(frames)]
+    assert kinds[0] == "info" and "thinking" in kinds
+    assert kinds.index("thinking") == kinds.index("info") + 1 or "info" not in kinds[kinds.index("thinking"):]
+
+
+@pytest.mark.asyncio
+async def test_tts_does_not_speak_thinking_or_tool_start_frames():
+    """Real pipecat TTSService with the skip list the daemon uses: T3's frames pass through unspoken."""
+    from pipecat.services.tts_service import TTSService
+
+    src = (Path(__file__).parent.parent / "src/talky/server/voice_switcher.py").read_text()
+    skip = re.search(r"skip_aggregator_types=(\[[^\]]*\])", src).group(1)  # the list create_tts_service_from_config gets
+    skip = eval(skip)  # noqa: S307 — literal list from our own source
+
+    spoken: list[str] = []
+
+    class Tts(TTSService):
+        async def run_tts(self, text, context_id):  # noqa: ANN001
+            spoken.append(text)
+            if False:
+                yield
+
+    tts = Tts(skip_aggregator_types=skip)
+    pushed: list = []
+
+    async def push(frame, direction=None):
+        pushed.append(frame)
+
+    tts.push_frame = push  # type: ignore[method-assign]
+    frames = await _run([_snap(_R1, [_reason("Plan it."), _CMD]), _snap(_R1_DONE, [_reason("Plan it."), _CMD], "ok")])
+    for f in frames:
+        if isinstance(f, AggregatedTextFrame):
+            await tts._push_tts_frames(f)
+    assert spoken == [] and len(pushed) == 3
