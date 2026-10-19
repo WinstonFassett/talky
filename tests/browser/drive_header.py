@@ -92,7 +92,7 @@ def main() -> int:
         panel = page.get_by_test_id("chip-sheet" if a.mobile else "chip-popover")
         panel.wait_for(timeout=10000)
         page.wait_for_timeout(600)
-        check(page.get_by_test_id("profile-backend").is_visible(), "backend shown in the profile panel")
+        check(page.get_by_test_id("profile-summary").first.is_visible(), "backend shown in the profile panel")
         check(page.get_by_test_id("profile-voice").is_visible(), "voice shown in the profile panel")
         shot("profile-open")
         other = page.locator('[data-testid=profile-option]:not([aria-selected=true]):not([disabled])').first

@@ -26,13 +26,23 @@ function Detail({ name, value, testId }: { name: string; value: string; testId: 
   );
 }
 
-function ProfilePanel({ onDone }: { onDone: () => void }) {
+const ready = (st: { status: string; reason: string } | undefined, what?: string) =>
+  `${what ?? ''} ${st ? (st.status === 'ready' ? '✓ ready' : `✗ ${st.reason || st.status}`) : ''}`.trim();
+
+function ProfilePanel({ onDone, linkLabel }: { onDone: () => void; linkLabel?: string | null }) {
   const { profiles, current, switching, error, switchTo } = useLLMProfiles();
   const { voices, activeVoice } = useVoiceProfiles();
   const voice = voices.find((v) => v.name === activeVoice) ?? voices[0];
   return (
     <div data-testid="profile-panel" className="flex flex-col gap-3">
-      <div className="flex flex-col gap-0.5" role="listbox" aria-label="Profile">
+      {voice && (
+        <div className="border-b pb-2" style={{ borderColor: 'var(--color-border-soft)' }} data-testid="profile-voice-block">
+          <Detail name="Voice" value={voice.description || voice.name} testId="profile-voice" />
+          <Detail name="STT" value={ready(voice.sttStatus, voice.stt)} testId="profile-stt" />
+          <Detail name="TTS" value={ready(voice.ttsStatus, voice.tts)} testId="profile-tts" />
+        </div>
+      )}
+      <div className="flex max-h-[50vh] flex-col gap-0.5 overflow-y-auto" role="listbox" aria-label="Talky profile">
         {profiles.map((p) => {
           const selected = p.name === current?.name;
           const unhealthy = p.healthy === false;
@@ -56,13 +66,11 @@ function ProfilePanel({ onDone }: { onDone: () => void }) {
                 className="inline-block size-1.5 shrink-0 rounded-full"
                 style={{ backgroundColor: unhealthy ? 'var(--color-warning)' : p.healthy === null ? 'var(--color-text-mute)' : 'var(--color-success)' }}
               />
-              <span className="min-w-0 flex-1 truncate">
-                {profileTitle(p)}
-                {profileTitle(p) !== p.name && (
-                  <span className="ml-2 font-mono text-[11px]" style={{ color: 'var(--color-text-mute)' }}>
-                    {p.name}
-                  </span>
-                )}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{profileTitle(p)}</span>
+                <span data-testid="profile-summary" className="block truncate font-mono text-[11px]" style={{ color: 'var(--color-text-mute)' }}>
+                  {[p.backend, p.model].filter(Boolean).join(' · ') || p.description}
+                </span>
               </span>
               {selected && <CheckIcon size={13} style={{ color: 'var(--color-accent)' }} />}
             </button>
@@ -74,26 +82,31 @@ function ProfilePanel({ onDone }: { onDone: () => void }) {
           {error}
         </div>
       )}
-      {current && (
-        <div className="border-t pt-2" style={{ borderColor: 'var(--color-border-soft)' }} data-testid="profile-details">
-          <Detail name="Backend" value={current.backend || current.name} testId="profile-backend" />
-          {current.model && <Detail name="Model" value={current.model} testId="profile-model" />}
-          {voice && <Detail name="Voice" value={voice.description || voice.name} testId="profile-voice" />}
+      {linkLabel && (
+        <div className="text-[11px]" data-testid="profile-link-note" style={{ color: 'var(--color-text-mute)' }}>
+          This chat is linked to {linkLabel}. Switching profile does not re-link it.
         </div>
       )}
     </div>
   );
 }
 
-function ProfileChip({ isNarrow }: { isNarrow: boolean }) {
+function ProfileChip({ isNarrow, linkLabel }: { isNarrow: boolean; linkLabel?: string | null }) {
   const [open, setOpen] = useState(false);
   const { current } = useLLMProfiles();
+  const { voices, activeVoice } = useVoiceProfiles();
+  const voice = voices.find((v) => v.name === activeVoice) ?? voices[0];
   if (!current) return null;
   const trigger: ReactNode = (
-    <PickerTrigger variant="chip" open={open} data-testid="chip-profile" title={`Profile: ${profileTitle(current)}`} className="shrink min-w-0">
+    <PickerTrigger variant="chip" open={open} data-testid="chip-profile" title={`Talky profile: ${profileTitle(current)}`} className="shrink min-w-0">
       <span className="truncate" data-testid="chip-profile-label">
         {profileTitle(current)}
       </span>
+      {voice && (
+        <span className="truncate font-normal" data-testid="chip-voice" style={{ color: 'var(--color-text-mute)' }}>
+          · {voice.description || voice.name}
+        </span>
+      )}
       <ChevronDownIcon size={11} style={{ color: 'var(--color-text-mute)' }} className="shrink-0" />
     </PickerTrigger>
   );
@@ -102,7 +115,7 @@ function ProfileChip({ isNarrow }: { isNarrow: boolean }) {
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>{trigger}</PopoverTrigger>
         <PopoverContent align="start" className="w-80 p-2" data-testid="chip-popover">
-          <ProfilePanel onDone={() => setOpen(false)} />
+          <ProfilePanel onDone={() => setOpen(false)} linkLabel={linkLabel} />
         </PopoverContent>
       </Popover>
     );
@@ -122,11 +135,11 @@ function ProfileChip({ isNarrow }: { isNarrow: boolean }) {
             className="px-5 pb-3 font-mono uppercase shrink-0"
             style={{ ...label, fontSize: 11, borderBottom: '1px solid var(--color-border-soft)' }}
           >
-            Profile
+            Talky profile
           </Drawer.Title>
           <Drawer.Description className="sr-only">Switch profile; shows its backend, model and voice.</Drawer.Description>
           <div className="overflow-y-auto overscroll-contain px-3 py-3" style={{ paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom))' }}>
-            <ProfilePanel onDone={() => setOpen(false)} />
+            <ProfilePanel onDone={() => setOpen(false)} linkLabel={linkLabel} />
           </div>
         </Drawer.Content>
       </Drawer.Portal>
@@ -147,7 +160,7 @@ export const HeaderChips = ({
     className="flex items-center gap-1.5 shrink-0 px-2 h-8 border-b"
     style={{ borderColor: 'var(--color-border-soft)', backgroundColor: 'var(--color-card)' }}
   >
-    <ProfileChip isNarrow={isNarrow} />
+    <ProfileChip isNarrow={isNarrow} linkLabel={linkLabel} />
     {linkLabel && (
       <span
         data-testid="chip-link"

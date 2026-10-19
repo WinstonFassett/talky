@@ -172,7 +172,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       }
       setQueued({ text: value, fromDraft });
       if (call.state === 'disconnected') {
-        void call.connect({ muted: true }).then((ok) => {
+        void call.connect().then((ok) => {
           if (!ok) {
             setQueued(null);
             setError(NOT_CONNECTED);
