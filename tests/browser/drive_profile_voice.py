@@ -77,7 +77,8 @@ def main() -> int:
         if a.phase == "post":
             page.wait_for_timeout(2000)
             check(active_llm() == "echo-kokoro", f"after daemon restart, active profile == echo-kokoro (got {active_llm()})")
-            check("echo-kokoro" in page.get_by_test_id("chip-profile-label").inner_text(), "chip label shows echo-kokoro")
+            lbl = page.get_by_test_id("chip-profile-label").inner_text().strip()
+            check("Kokoro Heart" in lbl and "UK" not in lbl, f"chip label shows the echo-kokoro profile (backend + Kokoro Heart): {lbl!r}")
             check(active_voice() == "kokoro-heart", f"after restart, its voice is active (got {active_voice()})")
             open_panel(); shot("after-restart-panel")
             page.keyboard.press("Escape"); page.wait_for_timeout(400)
