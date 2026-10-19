@@ -40,7 +40,7 @@ type CallValue = {
   disconnect: () => void;
   /** After giving up: try again now. */
   retry: () => void;
-  /** Why the mic can't be heard, or null. `silent`: connected but no audio for >5 s. */
+  /** Why the mic couldn't be opened at connect time, or null. */
   micIssue: MicIssue | null;
   /** Ask for the mic again (re-prompts if the browser allows) and re-enable it. */
   retryMic: () => Promise<void>;
@@ -48,10 +48,8 @@ type CallValue = {
   dropReason: string | null;
 };
 
-export type MicIssue = { kind: 'blocked' | 'nodevice' | 'silent' | 'ended'; label: string };
+export type MicIssue = { kind: 'blocked' | 'nodevice'; label: string };
 
-const SILENT_AFTER_MS = 5000;
-const LOUD = 0.002;
 
 const noMicPlugged = () =>
   navigator.mediaDevices
@@ -270,46 +268,6 @@ export function CallProvider({
       client.off('botDisconnected', onBotGone);
     };
   }, [client]);
-
-  // Connected with an open mic, but no sound for 5 s, or the track ended/muted.
-  useEffect(() => {
-    if (transportState !== 'ready') return;
-    const track = client.tracks()?.local?.audio;
-    if (!track) return;
-    const label = track.label || 'Default mic';
-    const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    const ctx = new AC();
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 1024;
-    ctx.createMediaStreamSource(new MediaStream([track])).connect(analyser);
-    const buf = new Float32Array(analyser.fftSize);
-    let lastLoud = Date.now();
-    const tick = () => {
-      if (track.readyState === 'ended') {
-        setMicIssue({ kind: 'ended', label });
-        return;
-      }
-      if (!client.isMicEnabled) {
-        lastLoud = Date.now();
-        setMicIssue((m) => (m?.kind === 'silent' ? null : m));
-        return;
-      }
-      analyser.getFloatTimeDomainData(buf);
-      let peak = 0;
-      for (const v of buf) peak = Math.max(peak, Math.abs(v));
-      if (peak > LOUD && !track.muted) {
-        lastLoud = Date.now();
-        setMicIssue((m) => (m?.kind === 'silent' || m?.kind === 'ended' ? null : m));
-      } else if (Date.now() - lastLoud > SILENT_AFTER_MS) {
-        setMicIssue((m) => (m?.kind === 'silent' ? m : { kind: 'silent', label }));
-      }
-    };
-    const id = setInterval(tick, 250);
-    return () => {
-      clearInterval(id);
-      void ctx.close().catch(() => {});
-    };
-  }, [transportState, client]);
 
   const retryMic = useCallback(async () => {
     try {

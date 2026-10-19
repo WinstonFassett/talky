@@ -98,7 +98,7 @@ function ConnectionBanner() {
 }
 
 // Mic trouble and why a call ended, under the header. Blocked/no-device show
-// Retry; a call that connected but hears nothing names the selected device.
+// Retry.
 function MicBanner() {
   const call = useCall();
   const { micIssue: m, dropReason } = call;
@@ -109,12 +109,7 @@ function MicBanner() {
     text =
       m.kind === 'blocked'
         ? 'Microphone blocked — allow it for this site, then retry.'
-        : m.kind === 'nodevice'
-          ? 'No microphone found — plug one in, then retry.'
-          : m.kind === 'ended'
-            ? `Microphone disconnected${m.label ? `: ${m.label}` : ''}. Retry to pick it up again.`
-            : `No mic audio detected${m.label ? ` from ${m.label}` : ''}.`;
-    if (m.kind === 'silent') retry = false;
+        : 'No microphone found — plug one in, then retry.';
   } else if (dropReason && (call.state === 'disconnected' || call.state === 'offline')) {
     text = `Call ended: ${dropReason}`;
   }
