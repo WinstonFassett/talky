@@ -59,9 +59,10 @@ MCP uses a tool-based protocol pattern:
 
 ### MCP Server Setup
 ```bash
-uv tool install --editable --from "talky[claude-code] @ $PWD" talky --python 3.12 --force
+uv tool install --editable --from "talky[<extras you use>] @ $PWD" talky --python 3.12 --force
 talky daemon  # runs on localhost:8765 (local HTTP listener)
 ```
+Add the extras you use in brackets, comma-separated; a reinstall replaces the whole set; plain `--editable .` drops extras.
 
 See [docs/ports.md](../ports.md) for the canonical port model (the local HTTP listener is always bound at `8765`; HTTPS is additive for remote reach).
 

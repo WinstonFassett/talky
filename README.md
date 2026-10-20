@@ -36,12 +36,14 @@ Voice interface for AI. Talk to Moltis, Hermes or Pi. Or use MCP to talk to Clau
 **Requirements**: Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/)
 
 ```bash
-uv tool install talky                 # from PyPI, or from source: uv tool install --editable --from "talky[claude-code] @ $PWD" talky --python 3.12
+uv tool install talky                 # from PyPI, or from source: uv tool install --editable --from "talky[<extras you use>] @ $PWD" talky --python 3.12
 talky claude                    # Talk to Claude
 talky moltis                      # Talk to Moltis  
 talky hermes                      # Talk to Hermes (NousResearch)
 talky pi                          # Talk to Pi
 ```
+
+From source, add the extras you use in brackets, comma-separated; a reinstall replaces the whole set; plain `--editable .` drops extras.
 
 > **CLI local audio (optional):** `talky say` / `talky ask` use a separate
 > local-audio daemon that needs PortAudio system-side. Install it only if
