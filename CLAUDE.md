@@ -3,7 +3,7 @@
 ## Commands
 
 ```bash
-uv tool install --editable . --python 3.12   # install/update global `talky` binary
+uv tool install --editable --from "talky[claude-code] @ $PWD" talky --python 3.12 --force   # install/update global `talky` binary (run from the checkout; list every extra you use)
 uv sync                                      # sync project venv (dev + after dep changes)
 talky daemon                          # ensure the daemon is running (local_port 8765 + optional remote — see docs/ports.md)
 talky <profile>                       # e.g. `talky claude` — ensures daemon and switches its active LLM
@@ -28,7 +28,7 @@ open desktop/zero-native/zig-out/package/talky-shell-0.1.0-macos-Debug.app
 zero-native requires: Zig 0.16+, `zero-native` CLI (`npm install -g zero-native`).
 `desktop/zero-native/vendor/zero-native` tracks `talky-integration` branch (mic permission, setSinkId shim).
 
-After changing pyproject.toml deps: `uv sync && uv tool install --editable . --force --python 3.12`. Both venvs must stay in sync — the tool venv resolves independently from pyproject.toml, not from the lockfile. Pin critical deps with `==`.
+After changing pyproject.toml deps: `uv sync && uv tool install --editable --from "talky[claude-code] @ $PWD" talky --python 3.12 --force`. Extras go in brackets as a comma list (e.g. `talky[claude-code,opencode]`); a reinstall REPLACES the whole set, so list every extra you use. Plain `uv tool install --editable .` drops extras, and `--editable "<path>[extra]"` fails with a PEP 508 error; the `--from "talky[...] @ <path>"` form persists extras across `--force`, `--reinstall`, and `uv tool upgrade`. Both venvs must stay in sync — the tool venv resolves independently from pyproject.toml, not from the lockfile. Pin critical deps with `==`.
 
 ## Architecture
 

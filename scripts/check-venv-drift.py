@@ -4,7 +4,7 @@ tool venv and the project `.venv`.
 
 Why this exists: pyproject.toml dep changes only take effect in the
 project venv after `uv sync`, and only take effect in the global tool
-venv after `uv tool install --editable . --force --python 3.12`. The
+venv after `uv tool install --editable --from "talky[<extras you use>] @ $PWD" talky --python 3.12 --force`. The
 two resolve independently. If they drift, you can hit subtle bugs
 where `talky <cmd>` (tool venv) behaves differently from `uv run talky
 <cmd>` (project venv). CLAUDE.md documents this; this script catches
@@ -80,7 +80,7 @@ def main() -> int:
     missing = []
     if not tool_venv.is_dir():
         missing.append(
-            f"tool venv missing — run: uv tool install --editable . --python 3.12 (looked at {tool_venv})"
+            f"tool venv missing — run: uv tool install --editable --from \"talky[<extras you use>] @ $PWD\" talky --python 3.12 (looked at {tool_venv})"
         )
     if not project_venv.is_dir():
         missing.append(f"project venv missing — run: uv sync (looked at {project_venv})")
@@ -152,10 +152,10 @@ def main() -> int:
             print("CRITICAL DRIFT — at least one core dep differs across venvs.")
             print("Fix:")
             print("  uv sync")
-            print("  uv tool install --editable . --force --python 3.12")
+            print("  uv tool install --editable --from \"talky[<extras you use>] @ $PWD\" talky --python 3.12 --force")
         elif mismatches:
             print("Non-critical drift. To align:")
-            print("  uv sync && uv tool install --editable . --force --python 3.12")
+            print("  uv sync && uv tool install --editable --from \"talky[<extras you use>] @ $PWD\" talky --python 3.12 --force")
 
     return 1 if mismatches else 0
 
