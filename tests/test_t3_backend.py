@@ -387,3 +387,128 @@ async def test_tts_does_not_speak_thinking_or_tool_start_frames():
         if isinstance(f, AggregatedTextFrame):
             await tts._push_tts_frames(f)
     assert spoken == [] and len(pushed) == 3
+
+
+# --- WIN-605: the thread watcher speaks runs Talky did not start (timer/task wakeups, T3-app typing) ---
+
+
+class WatchClient:
+    """Fake T3 client: ``subscribe_thread`` yields whatever the test pushes; the projection is set by the test."""
+
+    def __init__(self, projection):
+        self.projection = projection
+        self.pushes: asyncio.Queue = asyncio.Queue()
+        self.interrupted = 0
+        self.sent: list[str] = []
+
+    async def subscribe_thread(self, thread_id):
+        yield {"kind": "snapshot", "projection": self.projection}
+        while True:
+            yield await self.pushes.get()
+
+    async def thread_projection(self, thread_id):
+        return self.projection
+
+    async def send_message(self, thread_id, text):
+        self.sent.append(text)
+
+    async def interrupt(self, thread_id):
+        self.interrupted += 1
+
+    async def close(self):
+        pass
+
+
+def _proj(*runs):
+    """runs: (run id, status, assistant text)."""
+    return {
+        "runs": [{"id": r, "status": st} for r, st, _ in runs],
+        "messages": [{"id": f"m-{r}", "role": "assistant", "runId": r, "text": t} for r, _, t in runs if t],
+    }
+
+
+async def _watching(projection):
+    svc = T3LLMService(poll_interval=0, resume="t-voice")
+    client = WatchClient(projection)
+    svc._client = client  # type: ignore[assignment]
+    frames = await _collect(svc)
+    svc._watch_enabled = True
+    svc._ensure_watch()
+    await asyncio.sleep(0.25)  # first snapshot → baseline
+    return svc, client, frames
+
+
+async def _push(client, projection):
+    client.projection = projection
+    await client.pushes.put({"kind": "event", "sequence": 1, "event": {}})
+    await asyncio.sleep(0.25)
+
+
+def _texts(frames):
+    return "".join(f.text for f in frames if isinstance(f, TextFrame))
+
+
+@pytest.mark.asyncio
+async def test_watcher_speaks_a_wakeup_run_in_full_and_not_history():
+    svc, client, frames = await _watching(_proj(("r67", "completed", "old reply")))
+    assert frames == []  # history is not spoken on attach
+    await _push(client, _proj(("r67", "completed", "old reply"), ("r68", "running", "The scan")))
+    await _push(client, _proj(("r67", "completed", "old reply"), ("r68", "completed", "The scan finished.")))
+    assert _texts(frames) == "The scan finished."
+    assert [type(f) for f in frames] == [LLMFullResponseStartFrame, TextFrame, TextFrame, LLMFullResponseEndFrame]
+    await _push(client, _proj(("r67", "completed", "old reply"), ("r68", "completed", "The scan finished.")))
+    assert len(frames) == 4  # nothing spoken twice
+    svc._stop_watch()
+
+
+@pytest.mark.asyncio
+async def test_watcher_speaks_only_new_text_of_a_run_already_underway_at_attach():
+    svc, client, frames = await _watching(_proj(("r1", "running", "Already said. ")))
+    await _push(client, _proj(("r1", "completed", "Already said. And more.")))
+    assert _texts(frames) == "And more."
+    svc._stop_watch()
+
+
+@pytest.mark.asyncio
+async def test_barge_in_on_a_watcher_reply_mutes_it_without_interrupting_t3():
+    from pipecat.frames.frames import InterruptionFrame
+
+    svc, client, frames = await _watching(_proj())
+    await _push(client, _proj(("r2", "running", "Long report part one")))
+    await svc.process_frame(InterruptionFrame(), None)  # type: ignore[arg-type]
+    await _push(client, _proj(("r2", "completed", "Long report part one, part two")))
+    assert client.interrupted == 0  # T3's run is not Talky's to stop
+    assert _texts(frames) == "Long report part one"
+    assert isinstance([f for f in frames if not isinstance(f, InterruptionFrame)][-1], LLMFullResponseEndFrame)
+    svc._stop_watch()
+
+
+@pytest.mark.asyncio
+async def test_watcher_defers_to_a_running_turn_and_never_double_speaks():
+    svc, client, frames = await _watching(_proj(("r1", "completed", "hi")))
+    gate = asyncio.Event()
+    real = client.thread_projection
+    turn_polls = 0
+
+    async def gated(thread_id):
+        nonlocal turn_polls
+        if svc._turn_running():
+            turn_polls += 1
+            if turn_polls == 2:
+                client.projection = _proj(("r1", "completed", "hi"), ("r2", "running", "Ans"))
+                await client.pushes.put({"kind": "event"})  # the watcher sees it too, but must wait
+                await asyncio.sleep(0.2)
+            if turn_polls == 3:
+                client.projection = _proj(("r1", "completed", "hi"), ("r2", "completed", "Answer."))
+                gate.set()
+        return await real(thread_id)
+
+    client.thread_projection = gated  # type: ignore[method-assign]
+    await svc.process_frame(UserTurnTextFrame(text="question"), None)  # type: ignore[arg-type]
+    await gate.wait()
+    while svc._turn_running():
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.3)
+    assert _texts(frames) == "Answer."
+    assert sum(isinstance(f, LLMFullResponseStartFrame) for f in frames) == 1
+    svc._stop_watch()

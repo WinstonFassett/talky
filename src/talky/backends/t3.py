@@ -23,9 +23,18 @@ Auth
 ``token_file`` may point at the JSON that command printed instead. The token is never
 logged. Revoke the session when done (``t3 auth session revoke <id>``).
 
+Thread watcher (WIN-605)
+------------------------
+A turn only reads the runs it caused. Runs nobody asked for out loud — a timer or background-task
+wakeup, a message typed in T3's own app — are read by the thread watcher: while a thread is bound it
+holds ``orchestration.subscribeThread`` open (the stream T3's app uses), and on every push re-reads the
+projection and speaks any run no turn is reading, in full. Turns and the watcher share the "already sent"
+state, so a run is never spoken twice, and a turn that runs out of time is finished by the watcher.
+
 Interrupt
 ---------
-``InterruptionFrame`` sends ``run.interrupt`` for the thread's active run.
+``InterruptionFrame`` during a turn sends ``run.interrupt`` for the thread's active run. During a
+watcher reply it only stops the speech: T3's run was not started by Talky, so it is left alone.
 """
 
 import asyncio
@@ -141,9 +150,23 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         self._client: Optional[T3Client] = None
         self._turn_task: Optional[asyncio.Task] = None
         self._queued: deque[str] = deque()  # turns spoken while one is running (WIN-564)
+        # Reply state shared by turns and the thread watcher (WIN-605): what was already sent per item.
+        self._emitted: dict[str, int] = {}  # message id -> chars already sent
+        self._thought: dict[str, str] = {}  # reasoning item id -> text already sent
+        self._ran: set[str] = set()  # command_execution item ids already announced
+        self._ended: set[str] = set()  # ... and already closed with tool_end
+        self._handled: set[str] = set()  # run ids fully read (or muted by a barge-in)
+        self._watch_enabled = False  # set by start(): the watcher lives with a started service
+        self._watch_task: Optional[asyncio.Task] = None
+        self._watch_dirty = asyncio.Event()
+        self._watch_open: set[str] = set()  # runs the watcher is speaking right now (response open)
 
     def set_resume(self, thread_id: Optional[str]) -> None:
+        if thread_id != self._thread_id:
+            self._stop_watch()
+            self._handled.clear()
         self._thread_id = thread_id
+        self._ensure_watch()
 
     @property
     def _session_id(self) -> Optional[str]:
@@ -164,6 +187,8 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
             logger.warning(f"T3LLMService: no token at start ({e.code}); will retry on the first turn")
             self._client = T3Client(self._base_url, "")
         logger.info(f"T3LLMService started — base_url={self._base_url} thread={self._thread_id}")
+        self._watch_enabled = True
+        self._ensure_watch()
 
     async def stop(self, frame: EndFrame):
         await super().stop(frame)
@@ -174,6 +199,8 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         await self._shutdown()
 
     async def _shutdown(self):
+        self._watch_enabled = False
+        self._stop_watch()
         self._queued.clear()
         if self._turn_task:
             self._turn_task.cancel()
@@ -219,63 +246,33 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
                 known_runs: set[str] = set()
             else:
                 before = await c.thread_projection(self._thread_id)
-                known_runs = {r["id"] for r in before["runs"]}
+                # Skip runs already read; an unfinished one nobody read yet (a wakeup reply) is read here too.
+                known_runs = self._handled | {r["id"] for r in before["runs"] if r["status"] in _TERMINAL}
                 await c.send_message(self._thread_id, text)
 
-            emitted: dict[str, int] = {}  # message id -> chars already sent
-            thought: dict[str, str] = {}  # reasoning item id -> text already sent
-            ran: set[str] = set()  # command_execution item ids already announced
-            ended: set[str] = set()  # ... and already closed with tool_end
+            async def open_response() -> None:
+                nonlocal started
+                if not started:
+                    started = True
+                    await self.push_frame(LLMFullResponseStartFrame())
+
             loop = asyncio.get_running_loop()
             deadline = loop.time() + self._run_timeout
+            run_ids: set[str] = set()
             while loop.time() < deadline:
                 await asyncio.sleep(self._poll)
                 p = await c.thread_projection(self._thread_id)
                 runs = [r for r in p["runs"] if r["id"] not in known_runs]
                 run_ids = {r["id"] for r in runs}
-                items = sorted(
-                    (i for i in p.get("turnItems") or [] if i.get("runId") in run_ids),
-                    key=lambda i: i.get("ordinal", 0),
-                )
-                for it in items:
-                    out: list[AggregatedTextFrame] = []
-                    if it.get("type") == "reasoning":
-                        text, prev = it.get("text") or "", thought.get(it["id"], "")
-                        if text and text != prev:
-                            thought[it["id"]] = text
-                            out.append(AggregatedTextFrame(
-                                text=text[len(prev):] if text.startswith(prev) else text, aggregated_by="thinking"
-                            ))
-                    elif it.get("type") == "command_execution" and it.get("title") != "Workspace ready" and it.get("input"):
-                        cmd = it["input"][:60]
-                        if it["id"] not in ran:
-                            ran.add(it["id"])
-                            out.append(AggregatedTextFrame(text=f"▶ {cmd}", aggregated_by="tool_start"))
-                        if it["id"] not in ended and it.get("status") in ("completed", "failed"):
-                            ended.add(it["id"])
-                            mark = "✗" if it["status"] == "failed" else "✓"
-                            out.append(AggregatedTextFrame(text=f"{mark} {cmd}", aggregated_by="tool_end"))
-                    for frame in out:
-                        if not started:
-                            started = True
-                            await self.push_frame(LLMFullResponseStartFrame())
-                        await self.push_frame(frame)
-                for m in p["messages"]:
-                    if m["role"] != "assistant" or m.get("runId") not in run_ids:
-                        continue
-                    sent = emitted.get(m["id"], 0)
-                    if len(m["text"]) > sent:
-                        if not started:
-                            started = True
-                            await self.push_frame(LLMFullResponseStartFrame())
-                        await self.push_frame(TextFrame(m["text"][sent:]))
-                        emitted[m["id"]] = len(m["text"])
+                await self._emit_runs(p, run_ids, open_response)
                 if runs and all(r["status"] in _TERMINAL for r in runs):
+                    self._handled |= run_ids
                     if any(r["status"] == "failed" for r in runs):
                         await self._emit_backend_error("T3 run failed")
                     break
             else:
-                await self._emit_backend_error("T3 run timed out")
+                # Not an error any more (WIN-605): the thread watcher keeps reading the run from where this stopped.
+                logger.info(f"t3: turn stopped reading after {self._run_timeout:.0f}s; the thread watcher continues")
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -285,6 +282,152 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
             cue.cancel()
             if started:
                 await self.push_frame(LLMFullResponseEndFrame())
+
+    async def _emit_runs(self, p: dict, run_ids: set[str], open_response) -> None:  # noqa: ANN001
+        """Push what is new in ``run_ids`` since the last read: thinking, commands, then reply text."""
+        items = sorted(
+            (i for i in p.get("turnItems") or [] if i.get("runId") in run_ids),
+            key=lambda i: i.get("ordinal", 0),
+        )
+        for it in items:
+            out: list[AggregatedTextFrame] = []
+            if it.get("type") == "reasoning":
+                text, prev = it.get("text") or "", self._thought.get(it["id"], "")
+                if text and text != prev:
+                    self._thought[it["id"]] = text
+                    out.append(AggregatedTextFrame(
+                        text=text[len(prev):] if text.startswith(prev) else text, aggregated_by="thinking"
+                    ))
+            elif it.get("type") == "command_execution" and it.get("title") != "Workspace ready" and it.get("input"):
+                cmd = it["input"][:60]
+                if it["id"] not in self._ran:
+                    self._ran.add(it["id"])
+                    out.append(AggregatedTextFrame(text=f"▶ {cmd}", aggregated_by="tool_start"))
+                if it["id"] not in self._ended and it.get("status") in ("completed", "failed"):
+                    self._ended.add(it["id"])
+                    mark = "✗" if it["status"] == "failed" else "✓"
+                    out.append(AggregatedTextFrame(text=f"{mark} {cmd}", aggregated_by="tool_end"))
+            for frame in out:
+                await open_response()
+                await self.push_frame(frame)
+        for m in p["messages"]:
+            if m["role"] != "assistant" or m.get("runId") not in run_ids:
+                continue
+            sent = self._emitted.get(m["id"], 0)
+            if len(m["text"]) > sent:
+                await open_response()
+                await self.push_frame(TextFrame(m["text"][sent:]))
+                self._emitted[m["id"]] = len(m["text"])
+
+    # --- Thread watcher (WIN-605) ---
+
+    def _turn_running(self) -> bool:
+        return self._turn_task is not None and not self._turn_task.done()
+
+    def _ensure_watch(self) -> None:
+        if not self._watch_enabled or not self._thread_id or not self._client:
+            return
+        if self._watch_task and not self._watch_task.done():
+            return
+        self._watch_task = asyncio.create_task(self._watch(self._thread_id))
+
+    def _stop_watch(self) -> None:
+        if self._watch_task:
+            self._watch_task.cancel()
+            self._watch_task = None
+        self._watch_open.clear()
+
+    async def _watch(self, thread_id: str) -> None:
+        """Hold T3's thread subscription open and speak runs no turn is reading; resubscribe on drops."""
+        consumer = asyncio.create_task(self._watch_consume(thread_id))
+        try:
+            while self._thread_id == thread_id:
+                try:
+                    assert self._client is not None
+                    async for item in self._client.subscribe_thread(thread_id):
+                        if item.get("kind") in ("snapshot", "event"):
+                            self._watch_dirty.set()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 — socket drop, expired token, T3 restarting
+                    logger.warning(f"t3 watcher: subscription ended ({e}); resubscribing")
+                await asyncio.sleep(2.0)
+                try:
+                    assert self._client is not None
+                    self._client._token = await asyncio.to_thread(self._load_token)  # noqa: SLF001
+                except Exception:  # noqa: BLE001 — retried on the next loop
+                    pass
+        finally:
+            consumer.cancel()
+
+    async def _watch_consume(self, thread_id: str) -> None:
+        """Coalesce pushes: re-read the projection once per burst of changes."""
+        first = True
+        while True:
+            await self._watch_dirty.wait()
+            await asyncio.sleep(0.1)
+            self._watch_dirty.clear()
+            if self._turn_running():
+                continue  # the turn reads every new run itself; re-checked when it finishes
+            try:
+                assert self._client is not None
+                p = await self._client.thread_projection(thread_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"t3 watcher: projection read failed: {e}")
+                continue
+            if self._turn_running():
+                continue
+            if first:
+                self._baseline(p)
+                first = False
+            await self._watch_step(p)
+
+    def _baseline(self, p: dict) -> None:
+        """On attach: finished runs are history (not spoken); a run already underway is spoken from here on."""
+        for r in p["runs"]:
+            if r["status"] in _TERMINAL:
+                self._handled.add(r["id"])
+        for m in p["messages"]:
+            if m.get("runId") not in self._handled:
+                self._emitted.setdefault(m["id"], len(m.get("text") or ""))
+        for it in p.get("turnItems") or []:
+            if it.get("runId") not in self._handled:
+                if it.get("type") == "reasoning":
+                    self._thought.setdefault(it["id"], it.get("text") or "")
+                elif it.get("type") == "command_execution":
+                    self._ran.add(it["id"])
+                    if it.get("status") in ("completed", "failed"):
+                        self._ended.add(it["id"])
+
+    async def _watch_step(self, p: dict) -> None:
+        runs = [r for r in p["runs"] if r["id"] not in self._handled]
+        if not runs:
+            return
+        run_ids = {r["id"] for r in runs}
+
+        async def open_response() -> None:
+            if not self._watch_open:
+                logger.info(f"t3 watcher: speaking {len(run_ids)} run(s) Talky did not start")
+                await self.push_frame(LLMFullResponseStartFrame())
+            self._watch_open.update(run_ids)
+
+        await self._emit_runs(p, run_ids, open_response)
+        done = {r["id"] for r in runs if r["status"] in _TERMINAL}
+        self._handled |= done
+        if self._watch_open and all(r["status"] in _TERMINAL for r in runs):
+            self._watch_open.clear()
+            await self.push_frame(LLMFullResponseEndFrame())
+
+    async def _close_watch_response(self, mute: bool) -> None:
+        """End a watcher reply in progress; ``mute`` (barge-in) also drops the rest of those runs."""
+        if not self._watch_open:
+            return
+        if mute:
+            self._handled |= self._watch_open
+        self._watch_open.clear()
+        await self.push_frame(LLMFullResponseEndFrame())
 
     async def _working_cue(self, reply_started) -> None:  # noqa: ANN001
         """Fill the silence before T3's first words: a status block now, a soft earcon on a repeat."""
@@ -307,6 +450,10 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         Unlike an ``InterruptionFrame`` this leaves T3's own run alone: the user only left the chat.
         """
         self._queued.clear()
+        if self._watch_open:  # mute the watcher reply too; the watcher itself follows set_resume()
+            self._handled |= self._watch_open
+            self._watch_open.clear()
+            asyncio.ensure_future(self.push_frame(LLMFullResponseEndFrame()))
         if self._turn_task and not self._turn_task.done():
             self._turn_task.cancel()
 
@@ -317,8 +464,14 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         self._turn_task = None
         if self._queued and self._client:
             self._start_turn(self._queued.popleft())
+        else:
+            self._ensure_watch()  # a turn that launched a new thread starts its watcher here
+            self._watch_dirty.set()  # anything that arrived during the turn is checked now
 
     def _start_turn(self, text: str) -> None:
+        if self._watch_open:  # a typed turn over a watcher reply: that reply's run is read by the turn now
+            self._watch_open.clear()
+            asyncio.ensure_future(self.push_frame(LLMFullResponseEndFrame()))
         self._turn_task = asyncio.create_task(self._run_turn(text))
         self._turn_task.add_done_callback(self._turn_finished)
 
@@ -345,6 +498,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
 
         if isinstance(frame, InterruptionFrame):
             self._queued.clear()  # spoken before the barge-in: superseded
+            await self._close_watch_response(mute=True)  # stop speaking it; T3's run is not Talky's to stop
             if self._turn_task and not self._turn_task.done():
                 self._turn_task.cancel()
                 await self._stop_thread()
