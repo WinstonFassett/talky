@@ -14,7 +14,7 @@ uv run ruff check . && uv run pyright
 
 ### What `talky` opens (check before debugging "wrong UI")
 
-`talky` opens `~/Applications/Talky.app` (or `/Applications/Talky.app`) if one exists, else the default browser (`_locate_talky_app`, `cli.py:48`). Check `~/Applications` too, not just `/Applications`. The app is a shell (`talky-shell`) that loads `localhost:8765`; it carries no client copy, but WKWebView caches the page in `~/Library/Caches/dev.talky.shell` and `~/Library/WebKit/dev.talky.shell`. The daemon sends no `Cache-Control` on `index.html`, so a stale UI can survive a rebuild. Compare the footer sha (`vX.Y.Z <sha>`) with `git rev-parse --short HEAD`; if they differ, quit the app and clear those two folders. The CLI/daemon (editable install of this checkout) and the app are separate things and update separately.
+`talky` opens `~/Applications/Talky.app` (or `/Applications/Talky.app`) if one exists, else the default browser (`_locate_talky_app`, `cli.py:48`). Check `~/Applications` too, not just `/Applications`. The app is a shell (`talky-shell`) that loads `localhost:8765`; it carries no client copy, but WKWebView caches the page in `~/Library/Caches/dev.talky.shell` and `~/Library/WebKit/dev.talky.shell`. The daemon now sends `Cache-Control: no-cache` on everything except hashed `/assets/` (SWE-618), and `/status` returns `build.sha`; the footer shows `≠ daemon <sha>` when the UI differs from the daemon. Compare the footer sha (`vX.Y.Z <sha>`) with `git rev-parse --short HEAD`; if they differ, quit the app and clear those two folders. The CLI/daemon (editable install of this checkout) and the app are separate things and update separately.
 
 ### Desktop shells (desktop/)
 

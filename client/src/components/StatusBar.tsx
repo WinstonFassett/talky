@@ -58,7 +58,15 @@ function SessionTimer({ connected }: { connected: boolean }) {
 }
 
 function VersionChip() {
+  const [daemonSha, setDaemonSha] = useState('');
+  useEffect(() => {
+    fetch('/status')
+      .then((r) => r.json())
+      .then((j) => setDaemonSha(j?.build?.sha || ''))
+      .catch(() => {});
+  }, []);
   if (!APP_VERSION && !GIT_SHA) return null;
+  const mismatch = !!daemonSha && !!GIT_SHA && daemonSha !== GIT_SHA;
   return (
     <span
       className="font-mono"
@@ -68,6 +76,11 @@ function VersionChip() {
       {APP_VERSION && `v${APP_VERSION}`}
       {APP_VERSION && GIT_SHA && ' '}
       {GIT_SHA}
+      {mismatch && (
+        <span style={{ color: 'var(--color-danger, #e5484d)' }} title="UI build differs from daemon build — stale cache?">
+          {` ≠ daemon ${daemonSha}`}
+        </span>
+      )}
     </span>
   );
 }

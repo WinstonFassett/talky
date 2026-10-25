@@ -780,6 +780,7 @@ def _build_webrtc_routes():
         return JSONResponse(
             {
                 "status": "ok",
+                "build": _daemon_build(),
                 "channel": voice_channel.status(),
                 "connections": len(webrtc_handler._pcs_map),
             }
@@ -1517,6 +1518,51 @@ def _build_webrtc_routes():
     return routes, webrtc_handler
 
 
+from starlette.staticfiles import StaticFiles  # noqa: E402
+
+
+class _RevalidatingStaticFiles(StaticFiles):
+    """Static files that always revalidate, except content-hashed /assets/.
+
+    Without Cache-Control, WKWebView (Talky.app) heuristically caches
+    index.html and keeps serving an old UI after a rebuild (SWE-618).
+    """
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        resp = super().file_response(full_path, stat_result, scope, status_code)
+        if not scope.get("path", "").startswith("/assets/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+def _daemon_build() -> dict:
+    """Daemon build identity (version + git short sha of the running checkout).
+
+    The client footer compares its own baked-in sha against this so a stale
+    UI (e.g. cached by the Talky.app WKWebView) is visibly mismatched.
+    """
+    global _DAEMON_BUILD
+    if _DAEMON_BUILD is None:
+        sha = ""
+        try:
+            sha = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=Path(__file__).parent, capture_output=True, text=True, timeout=3,
+            ).stdout.strip()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from importlib.metadata import version as _v
+            ver = _v("talky")
+        except Exception:  # noqa: BLE001
+            ver = ""
+        _DAEMON_BUILD = {"version": ver, "sha": sha}
+    return _DAEMON_BUILD
+
+
+_DAEMON_BUILD: Optional[dict] = None
+
+
 def _build_app():
     """Build the unified Starlette app.
 
@@ -1626,7 +1672,7 @@ def _build_app():
     if not dev_mode and client_dist.is_dir() and (client_dist / "index.html").exists():
         logger.info(f"Serving frontend from {client_dist}")
         mcp_starlette.router.routes.append(
-            Mount("/", app=StaticFiles(directory=str(client_dist), html=True)),
+            Mount("/", app=_RevalidatingStaticFiles(directory=str(client_dist), html=True)),
         )
     elif dev_mode:
         logger.info("Dev mode: skipping static frontend (run Vite dev server for HMR)")
