@@ -512,3 +512,25 @@ async def test_watcher_defers_to_a_running_turn_and_never_double_speaks():
     assert _texts(frames) == "Answer."
     assert sum(isinstance(f, LLMFullResponseStartFrame) for f in frames) == 1
     svc._stop_watch()
+
+
+@pytest.mark.asyncio
+async def test_watcher_survives_a_step_error_and_keeps_consuming():
+    """ad82: an exception inside _watch_step must not kill the consume loop."""
+    svc, client, frames = await _watching(_proj())
+    calls = 0
+    real = svc._watch_step
+
+    async def flaky(p):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("boom")
+        await real(p)
+
+    svc._watch_step = flaky  # type: ignore[method-assign]
+    await _push(client, _proj(("r1", "completed", "first")))  # step raises, nothing spoken
+    await _push(client, _proj(("r1", "completed", "first"), ("r2", "completed", "second")))
+    assert calls >= 2
+    assert "second" in _texts(frames)  # the consumer kept consuming
+    svc._stop_watch()
