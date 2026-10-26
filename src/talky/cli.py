@@ -242,12 +242,10 @@ def _ensure_local_audio_extra() -> bool:
 
     Local audio (talky say/ask) requires pyaudio. It's an opt-in extra so
     users who only use the browser/MCP path don't pay the portaudio system
-    dep. If missing, install it via the same on-demand path the LLM
-    backends use, then tell the user to retry — the running CLI process
-    can't see the new package without restart.
+    dep. If missing, print the exact install command and exit 1. Never
+    installs anything itself.
 
-    Returns True if pyaudio is already importable. Returns False (and
-    triggers install + exits 0) if it was missing.
+    Returns True if pyaudio is already importable.
     """
     try:
         import pyaudio  # noqa: F401
@@ -257,30 +255,20 @@ def _ensure_local_audio_extra() -> bool:
 
     from talky.shared.dependency_installer import (
         _check_native_deps_for_extra,
-        install_extra_no_reexec,
+        build_install_command,
     )
 
-    # Check the native dep (portaudio) before announcing the Python
-    # install — gives a useful platform-specific hint instead of letting
-    # pip dump a C compiler error. Ticket 4fbd.
     native_ok, native_reason = _check_native_deps_for_extra("local_audio")
     if not native_ok:
         print(f"❌ {native_reason}", file=sys.stderr)
         sys.exit(1)
 
-    print("⚙️  local audio requires pyaudio — installing the `local_audio` extra...", file=sys.stderr)
-    ok = install_extra_no_reexec("local_audio")
-    if ok:
-        print("✅ installed. retry your command.", file=sys.stderr)
-        sys.exit(0)
-    else:
-        print(
-            "❌ install failed. See log for details. "
-            "If the failure was a C compile error, the portaudio system "
-            "library may be missing or in an unusual location.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    print(
+        "❌ talky say/ask can't run without pyaudio (the `local_audio` extra). "
+        f"Run this, then retry:\n\n  {build_install_command(['local_audio'])}\n",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def cmd_say(args):
@@ -318,11 +306,9 @@ def cmd_say(args):
         # Direct mode — no daemon, handle dependencies here
         import asyncio
 
-        from talky.shared.dependency_installer import ensure_dependencies
-        
-        if not ensure_dependencies(for_cli=True):
-            print("❌ Failed to install required dependencies")
-            sys.exit(1)
+        from talky.shared.dependency_installer import preflight_or_exit
+
+        preflight_or_exit(for_cli=True)
 
         from talky.local_audio.say import say_text
 
@@ -1361,6 +1347,10 @@ def ensure_daemon(wait_secs: float = _DAEMON_START_BUDGET_SECS, verbose: bool = 
     # import-time failure isn't drowned in stale log history. The main
     # talky-daemon.log keeps appending for normal operation.
     startup_stderr_path = _DAEMON_RUN_DIR / "talky-daemon.startup-stderr.log"
+
+    # Preflight (check only, no install): fail fast with a copy-paste command.
+    from talky.shared.dependency_installer import preflight_or_exit
+    preflight_or_exit()
 
     # Acquire an exclusive lock so only one CLI spawns the daemon.
     lock_fh = open(_DAEMON_LOCK_PATH, "w")

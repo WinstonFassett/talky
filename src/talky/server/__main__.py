@@ -1649,6 +1649,11 @@ def main():
         pass
     import uvicorn
 
+    # Check (never install) deps for the active voice profile; exit with a
+    # copy-paste command if any are missing.
+    from talky.shared.dependency_installer import preflight_or_exit
+    preflight_or_exit()
+
     # 727e defense #4: refuse to start if the local port is already held.
     # Honors TALKY_DAEMON_FORCE=1 (or legacy TALKY_MCP_FORCE=1) to reclaim.
     _check_ports_or_exit()

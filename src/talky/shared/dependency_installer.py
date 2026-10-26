@@ -487,102 +487,69 @@ def _uv_cmd() -> str | None:
     return None
 
 
-def install_dependencies(providers: Set[str]) -> bool:
-    """Install missing extras for the given providers.
+def get_active_providers(for_cli: bool = False) -> Set[str]:
+    """Providers for the ACTIVE (default) voice profile only.
 
-    Uses static definitions from pyproject.toml to determine which packages
-    to install for each extra.
-
-    In a uv tool environment: runs `uv tool install --reinstall --with`
-    then re-execs the process so the new packages are loaded.
-
-    In a regular venv: runs `uv pip install`.
+    for_cli: also require local audio playback (talky say/ask).
     """
-    missing_extras = _missing_extras(providers)
-    if not missing_extras:
-        return True
-
-    uv = _uv_cmd()
-    if not uv:
-        logger.error("uv not found — cannot install dependencies")
-        return False
-
-    # Get all packages needed for missing extras
-    extras = _read_project_extras()
-    missing_packages = []
-    for extra in missing_extras:
-        if extra in extras:
-            missing_packages.extend(extras[extra])
-    
-    if not missing_packages:
-        return True
-
-    print(f"Installing {', '.join(missing_extras)} dependencies...")
-
-    if _is_tool_env():
-        # uv tool install --with replaces ALL previous --with packages,
-        # so we must pass every needed extra, not just the missing ones.
-        all_extras = _providers_to_extras(providers)
-        all_packages = []
-        for extra in all_extras:
-            if extra in extras:
-                all_packages.extend(extras[extra])
-        
-        # Pin to the same Python the tool env was created with,
-        # otherwise uv defaults to the system Python which may be incompatible.
-        python = sys.executable
-        # Try installing just the extras first without --reinstall
-        result = subprocess.run(
-            [uv, "tool", "install", "--editable", str(_root), "--python", python]
-            + [f"--with={pkg}" for pkg in all_packages]
-        )
-        if result.returncode != 0:
-            # If that fails, fall back to full reinstall
-            result = subprocess.run(
-                [uv, "tool", "install", "--editable", str(_root), "--reinstall", "--python", python]
-                + [f"--with={pkg}" for pkg in all_packages]
-            )
-        if result.returncode != 0:
-            print("❌ Install failed")
-            return False
-        print("Restarting...")
-        os.execv(sys.argv[0], sys.argv)  # does not return
-
-    # Non-tool env (development / direct uv run)
-    result = subprocess.run([uv, "pip", "install"] + missing_packages, capture_output=True, text=True)
-    if result.returncode != 0 and "No virtual environment" in result.stderr:
-        result = subprocess.run(
-            [uv, "pip", "install", "--user"] + missing_packages, capture_output=True, text=True
-        )
-    if result.returncode != 0:
-        logger.error(f"Install failed: {result.stderr}")
-        return False
-    return True
-
-
-
-
-def ensure_dependencies(for_cli: bool = False) -> bool:
-    """Ensure dependencies for the configured providers (current env).
-    
-    Args:
-        for_cli: If True, include audio dependencies needed for CLI commands
-    """
+    providers: Set[str] = set()
     try:
-        if for_cli:
-            providers = get_cli_providers()
-        else:
-            providers = get_configured_providers()
-        return install_dependencies(providers)
-    except Exception as e:
-        logger.error(f"Failed to ensure dependencies: {e}")
-        return False
+        from talky.shared.profile_manager import get_profile_manager
+
+        pm = get_profile_manager()
+        vp = pm.get_voice_profile(pm.get_default_voice_profile())
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not resolve active voice profile: {e}")
+        vp = None
+    if vp is not None:
+        for p in (vp.tts_provider, vp.stt_provider):
+            if p:
+                providers.add(p)
+    if for_cli:
+        providers.add("local_audio")
+    return providers
+
+
+def build_install_command(missing_extras: list[str]) -> str:
+    """One copy-paste command that installs `missing_extras` AND every extra
+    already installed (`uv tool install` replaces the whole set)."""
+    extras = _read_project_extras()
+    wanted = sorted({e for e, pkgs in extras.items() if pkgs and _check_extra_installed(e)} | set(missing_extras))
+    bracket = f"[{','.join(wanted)}]" if wanted else ""
+    if (_root / "pyproject.toml").exists():
+        return (
+            f'uv tool install --editable --from "talky{bracket} @ {_root}" talky '
+            f"--python {sys.version_info.major}.{sys.version_info.minor} --force"
+        )
+    return f'uv tool install "talky{bracket}" --python {sys.version_info.major}.{sys.version_info.minor} --force'
+
+
+def preflight_dependencies(for_cli: bool = False) -> tuple[bool, str]:
+    """Check (never install) the deps the active voice profile needs.
+
+    Returns (ok, message). When not ok, message names what is missing and
+    carries the exact command to run. No network.
+    """
+    providers = get_active_providers(for_cli=for_cli)
+    missing = _missing_extras(providers)
+    if not missing:
+        return True, ""
+    msg = (
+        f"talky can't start without the {', '.join(missing)} extra(s) "
+        f"(needed by the active voice profile). Run this, then retry:\n\n"
+        f"  {build_install_command(missing)}\n"
+    )
+    return False, msg
+
+
+def preflight_or_exit(for_cli: bool = False) -> None:
+    """Print the missing-deps message to stderr and exit 1; return if fine."""
+    ok, msg = preflight_dependencies(for_cli=for_cli)
+    if not ok:
+        print(f"❌ {msg}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    if ensure_dependencies():
-        print("✅ Dependencies ready")
-        sys.exit(0)
-    else:
-        print("❌ Failed to install dependencies")
-        sys.exit(1)
+    preflight_or_exit()
+    print("✅ Dependencies ready")

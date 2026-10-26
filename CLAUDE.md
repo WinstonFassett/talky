@@ -159,7 +159,7 @@ A talky profile joins one row from each layer. Example: `talky pi` resolves talk
 
 Users should never have to install deps they don't need. The project handles this automatically:
 
-- **TTS/STT providers** — installed at daemon/CLI startup via `src/talky/shared/dependency_installer.py`, which reads voice profiles to discover what's in use.
+- **TTS/STT providers** — checked (never installed) at daemon/CLI startup via `preflight_or_exit()` in `src/talky/shared/dependency_installer.py`, for the active voice profile only. If an extra is missing it exits with one copy-paste `uv tool install --from "talky[...] @ ..."` command that lists every needed extra.
 - **LLM backends** — installed on-demand at profile switch time. If a backend needs a third-party SDK, declare `extra: <name>` in `llm-backends.yaml` and add the packages under that extra name in `pyproject.toml`. `switch_to_profile` in `channel.py` calls `install_extra_no_reexec()` automatically. Because the daemon can't re-exec mid-run, installed packages take effect after `talky kill && talky daemon`.
 
 Never add LLM backend deps to top-level `pyproject.toml` `dependencies` — that forces every user to pay for them. Never manually install them with `--with` or `uv pip install` either — that bypasses the on-demand system and will be lost on the next tool reinstall.
