@@ -1640,6 +1640,13 @@ def _build_app():
 
 def main():
     """Run the MCP server."""
+    # The daemon can outlive the directory it was launched from (e.g. an
+    # agent worktree that gets reaped); a deleted cwd makes every spawned
+    # CLI die on process.cwd() (node ones like t3 exit 1 with uv_cwd).
+    try:
+        os.chdir(Path.home())
+    except OSError:
+        pass
     # Fail-safe startup logging was installed at module import time so it
     # captures import errors too — see top of file.
     try:

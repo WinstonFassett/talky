@@ -19,6 +19,7 @@ import signal
 import struct
 import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 from loguru import logger
@@ -537,6 +538,13 @@ def start_daemon(wait: bool = True) -> bool:
     devnull = open("/dev/null", "w")
     sys.stdout = devnull
     sys.stderr = devnull
+
+    # Detach from the launch cwd — the daemon can outlive it (reaped worktree),
+    # and a deleted cwd makes spawned CLIs die on process.cwd().
+    try:
+        os.chdir(Path.home())
+    except OSError:
+        pass
 
     VOICE_PID_FILE.write_text(str(os.getpid()))
 
