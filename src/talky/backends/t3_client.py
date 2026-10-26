@@ -142,7 +142,10 @@ class T3Client:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
         await self._request(rid, tag, payload)
-        return await asyncio.wait_for(fut, timeout)
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        finally:
+            self._pending.pop(rid, None)  # a timed-out call must not wait on an Exit that may never come
 
     async def subscribe_thread(self, thread_id: str) -> AsyncIterator[dict]:
         """Live thread updates, as T3's app gets them: a ``snapshot`` item, then ``event`` items per change.

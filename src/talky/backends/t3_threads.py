@@ -344,7 +344,7 @@ def _merge_gaps(stored: list, t3_msgs: list[dict]) -> Optional[list]:
     out: list = []
     j = 0
     for m in t3_msgs:
-        hit = j < len(stored) and stored[j].role == m["role"] and stored[j].content == m["text"]
+        hit = j < len(stored) and stored[j].role == m["role"] and stored[j].content.strip() == m["text"]
         if not out and not hit:
             continue  # T3 history older than what this Chat ever stored
         if hit:
