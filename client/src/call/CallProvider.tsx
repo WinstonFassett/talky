@@ -39,6 +39,8 @@ type CallValue = {
   disconnect: () => void;
   /** After giving up: try again now. */
   retry: () => void;
+  /** Call intent persisted before this page load (reload/tab discard), or null. */
+  rejoin: { muted: boolean } | null;
   /** Why the mic couldn't be opened at connect time, or null. */
   micIssue: MicIssue | null;
   /** Ask for the mic again (re-prompts if the browser allows) and re-enable it. */
@@ -62,6 +64,19 @@ const micErrorKind = (err: unknown): 'blocked' | 'nodevice' => {
 };
 
 const CallContext = createContext<CallValue | null>(null);
+
+// Call intent survives a full page load (reload, dormant-tab discard) so the call
+// can be rejoined without the user pressing anything (01b0). sessionStorage scopes
+// it to this tab's session: a reload keeps it, an explicit End clears it.
+const WANTED_KEY = 'talky:call-wanted';
+const readWanted = (): { muted: boolean } | null => {
+  try {
+    const raw = sessionStorage.getItem(WANTED_KEY);
+    return raw ? (JSON.parse(raw) as { muted: boolean }) : null;
+  } catch {
+    return null;
+  }
+};
 
 // Auto-reconnect after a drop: two tries, backed off. Then it stops and Retry is manual.
 const AUTO_RETRY_DELAYS = [1000, 3000];
@@ -162,11 +177,16 @@ export function CallProvider({
     setMode('offline');
   }, [connectOnce]);
 
+  const rejoin = useRef<{ muted: boolean } | null>(readWanted());
+
   const connect = useCallback(
     async (opts: { muted?: boolean } = {}) => {
       const mine = ++epoch.current;
       wanted.current = true;
       muted.current = !!opts.muted;
+      try {
+        sessionStorage.setItem(WANTED_KEY, JSON.stringify({ muted: muted.current }));
+      } catch { /* private mode */ }
       setMode('normal');
       cuedThisEpisode.current = false;
       const ok = await connectOnce();
@@ -180,6 +200,9 @@ export function CallProvider({
     setMicIssue(null);
     epoch.current++;
     wanted.current = false;
+    try {
+      sessionStorage.removeItem(WANTED_KEY);
+    } catch { /* private mode */ }
     leaving.current = true;
     setMode('normal');
     void Promise.resolve(client.disconnect())
@@ -291,6 +314,9 @@ export function CallProvider({
 
   const retry = useCallback(() => {
     wanted.current = true;
+    try {
+      sessionStorage.setItem(WANTED_KEY, JSON.stringify({ muted: muted.current }));
+    } catch { /* private mode */ }
     void reconnect(MANUAL_RETRY_DELAYS);
   }, [reconnect]);
 
@@ -304,7 +330,7 @@ export function CallProvider({
   }, [mode, transportState]);
 
   const value = useMemo(
-    () => ({ state, connect, disconnect, retry, micIssue, retryMic, dropReason }),
+    () => ({ state, connect, disconnect, retry, rejoin: rejoin.current, micIssue, retryMic, dropReason }),
     [state, connect, disconnect, retry, micIssue, retryMic, dropReason],
   );
   return <CallContext.Provider value={value}>{children}</CallContext.Provider>;
