@@ -373,6 +373,12 @@ async def _sync_with(store, convo_id: str, thread_id: str, c: T3Client, thread: 
     return added
 
 
+# A sync costs T3 a websocket ticket + handshake + projection read; convo polls can fire
+# several times a second. One sync per convo per TTL window is plenty fresh (8b13).
+_SYNC_TTL = 5.0
+_last_synced: dict[str, float] = {}
+
+
 async def sync_convo(store, convo_id: str) -> int:  # noqa: ANN001
     """Refresh a T3-linked Chat from its thread (T3 is truth, the transcript a cache); idempotent.
 
@@ -383,6 +389,10 @@ async def sync_convo(store, convo_id: str) -> int:  # noqa: ANN001
     rec = store.get(convo_id)
     if rec is None or rec.backend != "t3" or not rec.native_session_id:
         return 0
+    now = time.monotonic()
+    if now - _last_synced.get(convo_id, 0) < _SYNC_TTL:
+        return 0
+    _last_synced[convo_id] = now
     thread_id = rec.native_session_id
     try:
         c = T3Client(base_url(), await asyncio.to_thread(ensure_token))

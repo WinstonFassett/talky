@@ -35,6 +35,7 @@ def t3(monkeypatch):
     fake = FakeT3([])
     monkeypatch.setattr(t3_threads, "T3Client", lambda *a, **k: fake)
     monkeypatch.setattr(t3_threads, "ensure_token", lambda *a, **k: "t")
+    monkeypatch.setattr(t3_threads, "_SYNC_TTL", 0)
     return fake
 
 
@@ -154,3 +155,15 @@ def test_unmatched_stored_turn_falls_back_to_the_tail_append(tmp_path, t3):
     t3.messages = [_m("user", "hi"), _m("assistant", "half a reply, in full"), _m("user", "next")]
     assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 2
     assert _turns(store, rec)[-1] == ("user", "next")
+
+
+def test_sync_is_throttled_per_convo(tmp_path, t3, monkeypatch):
+    """8b13: every convo poll would otherwise pay T3 a full websocket handshake."""
+    monkeypatch.setattr(t3_threads, "_SYNC_TTL", 60.0)
+    store, rec = _linked(tmp_path, ("user", "hi"))
+    t3.messages = [_m("user", "hi"), _m("assistant", "a")]
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 1
+    t3.messages.append(_m("assistant", "newer", "2026-10-19T10:00:06.000Z"))
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 0  # inside the TTL: T3 never asked
+    monkeypatch.setattr(t3_threads, "_SYNC_TTL", 0)
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 1  # window over: catches up
