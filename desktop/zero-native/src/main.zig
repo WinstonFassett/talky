@@ -4,7 +4,7 @@ const zero_native = @import("zero-native");
 
 pub const panic = std.debug.FullPanic(zero_native.debug.capturePanic);
 
-const daemon_url = "http://localhost:9090/?autoconnect=true";
+const daemon_url = "http://localhost:8765/?autoconnect=true";
 
 const App = struct {
     fn app(self: *@This()) zero_native.App {
@@ -19,8 +19,8 @@ const App = struct {
 const allowed_origins = [_][]const u8{
     "zero://app",
     "zero://inline",
-    "http://localhost:9090",
-    "http://127.0.0.1:9090",
+    "http://localhost:8765",
+    "http://127.0.0.1:8765",
 };
 
 pub fn main(init: std.process.Init) !void {
