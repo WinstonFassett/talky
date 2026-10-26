@@ -179,12 +179,14 @@ const AppShell = ({ client, autoconnect = false }: AppProps) => {
   const LINK_LABEL: Record<string, string> = { t3: 'T3', 'claude-code': 'Claude', hermes: 'Hermes' };
   const linkLabel = (openRow?.native_session_id && openRow.backend && LINK_LABEL[openRow.backend]) || null;
 
+  // Rejoin after a reload/tab discard (01b0): the call intent persisted in
+  // sessionStorage means the user never chose to leave — pick it back up.
+  const rejoin = call.rejoin;
   useEffect(() => {
-    if (autoconnect && client && !autoconnectAttempted.current) {
-      autoconnectAttempted.current = true;
-      connect();
-    }
-  }, [autoconnect, client, connect]);
+    if (!client || autoconnectAttempted.current || (!autoconnect && !rejoin)) return;
+    autoconnectAttempted.current = true;
+    void call.connect({ muted: rejoin?.muted });
+  }, [autoconnect, client, call, rejoin]);
 
   const transportConnected = call.state === 'connected';
   const transportConnecting = call.state === 'connecting' || call.state === 'reconnecting';
