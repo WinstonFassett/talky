@@ -93,10 +93,11 @@ class VoiceDaemon:
     async def initialize_tts(self) -> bool:
         """Initialize default TTS service."""
         try:
-            from talky.shared.dependency_installer import ensure_dependencies
+            from talky.shared.dependency_installer import preflight_dependencies
 
-            if not ensure_dependencies():
-                logger.error("Failed to install required dependencies")
+            ok, msg = preflight_dependencies(for_cli=True)
+            if not ok:
+                logger.error(msg)
                 return False
 
             self.default_tts_service = create_tts_for_profile()
@@ -507,10 +508,9 @@ def start_daemon(wait: bool = True) -> bool:
         logger.info("Daemon already running")
         return True
 
-    # Install provider deps before forking — the lazy installer may re-exec
-    # the process, which only works while stdio is still connected.
-    from talky.shared.dependency_installer import ensure_dependencies
-    ensure_dependencies(for_cli=True)
+    # Check deps before forking, while stdio is still connected. Never installs.
+    from talky.shared.dependency_installer import preflight_or_exit
+    preflight_or_exit(for_cli=True)
 
     VOICE_SOCKET_PATH.unlink(missing_ok=True)
     VOICE_PID_FILE.unlink(missing_ok=True)
