@@ -323,14 +323,20 @@ def _ts(iso: Optional[str]) -> Optional[float]:
 
 
 def _missing_tail(stored: list, t3_msgs: list[dict]) -> list[dict]:
-    """T3 messages after the newest one matching a recent stored turn (role+text); [] if none match."""
+    """T3 messages after the newest one matching a recent stored turn (role+text).
+
+    When no recent stored turn anchors at all — a T3 compaction rewrote the history this
+    transcript saw — fall back to timestamps: anything T3 created after our newest stored
+    turn is new. Messages without a created_at can't be dated, so they stay out.
+    """
     if not stored:
         return t3_msgs
     for turn in reversed(stored[-4:]):
         for j in range(len(t3_msgs) - 1, -1, -1):
             if t3_msgs[j]["role"] == turn.role and t3_msgs[j]["text"] == turn.content.strip():
                 return t3_msgs[j + 1 :]
-    return []
+    last_ts = stored[-1].timestamp or 0
+    return [m for m in t3_msgs if (_ts(m["created_at"]) or 0) > last_ts]
 
 
 def _merge_gaps(stored: list, t3_msgs: list[dict]) -> Optional[list]:

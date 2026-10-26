@@ -149,6 +149,27 @@ def test_gap_fill_ignores_t3_history_older_than_the_chat(tmp_path, t3):
     assert _turns(store, rec) == [("user", "q2"), ("assistant", "ack q2"), ("user", "q3")]
 
 
+def test_compacted_thread_falls_back_to_timestamps(tmp_path, t3):
+    """A T3 compaction dropped every stored turn's anchor: no text matches at all.
+    Sync must still append the post-compaction messages (created after our newest turn)."""
+    store = ConvoStore(root=tmp_path)
+    rec = store.create(backend="t3", profile="t3", native_session_id=TID, title="x")
+    store.append_turn(rec.id, "user", "pre-compaction question", timestamp=1_000.0)
+    store.append_turn(rec.id, "assistant", "pre-compaction answer", timestamp=1_001.0)
+    t3.messages = [
+        _m("user", "post-compaction q", "2026-10-19T10:00:00.000Z"),
+        _m("assistant", "post-compaction a", "2026-10-19T10:00:05.000Z"),
+    ]
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 2
+    assert _turns(store, rec) == [
+        ("user", "pre-compaction question"),
+        ("assistant", "pre-compaction answer"),
+        ("user", "post-compaction q"),
+        ("assistant", "post-compaction a"),
+    ]
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 0  # idempotent
+
+
 def test_unmatched_stored_turn_falls_back_to_the_tail_append(tmp_path, t3):
     store, rec = _linked(tmp_path, ("user", "hi"), ("assistant", "half a rep"))
     t3.messages = [_m("user", "hi"), _m("assistant", "half a reply, in full"), _m("user", "next")]
