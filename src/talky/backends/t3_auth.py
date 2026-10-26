@@ -80,14 +80,19 @@ def _run(*args: str) -> str:
         raise T3AuthError("t3 CLI not found (set T3_BIN or install T3 Code)", "no_cli")
     what = " ".join(args[:3])
     try:
-        proc = subprocess.run([binary, *args], capture_output=True, text=True, timeout=60)
+        # cwd=home: the daemon can outlive the directory it was launched from, and
+        # the node-based t3 CLI dies on process.cwd() (ENOENT, uv_cwd) when it does.
+        proc = subprocess.run([binary, *args], capture_output=True, text=True, timeout=60,
+                              cwd=str(Path.home()))
     except FileNotFoundError as e:
         raise T3AuthError("t3 CLI not found (set T3_BIN or install T3 Code)", "no_cli") from e
     except subprocess.TimeoutExpired as e:
         raise T3AuthError(f"t3 {what} timed out", "t3_down") from e
     if proc.returncode != 0:
+        err = (proc.stderr or "").strip().splitlines()
+        hint = f": {err[-1][:200]}" if err else ""
         down = any(w in (proc.stderr or "").lower() for w in ("econnrefused", "connection refused", "connect error"))
-        raise T3AuthError(f"t3 {what} failed (exit {proc.returncode})", "t3_down" if down else "denied")
+        raise T3AuthError(f"t3 {what} failed (exit {proc.returncode}){hint}", "t3_down" if down else "denied")
     return proc.stdout
 
 
