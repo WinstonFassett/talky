@@ -330,6 +330,14 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         if self._watch_task and not self._watch_task.done():
             return
         self._watch_task = asyncio.create_task(self._watch(self._thread_id))
+        self._watch_task.add_done_callback(self._watch_exited)
+
+    def _watch_exited(self, task: asyncio.Task) -> None:
+        """A dead watcher is silent deafness — always say so."""
+        if task.cancelled():
+            return
+        if (e := task.exception()) is not None:
+            logger.error(f"t3 watcher: watch loop died: {e}")
 
     def _stop_watch(self) -> None:
         if self._watch_task:
@@ -342,6 +350,10 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         consumer = asyncio.create_task(self._watch_consume(thread_id))
         try:
             while self._thread_id == thread_id:
+                if consumer.done():  # a dead consumer means pushes pile up unread — restart it
+                    if not consumer.cancelled() and (e := consumer.exception()) is not None:
+                        logger.error(f"t3 watcher: consume died ({e}); restarting")
+                    consumer = asyncio.create_task(self._watch_consume(thread_id))
                 try:
                     assert self._client is not None
                     async for item in self._client.subscribe_thread(thread_id):
@@ -379,10 +391,15 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
                 continue
             if self._turn_running():
                 continue
-            if first:
-                self._baseline(p)
-                first = False
-            await self._watch_step(p)
+            try:
+                if first:
+                    self._baseline(p)
+                    first = False
+                await self._watch_step(p)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — a bad step must not kill the consumer (ad82)
+                logger.exception("t3 watcher: step failed; keeping the subscription alive")
 
     def _baseline(self, p: dict) -> None:
         """On attach: finished runs are history (not spoken); a run already underway is spoken from here on."""
