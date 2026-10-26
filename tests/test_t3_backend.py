@@ -512,3 +512,17 @@ async def test_watcher_defers_to_a_running_turn_and_never_double_speaks():
     assert _texts(frames) == "Answer."
     assert sum(isinstance(f, LLMFullResponseStartFrame) for f in frames) == 1
     svc._stop_watch()
+
+
+@pytest.mark.asyncio
+async def test_turn_dropped_before_start_surfaces_a_backend_error():
+    """c088: a turn arriving while the service has no client must not vanish silently."""
+    svc = T3LLMService(poll_interval=0)
+    errors: list[str] = []
+
+    async def record(msg):
+        errors.append(msg)
+
+    svc._emit_backend_error = record  # type: ignore[method-assign]
+    await svc.process_frame(UserTurnTextFrame(text="hello"), None)  # type: ignore[arg-type]
+    assert errors == ["T3 backend isn't running; turn dropped"]

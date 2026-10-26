@@ -508,6 +508,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         if isinstance(frame, UserTurnTextFrame):
             if not self._client:
                 logger.warning("t3 backend not started — dropping turn")
+                await self._emit_backend_error("T3 backend isn't running; turn dropped")
                 return
             logger.info(f"t3 ← user: {frame.text[:80]}")
             text = self._consume_preamble(frame.text)
