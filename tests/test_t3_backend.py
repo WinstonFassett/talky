@@ -520,11 +520,7 @@ async def test_watcher_defers_to_a_running_turn_and_never_double_speaks():
 
 # --- SWE-729: transcribed speech must never be lost on submit to T3 ---
 
-from pipecat.frames.frames import (  # noqa: E402
-    InterruptionFrame,
-    UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame,
-)
+from pipecat.frames.frames import InterruptionFrame  # noqa: E402
 
 
 def _response_frames(frames):
@@ -594,24 +590,6 @@ async def test_barge_in_keeps_queued_turns():
     while svc._turn_task and not svc._turn_task.done():
         await asyncio.sleep(0.02)
     assert client.sent == ["one", "two"]
-
-
-@pytest.mark.asyncio
-async def test_reply_is_muted_while_user_is_still_speaking():
-    """A reply that first appears while the user is talking must not talk over them (SWE-729)."""
-    svc = T3LLMService(poll_interval=0, resume="t-x")
-    client = FakeClient()
-    svc._client = client  # type: ignore[assignment]
-    frames = await _collect(svc)
-    await svc.process_frame(UserStartedSpeakingFrame(), None)  # type: ignore[arg-type]
-    assert svc._user_speaking
-    await svc._run_turn("hi")
-    assert _response_frames(frames) == []  # the response never opened
-    assert "r1" in svc._handled  # the run is muted...
-    await svc._watch_step({"runs": [{"id": "r1", "status": "completed"}], "messages": []})
-    assert _response_frames(frames) == []  # ...so the watcher never speaks it either
-    await svc.process_frame(UserStoppedSpeakingFrame(), None)  # type: ignore[arg-type]
-    assert not svc._user_speaking
 
 
 @pytest.mark.asyncio

@@ -60,10 +60,6 @@ from pipecat.frames.frames import (
     OutputAudioRawFrame,
     StartFrame,
     TextFrame,
-    UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame,
-    VADUserStartedSpeakingFrame,
-    VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
@@ -171,9 +167,6 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         # ``_run_turn`` interrupts the run the send creates right after it completes.
         self._dispatched = False
         self._barge_pending = False
-        # Set from the speaking frames the turn detector broadcasts; a reply that
-        # first appears while the user is still talking must not talk over them.
-        self._user_speaking = False
         self._watch_enabled = False  # set by start(): the watcher lives with a started service
         self._watch_task: Optional[asyncio.Task] = None
         self._watch_dirty = asyncio.Event()
@@ -351,28 +344,8 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
                 self._handled |= {r["id"] for r in new}
                 return
 
-    def _response_started(self, p: dict, run_ids: set[str]) -> bool:
-        """Whether any of ``run_ids`` has already been emitted (text, thinking, or a command)."""
-        for m in p.get("messages") or []:
-            if m.get("runId") in run_ids and self._emitted.get(m["id"], 0) > 0:
-                return True
-        for it in p.get("turnItems") or []:
-            if it.get("runId") in run_ids and (it["id"] in self._thought or it["id"] in self._ran):
-                return True
-        return False
-
-    async def _emit_runs(  # noqa: ANN001
-        self, p: dict, run_ids: set[str], open_response, *, interrupt: bool = True
-    ) -> None:
+    async def _emit_runs(self, p: dict, run_ids: set[str], open_response) -> None:  # noqa: ANN001
         """Push what is new in ``run_ids`` since the last read: thinking, commands, then reply text."""
-        if run_ids and self._user_speaking and not self._response_started(p, run_ids):
-            # A reply that first appears while the user is still talking must not talk
-            # over them (SWE-729): never open a response for these runs. If Talky
-            # started the run, stop it too — the next turn supersedes it anyway.
-            self._handled |= run_ids
-            if interrupt:
-                await self._stop_thread()
-            return
         items = sorted(
             (i for i in p.get("turnItems") or [] if i.get("runId") in run_ids),
             key=lambda i: i.get("ordinal", 0),
@@ -501,7 +474,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
                 await self.push_frame(LLMFullResponseStartFrame())
             self._watch_open.update(run_ids)
 
-        await self._emit_runs(p, run_ids, open_response, interrupt=False)
+        await self._emit_runs(p, run_ids, open_response)
         done = {r["id"] for r in runs if r["status"] in _TERMINAL}
         self._handled |= done
         if self._watch_open and all(r["status"] in _TERMINAL for r in runs):
@@ -591,11 +564,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, (UserStartedSpeakingFrame, VADUserStartedSpeakingFrame)):
-            self._user_speaking = True
-        elif isinstance(frame, (UserStoppedSpeakingFrame, VADUserStoppedSpeakingFrame)):
-            self._user_speaking = False
-        elif isinstance(frame, InterruptionFrame):
+        if isinstance(frame, InterruptionFrame):
             await self._close_watch_response(mute=True)  # stop speaking it; T3's run is not Talky's to stop
             task = self._turn_task
             if task and not task.done():
