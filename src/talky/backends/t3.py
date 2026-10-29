@@ -60,6 +60,10 @@ from pipecat.frames.frames import (
     OutputAudioRawFrame,
     StartFrame,
     TextFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
@@ -132,6 +136,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         runtime_mode: str = "approval-required",
         poll_interval: float = 0.5,
         run_timeout: float = 300.0,
+        dispatch_timeout: float = 15.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -147,6 +152,10 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         self._runtime_mode = runtime_mode
         self._poll = poll_interval
         self._run_timeout = run_timeout
+        # Upper bound for the token load + projection + send that precede the reply
+        # read. A dispatch that exceeds it (dead socket, T3 wedged) surfaces as a
+        # backend error instead of silently swallowing the user's turn (SWE-729).
+        self._dispatch_timeout = dispatch_timeout
         self._client: Optional[T3Client] = None
         self._turn_task: Optional[asyncio.Task] = None
         self._queued: deque[str] = deque()  # turns spoken while one is running (WIN-564)
@@ -156,6 +165,15 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         self._ran: set[str] = set()  # command_execution item ids already announced
         self._ended: set[str] = set()  # ... and already closed with tool_end
         self._handled: set[str] = set()  # run ids fully read (or muted by a barge-in)
+        # SWE-729: whether the current turn's message has reached T3 yet. A barge-in
+        # must never cancel the in-flight dispatch — that silently lost what the user
+        # said. When it lands before the send, ``_barge_pending`` is set instead and
+        # ``_run_turn`` interrupts the run the send creates right after it completes.
+        self._dispatched = False
+        self._barge_pending = False
+        # Set from the speaking frames the turn detector broadcasts; a reply that
+        # first appears while the user is still talking must not talk over them.
+        self._user_speaking = False
         self._watch_enabled = False  # set by start(): the watcher lives with a started service
         self._watch_task: Optional[asyncio.Task] = None
         self._watch_dirty = asyncio.Event()
@@ -222,6 +240,32 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
                 return p["id"]
         raise RuntimeError("no project_id configured and no scratch project found")
 
+    async def _dispatch(self, text: str) -> tuple[str, set[str]]:
+        """Send ``text`` to the bound thread (or launch it); returns ``(thread_id, known_runs)``.
+
+        This is the one part of a turn that must never be cancelled by a barge-in:
+        once the user's words leave Talky they are the only copy of the turn that
+        reaches T3 (SWE-729). It is bounded by ``_dispatch_timeout`` so a dead
+        socket surfaces as an error instead of hanging the queue.
+        """
+        assert self._client is not None
+        if self._thread_id is None:
+            res = await self._client.launch_thread(
+                project_id=await self._scratch_project(),
+                title=f"Talky {uuid.uuid4().hex[:6]}",
+                text=text,
+                instance_id=self._instance_id,
+                model=self._model,
+                runtime_mode=self._runtime_mode,
+            )
+            self._thread_id = res["threadId"]
+            return self._thread_id, set()
+        before = await self._client.thread_projection(self._thread_id)
+        # Skip runs already read; an unfinished one nobody read yet (a wakeup reply) is read here too.
+        known = self._handled | {r["id"] for r in before["runs"] if r["status"] in _TERMINAL}
+        await self._client.send_message(self._thread_id, text)
+        return self._thread_id, known
+
     async def _run_turn(self, text: str) -> None:
         assert self._client is not None
         c = self._client
@@ -233,22 +277,22 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
             except T3AuthError as e:
                 await self._emit_backend_error(str(e))
                 return
-            if self._thread_id is None:
-                res = await c.launch_thread(
-                    project_id=await self._scratch_project(),
-                    title=f"Talky {uuid.uuid4().hex[:6]}",
-                    text=text,
-                    instance_id=self._instance_id,
-                    model=self._model,
-                    runtime_mode=self._runtime_mode,
-                )
-                self._thread_id = res["threadId"]
-                known_runs: set[str] = set()
-            else:
-                before = await c.thread_projection(self._thread_id)
-                # Skip runs already read; an unfinished one nobody read yet (a wakeup reply) is read here too.
-                known_runs = self._handled | {r["id"] for r in before["runs"] if r["status"] in _TERMINAL}
-                await c.send_message(self._thread_id, text)
+            try:
+                _, known_runs = await asyncio.wait_for(self._dispatch(text), timeout=self._dispatch_timeout)
+            except asyncio.TimeoutError:
+                logger.error("t3: turn dispatch timed out — dropping the socket so the next RPC reconnects")
+                await c.reset_socket()
+                await self._emit_backend_error("T3 dispatch timed out; the message may not have been sent — say it again")
+                return
+            self._dispatched = True
+            if self._barge_pending:
+                # A barge-in landed while the message was still being sent (SWE-729):
+                # it reached T3, but the user has moved on — stop the run it created
+                # and never read or speak its reply.
+                self._barge_pending = False
+                await self._stop_thread()
+                await self._mute_dispatch_runs()
+                return
 
             async def open_response() -> None:
                 nonlocal started
@@ -258,14 +302,16 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
 
             loop = asyncio.get_running_loop()
             deadline = loop.time() + self._run_timeout
+            thread_id = self._thread_id
+            assert thread_id is not None  # _dispatch launched a thread or attached to one
             run_ids: set[str] = set()
             while loop.time() < deadline:
                 await asyncio.sleep(self._poll)
-                p = await c.thread_projection(self._thread_id)
+                p = await c.thread_projection(thread_id)
                 runs = [r for r in p["runs"] if r["id"] not in known_runs]
                 run_ids = {r["id"] for r in runs}
                 await self._emit_runs(p, run_ids, open_response)
-                if runs and all(r["status"] in _TERMINAL for r in runs):
+                if run_ids and all(r["id"] in self._handled or r["status"] in _TERMINAL for r in runs):
                     self._handled |= run_ids
                     if any(r["status"] == "failed" for r in runs):
                         await self._emit_backend_error("T3 run failed")
@@ -283,8 +329,50 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
             if started:
                 await self.push_frame(LLMFullResponseEndFrame())
 
-    async def _emit_runs(self, p: dict, run_ids: set[str], open_response) -> None:  # noqa: ANN001
+    async def _mute_dispatch_runs(self) -> None:
+        """Mark the run(s) the just-sent message created as handled, so nothing speaks their reply.
+
+        Called after a barge-in interrupted the dispatch: the message reached T3, but
+        the user has moved on and the reply must not play (SWE-729). The run id is only
+        known once T3 materialises it, so poll briefly. The watcher defers to a running
+        turn, so it cannot read the run before we mark it.
+        """
+        assert self._client is not None and self._thread_id is not None
+        c = self._client
+        thread_id = self._thread_id
+        for _ in range(40):  # up to ~10 s for T3 to create the run
+            await asyncio.sleep(0.25)
+            try:
+                p = await c.thread_projection(thread_id)
+            except Exception:  # noqa: BLE001 — best effort; the watcher falls back
+                return
+            new = [r for r in p["runs"] if r["id"] not in self._handled]
+            if new:
+                self._handled |= {r["id"] for r in new}
+                return
+
+    def _response_started(self, p: dict, run_ids: set[str]) -> bool:
+        """Whether any of ``run_ids`` has already been emitted (text, thinking, or a command)."""
+        for m in p.get("messages") or []:
+            if m.get("runId") in run_ids and self._emitted.get(m["id"], 0) > 0:
+                return True
+        for it in p.get("turnItems") or []:
+            if it.get("runId") in run_ids and (it["id"] in self._thought or it["id"] in self._ran):
+                return True
+        return False
+
+    async def _emit_runs(  # noqa: ANN001
+        self, p: dict, run_ids: set[str], open_response, *, interrupt: bool = True
+    ) -> None:
         """Push what is new in ``run_ids`` since the last read: thinking, commands, then reply text."""
+        if run_ids and self._user_speaking and not self._response_started(p, run_ids):
+            # A reply that first appears while the user is still talking must not talk
+            # over them (SWE-729): never open a response for these runs. If Talky
+            # started the run, stop it too — the next turn supersedes it anyway.
+            self._handled |= run_ids
+            if interrupt:
+                await self._stop_thread()
+            return
         items = sorted(
             (i for i in p.get("turnItems") or [] if i.get("runId") in run_ids),
             key=lambda i: i.get("ordinal", 0),
@@ -413,7 +501,7 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
                 await self.push_frame(LLMFullResponseStartFrame())
             self._watch_open.update(run_ids)
 
-        await self._emit_runs(p, run_ids, open_response)
+        await self._emit_runs(p, run_ids, open_response, interrupt=False)
         done = {r["id"] for r in runs if r["status"] in _TERMINAL}
         self._handled |= done
         if self._watch_open and all(r["status"] in _TERMINAL for r in runs):
@@ -448,6 +536,8 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         """Stop reading the current turn's reply (the call was rebound to another chat, WIN-582).
 
         Unlike an ``InterruptionFrame`` this leaves T3's own run alone: the user only left the chat.
+        A turn whose message has not reached T3 yet is not cancelled — it is delivered to
+        the thread it was said in, and its reply is muted (SWE-729).
         """
         self._queued.clear()
         if self._watch_open:  # mute the watcher reply too; the watcher itself follows set_resume()
@@ -455,7 +545,10 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
             self._watch_open.clear()
             asyncio.ensure_future(self.push_frame(LLMFullResponseEndFrame()))
         if self._turn_task and not self._turn_task.done():
-            self._turn_task.cancel()
+            if self._dispatched:
+                self._turn_task.cancel()
+            else:
+                self._barge_pending = True
 
     def _turn_finished(self, task: asyncio.Task) -> None:
         """Serialize turns: run the next queued one only after the previous poll loop is done."""
@@ -472,6 +565,8 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
         if self._watch_open:  # a typed turn over a watcher reply: that reply's run is read by the turn now
             self._watch_open.clear()
             asyncio.ensure_future(self.push_frame(LLMFullResponseEndFrame()))
+        self._dispatched = False
+        self._barge_pending = False
         self._turn_task = asyncio.create_task(self._run_turn(text))
         self._turn_task.add_done_callback(self._turn_finished)
 
@@ -496,12 +591,23 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, InterruptionFrame):
-            self._queued.clear()  # spoken before the barge-in: superseded
+        if isinstance(frame, (UserStartedSpeakingFrame, VADUserStartedSpeakingFrame)):
+            self._user_speaking = True
+        elif isinstance(frame, (UserStoppedSpeakingFrame, VADUserStoppedSpeakingFrame)):
+            self._user_speaking = False
+        elif isinstance(frame, InterruptionFrame):
             await self._close_watch_response(mute=True)  # stop speaking it; T3's run is not Talky's to stop
-            if self._turn_task and not self._turn_task.done():
-                self._turn_task.cancel()
-                await self._stop_thread()
+            task = self._turn_task
+            if task and not task.done():
+                if self._dispatched:
+                    # The message is already in T3: barge-in stops reading its reply.
+                    task.cancel()
+                    await self._stop_thread()
+                else:
+                    # The message has not reached T3 yet — cancelling here would
+                    # silently lose what the user said (SWE-729). Let the dispatch
+                    # finish; _run_turn interrupts the run it creates right after.
+                    self._barge_pending = True
             await self.push_frame(frame, direction)
             return
 
