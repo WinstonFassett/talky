@@ -9,6 +9,9 @@ voice_profiles:
     tts_provider: kokoro
     tts_voice: af_heart
     stt_provider: whisper_local
+    # Silence (seconds) before the user's turn ends. Optional on any profile;
+    # inherits from 'default', which falls back to 1.0.
+    # turn_end_pause_secs: 1.0
 
   # Fully-local, deterministic target for E2E thread testing (ticket 0179):
   # whisper STT + kokoro TTS, both explicit so neither falls back to a cloud

@@ -30,6 +30,9 @@ CONFIG_FILES = [
 ]
 
 
+DEFAULT_TURN_END_PAUSE_SECS = 1.0
+
+
 @dataclass
 class LLMBackend:
     name: str
@@ -65,6 +68,8 @@ class VoiceProfile:
     stt_provider: str
     stt_model: str
     stt_config: Dict[str, Any]
+    # Silence after speech before the pipeline turn detector ends the user's turn.
+    turn_end_pause_secs: float = DEFAULT_TURN_END_PAUSE_SECS
 
 
 @dataclass
@@ -323,6 +328,7 @@ class ProfileManager:
         default_tts_voice = default_entry.get("tts_voice", "")
         default_stt_provider = default_entry.get("stt_provider", "")
         default_stt_model = default_entry.get("stt_model", "")
+        default_pause = default_entry.get("turn_end_pause_secs", DEFAULT_TURN_END_PAUSE_SECS)
         
         # Second pass: load all profiles, falling back to 'default' profile values
         for name, entry in profiles_data.items():
@@ -335,6 +341,7 @@ class ProfileManager:
                 stt_provider=entry.get("stt_provider") or default_stt_provider,
                 stt_model=entry.get("stt_model") or default_stt_model,
                 stt_config=entry.get("stt_config", {}),
+                turn_end_pause_secs=float(entry.get("turn_end_pause_secs", default_pause)),
             )
 
     def _make_talky_profile(self, name: str, config: dict) -> TalkyProfile:
