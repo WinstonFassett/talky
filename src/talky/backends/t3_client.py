@@ -142,7 +142,29 @@ class T3Client:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
         await self._request(rid, tag, payload)
-        return await asyncio.wait_for(fut, timeout)
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        finally:
+            self._pending.pop(rid, None)  # a timed-out call must not wait on an Exit that may never come
+
+    async def reset_socket(self) -> None:
+        """Force-drop the WebSocket so the next RPC reconnects; fail everything in flight.
+
+        A half-open socket (peer gone, no FIN/RST) otherwise makes calls hang until
+        their own timeout — a ``dispatchCommand`` stuck there would silently lose a
+        user's turn (SWE-729). Called when a dispatch exceeds its deadline.
+        """
+        if self._ws is not None:
+            try:
+                await self._ws.close()
+            except Exception:  # noqa: BLE001 — the socket may already be gone
+                pass
+        if self._reader:
+            self._reader.cancel()
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.set_exception(T3Error("t3 socket reset"))
+        self._pending.clear()
 
     async def subscribe_thread(self, thread_id: str) -> AsyncIterator[dict]:
         """Live thread updates, as T3's app gets them: a ``snapshot`` item, then ``event`` items per change.

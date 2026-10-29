@@ -18,6 +18,7 @@ class FakeClient:
         self.sent: list[str] = []
         self.launched: list[str] = []
         self.polls = 0
+        self.interrupted = 0
 
     async def shell(self):
         return {"projects": [{"id": "p-scratch", "title": "No project"}]}
@@ -28,6 +29,9 @@ class FakeClient:
 
     async def send_message(self, thread_id, text):
         self.sent.append(text)
+
+    async def interrupt(self, thread_id):
+        self.interrupted += 1
 
     async def thread_projection(self, thread_id):
         self.polls += 1
@@ -512,3 +516,107 @@ async def test_watcher_defers_to_a_running_turn_and_never_double_speaks():
     assert _texts(frames) == "Answer."
     assert sum(isinstance(f, LLMFullResponseStartFrame) for f in frames) == 1
     svc._stop_watch()
+
+
+# --- SWE-729: transcribed speech must never be lost on submit to T3 ---
+
+from pipecat.frames.frames import InterruptionFrame  # noqa: E402
+
+
+def _response_frames(frames):
+    """The frames that would reach TTS — everything except pass-through/broadcast noise."""
+    return [
+        f
+        for f in frames
+        if isinstance(f, (LLMFullResponseStartFrame, LLMFullResponseEndFrame, TextFrame, AggregatedTextFrame))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_barge_in_before_dispatch_does_not_drop_the_message():
+    """An InterruptionFrame landing while the send is in flight must not cancel it.
+
+    Regression for SWE-729: Talky showed the live text, logged ``t3 ← user``, but the
+    message never reached T3 because the barge-in cancelled the dispatch task.
+    """
+    gate = asyncio.Event()
+
+    class GatedClient(FakeClient):
+        async def send_message(self, thread_id, text):
+            await gate.wait()  # hold the dispatch open until the test barges in
+            self.sent.append(text)
+
+    client = GatedClient()
+    svc = T3LLMService(poll_interval=0, resume="t-x")
+    svc._client = client  # type: ignore[assignment]
+    frames = await _collect(svc)
+    await svc.process_frame(UserTurnTextFrame(text="one"), None)  # type: ignore[arg-type]
+    await asyncio.sleep(0.05)  # let _run_turn reach send_message
+    assert not svc._dispatched
+    await svc.process_frame(InterruptionFrame(), None)  # type: ignore[arg-type]
+    gate.set()
+    while svc._turn_task and not svc._turn_task.done():
+        await asyncio.sleep(0.02)
+    assert client.sent == ["one"]  # the message still went out
+    assert client.interrupted == 1  # and the run it created was stopped
+    assert _response_frames(frames) == []  # its reply was never read or spoken
+    assert "r1" in svc._handled  # ... nor will the watcher speak it
+
+
+@pytest.mark.asyncio
+async def test_barge_in_keeps_queued_turns():
+    """A barge-in must not drop turns that were already finalized and queued (SWE-729)."""
+
+    class RunningClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.release = asyncio.Event()
+
+        async def thread_projection(self, thread_id):
+            n = len(self.sent)
+            status = "completed" if self.release.is_set() else "running"
+            return {"runs": [{"id": f"r{i}", "status": status} for i in range(n)], "messages": []}
+
+    client = RunningClient()
+    svc = T3LLMService(poll_interval=0, resume="t-x")
+    svc._client = client  # type: ignore[assignment]
+    await _collect(svc)
+    await svc.process_frame(UserTurnTextFrame(text="one"), None)  # type: ignore[arg-type]
+    await svc.process_frame(UserTurnTextFrame(text="two"), None)  # type: ignore[arg-type]
+    assert list(svc._queued) == ["two"]
+    await svc.process_frame(InterruptionFrame(), None)  # type: ignore[arg-type]
+    assert list(svc._queued) == ["two"]  # the finalized turn survives the barge-in
+    client.release.set()
+    while svc._turn_task and not svc._turn_task.done():
+        await asyncio.sleep(0.02)
+    assert client.sent == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_timeout_resets_the_socket_and_reports():
+    """A send that never completes surfaces as an error and heals the socket (SWE-729)."""
+
+    class HungClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.reset = False
+
+        async def send_message(self, thread_id, text):
+            await asyncio.sleep(10)  # a dead socket never answers
+
+        async def reset_socket(self):
+            self.reset = True
+
+    client = HungClient()
+    svc = T3LLMService(poll_interval=0, resume="t-x", dispatch_timeout=0.05)
+    svc._client = client  # type: ignore[assignment]
+    errors: list[str] = []
+
+    async def record_error(message):
+        errors.append(message)
+
+    svc._emit_backend_error = record_error  # type: ignore[method-assign]
+    await svc._run_turn("hi")
+    assert client.reset
+    assert errors and "timed out" in errors[0]
+    assert client.sent == []  # the send never completed; the user is told to repeat
