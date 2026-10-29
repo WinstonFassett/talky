@@ -118,6 +118,7 @@ from talky.server.event_bus import event_bus
 from talky.server.lazy_switcher import LazyLLMSwitcher
 from talky.server.mcp_driver import MCPDriverLLMService
 from talky.server.turn import TalkyUserTurnDetector, UserTurnTextFrame
+from talky.server.user_speaking_mute import UserSpeakingMuteProcessor
 
 
 def _resolve_backend_adapter_class(pm: Any, backend_name: str) -> Any:
@@ -2108,6 +2109,7 @@ class VoiceChannel:
             turn_detector,
             TalkyUserTranscriptProcessor(session),
             llm_switcher,
+            UserSpeakingMuteProcessor(),  # a reply that starts while the user talks must not talk over them (SWE-729)
             tts_switcher,
             assistant_sink,
             transport.output(),
