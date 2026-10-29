@@ -2076,7 +2076,9 @@ class VoiceChannel:
         turn_detector = TalkyUserTurnDetector(
             params=LLMUserAggregatorParams(
                 user_turn_strategies=UserTurnStrategies(
-                    stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=1.0)]
+                    stop=[SpeechTimeoutUserTurnStopStrategy(
+                        user_speech_timeout=vp.turn_end_pause_secs
+                    )]
                 ),
                 vad_analyzer=SileroVADAnalyzer(),
             ),
