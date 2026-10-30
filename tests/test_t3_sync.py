@@ -1,6 +1,7 @@
 """WIN-587: a T3-linked Chat is refreshed from its T3 thread (T3 is truth, the transcript a cache)."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -8,6 +9,10 @@ from talky.backends import t3_threads
 from talky.convos.store import ConvoStore
 
 TID = "thread:p:a:b"
+
+
+def _future(at_utc: datetime, minutes: int = 1) -> str:
+    return (at_utc + timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z")
 
 
 class FakeT3:
@@ -154,3 +159,33 @@ def test_unmatched_stored_turn_falls_back_to_the_tail_append(tmp_path, t3):
     t3.messages = [_m("user", "hi"), _m("assistant", "half a reply, in full"), _m("user", "next")]
     assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 2
     assert _turns(store, rec)[-1] == ("user", "next")
+
+
+def test_compacted_thread_appends_newer_messages(tmp_path, t3):
+    """SWE-743: T3 compacted the thread — the projection keeps only recent messages, so no
+    role+text junction exists with the stored transcript. Messages strictly newer than the
+    stored tail are continuations of the same thread and must still be appended."""
+    store, rec = _linked(tmp_path, ("user", "yesterday q"), ("assistant", "yesterday reply"))
+    now = datetime.now(timezone.utc)
+    t3.messages = [
+        _m("user", "today q", _future(now)),
+        _m("assistant", "today reply", _future(now, 5)),
+        _m("user", "today follow-up", _future(now, 10)),
+    ]
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 3
+    assert _turns(store, rec) == [
+        ("user", "yesterday q"), ("assistant", "yesterday reply"),
+        ("user", "today q"), ("assistant", "today reply"), ("user", "today follow-up"),
+    ]
+    # idempotent
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 0
+    assert len(_turns(store, rec)) == 5
+
+
+def test_compacted_thread_skips_messages_no_newer_than_tail(tmp_path, t3):
+    """SWE-743: a rewritten projection whose messages are all older than the stored tail is
+    not a continuation — nothing is appended (no-overlap guard still holds)."""
+    store, rec = _linked(tmp_path, ("user", "local only"))
+    t3.messages = [_m("user", "something else")]  # default createdAt is far in the past
+    assert asyncio.run(t3_threads.sync_convo(store, rec.id)) == 0
+    assert _turns(store, rec) == [("user", "local only")]

@@ -369,7 +369,30 @@ async def _sync_with(store, convo_id: str, thread_id: str, c: T3Client, thread: 
         for m in tail:
             store.append_turn(convo_id, m["role"], m["text"], timestamp=_ts(m["created_at"]))
         added = len(tail)
+        if not tail:
+            added = _append_newer_than_tail(store, convo_id, stored, msgs)
     store.set_in_progress(convo_id, thread["status"] == "running")
+    return added
+
+
+def _append_newer_than_tail(store, convo_id: str, stored: list, t3_msgs: list[dict]) -> int:  # noqa: ANN001
+    """Append T3 messages strictly newer than the stored tail (compaction recovery, SWE-743).
+
+    ``_merge_gaps`` / ``_missing_tail`` find the junction between the stored transcript and
+    T3 by role+text. T3 compaction rewrites history, so the stored tail is gone from the
+    projection and no junction exists — yet messages whose ``created_at`` is newer than the
+    last stored turn are continuations of the same thread, not rewrites. Messages without a
+    parseable ``created_at`` are left alone.
+    """
+    if not stored or not t3_msgs:
+        return 0
+    last_ts = stored[-1].timestamp
+    added = 0
+    for m in t3_msgs:
+        ts = _ts(m.get("created_at"))
+        if ts is not None and ts > last_ts:
+            store.append_turn(convo_id, m["role"], m["text"], timestamp=ts)
+            added += 1
     return added
 
 
