@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -151,6 +154,113 @@ async def test_t3_threads_401_reissues_once(rig):
     c = Client401()
     assert await t3_threads.list_threads(client=c) == []  # type: ignore[arg-type]
     assert c.calls == 2 and _issues(rig) == 1 and c._token.startswith("fake-")
+
+
+def test_failure_surfaces_cli_stderr(rig):
+    """SWE-748: a failed CLI call must say why, or a deleted-cwd crash looks like a mystery exit 1."""
+    (rig / "fail").touch()
+    with pytest.raises(t3_auth.T3AuthError) as ei:
+        t3_auth.ensure_token()
+    assert "fake t3: issue failed (fail flag set)" in str(ei.value)
+
+
+def test_run_pins_cwd(rig, monkeypatch):
+    """SWE-748: ``_run`` must spawn the CLI from an explicit, existing cwd — never inherit the daemon's
+    (a daemon left over from a finished agent workspace runs from a deleted cwd)."""
+    captured: dict = {}
+
+    def fake_run(args, **kw):
+        captured["cwd"] = kw.get("cwd")
+        return subprocess.CompletedProcess(args, 0, stdout='{"token": "fake-x"}', stderr="")
+
+    monkeypatch.setattr(t3_auth.subprocess, "run", fake_run)
+    t3_auth._run("auth", "session", "issue", "--json")
+    assert captured.get("cwd") is not None and Path(captured["cwd"]).is_dir()
+
+
+_ELECTRONISH_CLI = """#!/bin/sh
+# Mimics the real ~/.t3/bin/t3 wrapper (shell -> Electron/Node): Node's process.cwd()
+# throws ENOENT when the spawning process's cwd was deleted, crashing the CLI with
+# exit 1 (SWE-748). The real wrapper execs the T3 Code desktop app's bundled Electron.
+LOG="${FAKE_T3_CLI_LOG:-/dev/null}"
+echo "argv: $*" >> "$LOG"
+python3 - <<'PYEOF'
+import os, sys
+try:
+    os.getcwd()
+except OSError as e:
+    print(
+        "Error: ENOENT: process.cwd failed "
+        + str(e)
+        + ", the current working directory was likely removed without changing the working directory, uv_cwd",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+print('{"sessionId":"00000000-0000-0000-0000-000000000001","token":"fake-electron","method":"bearer-access-token","scopes":["orchestration:read"],"expiresAt":"2099-01-01T00:00:00Z"}')
+PYEOF
+exit $?
+"""
+
+
+def test_run_survives_deleted_cwd(rig, monkeypatch):
+    """SWE-748 regression: the daemon outlives its spawner's workspace, so its cwd is deleted; the
+    t3 CLI then crashes on process.cwd() (exit 1) and the T3 session can never be renewed. ``_run``
+    pins its cwd, so the CLI must still work from a process whose own cwd no longer exists."""
+    nodeish = rig / "fake_t3_cli_electron.sh"
+    nodeish.write_text(_ELECTRONISH_CLI)
+    nodeish.chmod(0o755)
+
+    doomed = rig / "doomed"
+    doomed.mkdir()
+
+    helper = rig / "helper.py"
+    helper.write_text(
+        "import os, sys, time\n"
+        f"os.chdir({str(doomed)!r})\n"
+        "open('ready', 'w').write('ready')\n"
+        f"deadline = time.time() + 30\n"
+        f"while os.path.exists({str(doomed)!r}):\n"
+        "    if time.time() > deadline:\n"
+        "        sys.exit(3)\n"
+        "    time.sleep(0.02)\n"
+        "try:\n"
+        "    os.getcwd()\n"
+        "    print('NOT-DELETED')\n"
+        "    sys.exit(2)\n"
+        "except OSError:\n"
+        "    pass\n"
+        "from talky.backends import t3_auth\n"
+        "try:\n"
+        "    t3_auth._run('auth', 'session', 'issue', '--ttl', '8h', '--label', 'talky', '--json')\n"
+        "    print('OK')\n"
+        "except Exception as e:\n"
+        "    print('ERR:', repr(e)[:200])\n"
+        "    sys.exit(1)\n"
+    )
+
+    env = dict(os.environ)
+    env["T3_BIN"] = str(nodeish)
+    env["FAKE_T3_CLI_LOG"] = str(rig / "cli.log")
+    env.pop("T3_TOKEN", None)
+
+    p = subprocess.Popen(
+        [sys.executable, str(helper)], cwd=str(doomed), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    try:
+        deadline = time.time() + 15
+        while not (doomed / "ready").exists():
+            if time.time() > deadline or p.poll() is not None:
+                out, err = p.communicate(timeout=5)
+                pytest.fail(f"helper never signalled ready; exit={p.returncode} stdout={out!r} stderr={err!r}")
+            time.sleep(0.02)
+        shutil.rmtree(doomed)
+        out, err = p.communicate(timeout=60)
+    finally:
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+    assert p.returncode == 0, f"exit={p.returncode} stdout={out!r} stderr={err!r}"
+    assert "OK" in out, f"CLI failed under a deleted cwd: stdout={out!r} stderr={err!r}"
 
 
 def test_delete_guard_no_destructive_rpc_in_src():
