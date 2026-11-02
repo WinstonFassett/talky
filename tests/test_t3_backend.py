@@ -393,6 +393,34 @@ async def test_tts_does_not_speak_thinking_or_tool_start_frames():
     assert spoken == [] and len(pushed) == 3
 
 
+@pytest.mark.asyncio
+async def test_thinking_block_typed_as_message_is_never_spoken():
+    """SWE-749: T3 types later thinking blocks of a multi-thinking-block message as assistant messages
+    (native id ``msg_<id>:thinking:<n>``). They must surface as thinking (TTS-skipped), not as spoken text."""
+    thinking_msg = {
+        "id": "message:provider:claudeAgent:native-item:msg_011CgeZsauYtHKq9NXC716qQ%3Athinking%3A1",
+        "role": "assistant",
+        "runId": "r1",
+        "text": "Issue 2169 is Ashley's post-merge review request covering eight points, two of which need decisions.",
+    }
+    reply = {"id": "m2", "role": "assistant", "runId": "r1", "text": "✅ Item 1 on H-573 now says that: checked."}
+
+    def snap(done):
+        return {
+            "runs": [{"id": "r1", "status": "completed" if done else "running"}],
+            "messages": [thinking_msg, reply] if done else [thinking_msg],
+            "turnItems": [_USER, _reason("Actually, this is really a review request.")],
+        }
+
+    frames = await _run([snap(False), snap(True)])
+    spoken = "".join(f.text for f in frames if isinstance(f, TextFrame) and not isinstance(f, AggregatedTextFrame))
+    assert spoken == "✅ Item 1 on H-573 now says that: checked."
+    assert _agg(frames) == [
+        ("thinking", "Actually, this is really a review request."),
+        ("thinking", "Issue 2169 is Ashley's post-merge review request covering eight points, two of which need decisions."),
+    ]
+
+
 # --- WIN-605: the thread watcher speaks runs Talky did not start (timer/task wakeups, T3-app typing) ---
 
 

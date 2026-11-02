@@ -15,6 +15,9 @@ frames (only newly grown text), ``command_execution`` items a ``tool_start`` (``
 once done, a ``tool_end`` (``✓``/``✗``) frame,
 the same frames hermes/opencode emit. The first of these opens the response, which ends the
 "working" cue; the TTS skips both types (``skip_aggregator_types``), so they are never spoken.
+T3's Claude driver types the later thinking blocks of a multi-thinking-block message
+(``msg_<id>:thinking:<n>``) as ``assistant_message`` items and messages; those are
+detected by native id and emitted as thinking frames too, so they are never spoken (SWE-749).
 
 Auth
 ----
@@ -71,6 +74,18 @@ from talky.convos.replay import HistoryPreambleMixin
 from talky.server.turn import UserTurnTextFrame
 
 _TERMINAL = {"completed", "failed", "cancelled", "interrupted", "rolled_back"}
+
+
+def _is_thinking_message(m: dict) -> bool:
+    """True when T3 typed a provider thinking block as an assistant message (SWE-749).
+
+    T3's Claude driver surfaces the later thinking blocks of a multi-thinking-block
+    message (native id ``msg_<id>:thinking:<n>``) as ``assistant_message`` items and
+    messages instead of ``reasoning`` items. Such text must never be spoken: emit it
+    as a thinking frame, which the TTS skips and the client shows as a thinking block.
+    """
+    mid = m.get("id") or ""
+    return ":thinking:" in mid or "%3Athinking%3A" in mid
 
 # "Working" cue (WIN-564): T3's first reply takes 8-14 s. After CUE_DELAY of silence the
 # UI gets a status block and the user hears a soft double tick, repeated every CUE_EVERY.
@@ -377,7 +392,12 @@ class T3LLMService(HistoryPreambleMixin, LLMService):
             sent = self._emitted.get(m["id"], 0)
             if len(m["text"]) > sent:
                 await open_response()
-                await self.push_frame(TextFrame(m["text"][sent:]))
+                if _is_thinking_message(m):
+                    # SWE-749: T3 types later thinking blocks as assistant messages;
+                    # surface as thinking so the TTS skips them and the client shows them.
+                    await self.push_frame(AggregatedTextFrame(text=m["text"][sent:], aggregated_by="thinking"))
+                else:
+                    await self.push_frame(TextFrame(m["text"][sent:]))
                 self._emitted[m["id"]] = len(m["text"])
 
     # --- Thread watcher (WIN-605) ---
