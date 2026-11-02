@@ -38,6 +38,7 @@ from talky.shared.daemon_protocol import (
     send_message,
     voice_daemon_is_running,
 )
+from talky.shared.spoken_text import strip_links_for_speech
 from talky.shared.voice_config import create_tts_for_profile
 
 # Idle timeout (seconds)
@@ -152,6 +153,9 @@ class VoiceDaemon:
             context_id = tts_service.create_context_id()
             audio_data = []
 
+            # WIN-586: never read link URLs aloud — direct run_tts bypasses
+            # the frame pipeline where the registered text transform applies.
+            text = strip_links_for_speech(text)
             async for frame in tts_service.run_tts(text, context_id):
                 if isinstance(frame, TTSAudioRawFrame):
                     if hasattr(frame, "audio") and frame.audio:
