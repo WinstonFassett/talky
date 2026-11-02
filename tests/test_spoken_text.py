@@ -1,11 +1,15 @@
 """WIN-586: TTS must not read link URLs aloud; the transcript keeps full markdown."""
 
+from typing import AsyncGenerator
+
 import pytest
 from pipecat.frames.frames import (
     AggregatedTextFrame,
+    Frame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
+    TTSAudioRawFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.tts_service import TTSService
@@ -47,10 +51,18 @@ class RecordingTTS(TTSService):
     def can_generate_metrics(self) -> bool:
         return False
 
-    async def run_tts(self, text, context_id):
+    async def run_tts(self, text, context_id) -> AsyncGenerator[Frame, None]:
         self.spoken.append(text)
         return
         yield  # pragma: no cover
+
+
+class AudioRecordingTTS(RecordingTTS):
+    """RecordingTTS that yields audio frames, so generate_speech/say_text succeed."""
+
+    async def run_tts(self, text, context_id) -> AsyncGenerator[Frame, None]:
+        self.spoken.append(text)
+        yield TTSAudioRawFrame(audio=b"\x00\x00" * 160, sample_rate=16000, num_channels=1)
 
 
 @pytest.mark.asyncio
@@ -83,3 +95,39 @@ def test_factory_registers_link_transform(monkeypatch):
     )
     svc = service_factory.create_tts_service_from_config("fake")
     assert ("*", strip_links_transform) in svc._text_transforms
+
+
+@pytest.mark.asyncio
+async def test_generate_speech_strips_links(tmp_path):
+    """The voice daemon's speak/ask path must not read link URLs aloud."""
+    from talky.local_audio.daemon import VoiceDaemon
+
+    daemon = VoiceDaemon()
+    tts = AudioRecordingTTS()
+    daemon.default_tts_service = tts
+
+    out = tmp_path / "speech.wav"
+    result = await daemon.generate_speech(
+        "See [WIN-585](https://example.com/i/WIN-585) and https://x.io/a?b=1 now.",
+        output_file=str(out),
+    )
+
+    assert result["success"] is True
+    assert tts.spoken == ["See WIN-585 and link now."]
+    assert out.exists() and out.stat().st_size > 0
+
+
+@pytest.mark.asyncio
+async def test_say_text_strips_links(monkeypatch, tmp_path):
+    """talky say --no-daemon must not read link URLs aloud either."""
+    import talky.local_audio.say as say_module
+
+    tts = AudioRecordingTTS()
+    monkeypatch.setattr(say_module, "create_tts_for_profile", lambda *a, **k: tts)
+
+    out = tmp_path / "say.wav"
+    ok = await say_module.say_text("Go to <https://example.com/x> please.", output_file=str(out))
+
+    assert ok is True
+    assert tts.spoken == ["Go to link please."]
+    assert out.exists() and out.stat().st_size > 0

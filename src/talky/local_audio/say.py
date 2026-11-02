@@ -11,6 +11,7 @@ from loguru import logger
 from pipecat.frames.frames import StartFrame, TTSAudioRawFrame
 
 from talky.shared.profile_manager import get_profile_manager
+from talky.shared.spoken_text import strip_links_for_speech
 from talky.shared.voice_config import create_tts_for_profile
 
 
@@ -31,6 +32,9 @@ async def say_text(
         await tts_service.start(StartFrame())
 
         audio_data = []
+        # WIN-586: never read link URLs aloud — direct run_tts bypasses the
+        # frame pipeline where the registered text transform would apply.
+        text = strip_links_for_speech(text)
         async for frame in tts_service.run_tts(text, context_id):
             if isinstance(frame, TTSAudioRawFrame) and hasattr(frame, "audio") and frame.audio:
                 audio_data.append(frame.audio)
